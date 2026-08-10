@@ -262,23 +262,18 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true)
-        # 100% 순수 GPU 하드웨어 메모리(NVMM) 직통 파이프라인으로 CPU 메모리 복사 및 프레임 지연을 완전 차단
-        vsink_desc = "nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true"
-        try:
-            vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
-            self.pipeline.set_property("video-sink", vsink_bin)
-        except Exception as e:
-            print(f"⚠️ 커스텀 비디오 싱크 생성 실패, 기본 nveglglessink 사용: {e}")
-            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
-            if vsink:
-                if vsink.find_property("sync"):
-                    vsink.set_property("sync", False)
-                if vsink.find_property("qos"):
-                    vsink.set_property("qos", True)
-                if vsink.find_property("force-aspect-ratio"):
-                    vsink.set_property("force-aspect-ratio", False)
-                self.pipeline.set_property("video-sink", vsink)
+        # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (GStreamer-CRITICAL 캡스 실패 에러 100% 방지)
+        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("autovideosink", "vsink")
+        if vsink:
+            if vsink.find_property("sync"):
+                vsink.set_property("sync", False)
+            if vsink.find_property("qos"):
+                vsink.set_property("qos", True)
+            if vsink.find_property("force-aspect-ratio"):
+                vsink.set_property("force-aspect-ratio", False)
+            self.pipeline.set_property("video-sink", vsink)
 
         # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
         # audio-sink sync=false 설정으로 PulseAudio 버퍼 지연으로 인한 비디오 프레임 끊김 완벽 방지
