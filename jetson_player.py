@@ -312,7 +312,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         return False
 
     def on_sync_message(self, bus, message):
-        """GTK 최상위 전체화면 Window XID에 비디오 화면을 직접 일치시켜 화면 미출력(검은 화면) 방지 및 부드러운 렌더링을 보장합니다."""
+        """GTK DrawingArea XID에 비디오 화면을 일치시켜 GTK 자식 위젯 덮어쓰기 및 1초 후 멈춤을 방지합니다."""
         is_prepare_handle = False
         if hasattr(GstVideo, "is_video_overlay_prepare_window_handle_message"):
             is_prepare_handle = GstVideo.is_video_overlay_prepare_window_handle_message(message)
@@ -323,12 +323,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if is_prepare_handle:
             xid = getattr(self, "xid", None)
             if not xid:
-                top_window = self.get_window() or self.drawing_area.get_window()
-                if top_window:
-                    if hasattr(top_window, "get_xid"):
-                        xid = top_window.get_xid()
+                target_window = self.drawing_area.get_window() or self.get_window()
+                if target_window:
+                    if hasattr(target_window, "get_xid"):
+                        xid = target_window.get_xid()
                     elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
-                        xid = GdkX11.X11Window.get_xid(top_window)
+                        xid = GdkX11.X11Window.get_xid(target_window)
                     self.xid = xid
             if xid:
                 message.src.set_window_handle(xid)
