@@ -35,10 +35,24 @@ def optimize_gstreamer_ranks():
             elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY + 1000)
-                
-        # 2. 소프트웨어 CPU 디코더 랭크 무력화 (NONE)
+        
+        # AV1 파서 및 H264/H265 파서 랭크 상향 (경계 분리 보장)
+        parsers = ["av1parse", "h264parse", "h265parse", "vp9parse"]
+        for name in parsers:
+            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
+            if elem:
+                elem.set_rank(Gst.Rank.PRIMARY + 1500)
+
+        # 2. AV1 코덱은 Jetson HW 디코더(BlockType 281) 드라이버의 DPB 버퍼 부족 에러를 방지하도록 안정적인 SW 디코더(av1dec/dav1d) 랭크 우선 설정
+        av1_decoders = ["av1dec", "dav1d", "avdec_av1"]
+        for name in av1_decoders:
+            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
+            if elem:
+                elem.set_rank(Gst.Rank.PRIMARY + 2000)
+
+        # 3. H.264, H.265, VP9 등 HW 디코딩이 안정적인 코덱의 소프트웨어 CPU 디코더 랭크 무력화
         sw_decoders = [
-            "vp9dec", "dav1d", "avdec_vp9", "avdec_vp10", "avdec_av1", "avdec_vp8",
+            "vp9dec", "avdec_vp9", "avdec_vp10", "avdec_vp8",
             "avdec_h264", "avdec_hevc", "avdec_mjpeg"
         ]
         for name in sw_decoders:
@@ -52,7 +66,7 @@ def optimize_gstreamer_ranks():
             elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
             if elem:
                 elem.set_rank(Gst.Rank.NONE)
-        print("⚡ [하드웨어 가속] Jetson NVMM 하드웨어 디코더 랭크 최상위 적용 완료.")
+        print("⚡ [하드웨어 가속] Jetson NVMM 하드웨어 디코더 및 파서 랭크 최적화 적용 완료.")
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
@@ -82,6 +96,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.current_index = 0
         self.is_single_file_mode = False # 단일 파일 반복 모드 여부
         self.error_count = 0 # 무한 에러 루프 방지용 카운터
+        self.use_fallback_pipeline = False # AV1 / HW 버퍼 예외 시 폴백 모드 플래그
         self.xid = None # X11 Window ID 캐시
         
         self.build_playlist()
@@ -150,9 +165,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             return False
 
         video_path = self.playlist[self.current_index]
+        abs_path = os.path.abspath(video_path)
         print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {os.path.basename(video_path)}")
 
-        video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
+        video_uri = f"file://{pathname2url(abs_path)}"
         
         # [핵심] 기존 버스 감시 해제 및 파이프라인 정지/재생성
         if self.bus is not None:
@@ -166,40 +182,58 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
 
-        # 신규 playbin 파이프라인 생성
-        self.pipeline = Gst.ElementFactory.make("playbin", "player")
+        # AV1 4K 60fps 등 Jetson nvv4l2decoder DPB 드라이버 버그 발생 시 SW/GPU 폴백 파이프라인 사용
+        if getattr(self, "use_fallback_pipeline", False):
+            print("🔄 [안정성 폴백 모드] SW 디코더 및 GPU 파이프라인으로 구축합니다...")
+            pipe_str = (
+                f'filesrc location="{abs_path}" ! '
+                f'matroskademux name=d '
+                f'd.video_0 ! queue ! av1parse ! av1dec ! videoconvert ! nvvidconv compute-hw=1 ! nveglglessink sync=true '
+                f'd.audio_0 ! queue ! pulsesink sync=true'
+            )
+            try:
+                self.pipeline = Gst.parse_launch(pipe_str)
+            except Exception as e:
+                print(f"⚠️ 폴백 파이프라인 생성 실패, 기본 playbin 사용 시도: {e}")
+                self.pipeline = None
+
         if not self.pipeline:
-            print("❌ GStreamer 'playbin' 엘리먼트 생성 실패.")
-            return False
+            # 신규 playbin 파이프라인 생성
+            self.pipeline = Gst.ElementFactory.make("playbin", "player")
+            if not self.pipeline:
+                print("❌ GStreamer 'playbin' 엘리먼트 생성 실패.")
+                return False
 
-        # Native 비디오 포맷 플래그 설정 (GStreamer의 불필요한 소프트웨어 converter 삽입 방지)
-        current_flags = self.pipeline.get_property("flags")
-        self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
+            # Native 비디오 포맷 플래그 설정 (GStreamer의 불필요한 소프트웨어 converter 삽입 방지)
+            current_flags = self.pipeline.get_property("flags")
+            self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
 
-        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv + nveglglessink)
-        # nvvidconv가 nveglglessink와 NVMM 버퍼 포맷(NV12, P010_10LE 등)을 유연하게 자동 협상합니다.
-        vsink_desc = "nvvidconv ! nveglglessink sync=true"
-        try:
-            vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
-            self.pipeline.set_property("video-sink", vsink_bin)
-        except Exception as e:
-            print(f"⚠️ 커스텀 비디오 싱크 생성 실패, 기본 싱크 사용: {e}")
-            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
-            if not vsink:
-                vsink = Gst.ElementFactory.make("autovideosink", "vsink")
-            if vsink:
-                if vsink.has_property("sync"):
-                    vsink.set_property("sync", True)
-                self.pipeline.set_property("video-sink", vsink)
+            # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 + nveglglessink)
+            # compute-hw=1 (GPU)을 적용하여 AV1/VP9/10-bit 등 VIC 엔진이 지원하지 않는 RGB/BGR 포맷 변환 실패 에러를 방지합니다.
+            vsink_desc = "nvvidconv compute-hw=1 ! nveglglessink sync=true"
+            try:
+                vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
+                self.pipeline.set_property("video-sink", vsink_bin)
+            except Exception as e:
+                print(f"⚠️ 커스텀 비디오 싱크 생성 실패, 기본 싱크 사용: {e}")
+                vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+                if not vsink:
+                    vsink = Gst.ElementFactory.make("autovideosink", "vsink")
+                if vsink:
+                    if vsink.has_property("sync"):
+                        vsink.set_property("sync", True)
+                    self.pipeline.set_property("video-sink", vsink)
 
-        # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 폴백)
-        for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
-            asink = Gst.ElementFactory.make(sink_name, "asink")
-            if asink:
-                if sink_name != "fakesink":
-                    asink.set_property("sync", True)
-                self.pipeline.set_property("audio-sink", asink)
-                break
+            # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 폴백)
+            for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
+                asink = Gst.ElementFactory.make(sink_name, "asink")
+                if asink:
+                    if sink_name != "fakesink":
+                        asink.set_property("sync", True)
+                    self.pipeline.set_property("audio-sink", asink)
+                    break
+
+            self.pipeline.set_property("uri", video_uri)
 
         # 버스 이벤트 연결
         self.bus = self.pipeline.get_bus()
@@ -209,7 +243,6 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.bus.connect("message", self.on_bus_message)
 
         # URI 속성 갱신 후 플레이 시작
-        self.pipeline.set_property("uri", video_uri)
         self.pipeline.set_state(Gst.State.PLAYING)
         
         # 주기적으로 파이썬 레벨의 안 쓰이는 메모리를 정리
@@ -257,6 +290,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
             print(f"❌ 재생 중 에러 발생: {err}")
+
+            # HW 디코더 버퍼/포맷 에러 시 SW/GPU 폴백 파이프라인으로 즉시 자동 재시도
+            if not getattr(self, "use_fallback_pipeline", False):
+                print("⚠️ [자동 복구] HW 디코더 드라이버 제한 감지. SW/GPU 폴백 파이프라인으로 자동 전환합니다.")
+                self.use_fallback_pipeline = True
+                GLib.timeout_add(100, self.play_current_video)
+                return
+
             self.error_count += 1
             max_allowed_errors = len(self.playlist) if not self.is_single_file_mode else 3
             if self.error_count >= max_allowed_errors:
