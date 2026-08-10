@@ -19,9 +19,8 @@ from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib
 
 def optimize_gstreamer_ranks():
     """
-    Jetson 하드웨어 디코더(nvv4l2decoder)를 H.264/H.265 등에 최우선 적용하고,
-    JetPack 드라이버 버그(BlockType 281 DPB Buffer Error)가 있는 AV1/VP9 WebM 4K 영상은
-    안정적인 소프트웨어 디코더(av1dec, vp9dec)가 자동 선택되도록 랭크를 최적화합니다.
+    Jetson 하드웨어 디코더(nvv4l2decoder) 및 비디오 변환기(nvvidconv)의 랭크를 최우선(PRIMARY + 1000)으로 설정하고,
+    소프트웨어 CPU 디코더를 무력화하여 4K 60fps 영상을 FULL 60 FPS 하드웨어 가속으로 재생합니다.
     """
     registry = Gst.Registry.get()
     
@@ -29,23 +28,17 @@ def optimize_gstreamer_ranks():
     hw_decoder = registry.find_feature("nvv4l2decoder", Gst.ElementFactory.__gtype__)
     
     if hw_decoder:
-        # Jetson 하드웨어 디코더 및 변환기 우위 설정 (PRIMARY + 1000)
+        # Jetson 하드웨어 디코더 및 변환기 최우선 (PRIMARY + 1000)
         hw_elements = ["nvv4l2decoder", "nvvidconv"]
         for name in hw_elements:
             elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY + 1000)
         
-        # AV1 및 VP9 SW 디코더/파서 랭크 최상위 상향 (JetPack HW AV1/VP9 DPB 버그 완벽 회피)
-        sw_overrides = ["av1dec", "dav1d", "avdec_av1", "av1parse", "vp9dec", "avdec_vp9", "vp9parse"]
-        for name in sw_overrides:
-            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
-            if elem:
-                elem.set_rank(Gst.Rank.PRIMARY + 5000)
-
-        # H.264, H.265, MJPEG 등 HW 디코딩이 100% 안정적인 코덱의 CPU 디코더 랭크 무력화
+        # CPU 소프트웨어 디코더 랭크 무력화 (NONE) -> HW 디코딩 강제 (FPS 저하 방지)
         sw_decoders = [
-            "avdec_vp10", "avdec_vp8",
+            "av1dec", "dav1d", "avdec_av1", "av1parse",
+            "vp9dec", "avdec_vp9", "avdec_vp10", "avdec_vp8",
             "avdec_h264", "avdec_hevc", "avdec_mjpeg"
         ]
         for name in sw_decoders:
@@ -53,13 +46,13 @@ def optimize_gstreamer_ranks():
             if elem:
                 elem.set_rank(Gst.Rank.NONE)
 
-        # CPU 소프트웨어 비디오 변환기/스케일러 랭크 유지 (Standard Format Conversion 허용)
+        # CPU 소프트웨어 비디오 변환기/스케일러 랭크 무력화
         for name in ["videoconvert", "videoscale"]:
             elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
             if elem:
-                elem.set_rank(Gst.Rank.PRIMARY)
+                elem.set_rank(Gst.Rank.NONE)
 
-        print("⚡ [하드웨어/소프트웨어 하이브리드 최적화] H.264/H.265 HW 가속 및 AV1/VP9 WebM 랭크 최적화 적용 완료.")
+        print("⚡ [하드웨어 가속 60 FPS] Jetson NVMM 하드웨어 디코더 및 GPU 가속 랭크 적용 완료.")
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
