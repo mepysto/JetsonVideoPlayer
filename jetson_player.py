@@ -269,15 +269,18 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         self.pipeline.set_property("video-sink", vsink_bin)
 
-        # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
-        for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
+        # 오디오 출력 장치 지정 (alsasink -> pulsesink -> autoaudiosink -> fakesink 순서 안전 지정)
+        # audio-sink sync=false, async=false, provide-clock=false 설정으로 오디오 버퍼 지연이 비디오 디코딩을 멈추는 현상 100% 차단
+        for sink_name in ["alsasink", "pulsesink", "autoaudiosink", "fakesink"]:
             asink = Gst.ElementFactory.make(sink_name, "asink")
             if asink:
                 if sink_name != "fakesink":
                     if asink.find_property("sync"):
-                        asink.set_property("sync", True)
+                        asink.set_property("sync", False) # [핵심] 오디오 버퍼 지연이 비디오 홀드를 유발하지 않도록 차단
                     if asink.find_property("async"):
-                        asink.set_property("async", True)
+                        asink.set_property("async", False)
+                    if asink.find_property("provide-clock"):
+                        asink.set_property("provide-clock", False) # [핵심] PulseAudio/ALSA 시계 점유 차단
                 self.pipeline.set_property("audio-sink", asink)
                 break
 
