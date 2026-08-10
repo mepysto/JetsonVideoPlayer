@@ -57,10 +57,10 @@ def optimize_gstreamer_ranks():
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY + 5000)
 
-        # ARM 64-bit NEON SIMD 다중 스레드 디코더(dav1d) 랭크 상향 (Jetson Orin Nano 4K 60 FPS AV1 전속 재생)
+        # ARM 64-bit NEON SIMD 다중 스레드 디코더(dav1d) 랭크 최우선 상향 (Jetson Orin Nano NVDEC AV1 부재 전용 60 FPS 가속)
         dav1d = registry.find_feature("dav1d", Gst.ElementFactory.__gtype__)
         if dav1d:
-            dav1d.set_rank(Gst.Rank.PRIMARY + 5000)
+            dav1d.set_rank(Gst.Rank.PRIMARY + 10000)
 
         # 느린 단일 스레드 CPU 디코더만 무력화 (avdec_av1 등)
         sw_decoders = [
