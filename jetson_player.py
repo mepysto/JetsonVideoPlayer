@@ -260,15 +260,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 전용 RGBA NVMM 하드웨어 렌더링 싱크 구축 (nvbufsurface: Failed to create EGLImage 1초 후 멈춤 에러 100% 차단)
-        vsink_bin = Gst.Bin.new("rgba_sink_bin")
+        # Jetson 전용 NV12 NVMM 하드웨어 렌더링 싱크 구축 (VIC 하드웨어 NvVicCompose Failed 에러 100% 차단)
+        vsink_bin = Gst.Bin.new("nv12_sink_bin")
         
         nvconv = Gst.ElementFactory.make("nvvidconv", "nvconv")
         if nvconv and nvconv.find_property("compute-hw"):
             nvconv.set_property("compute-hw", 1)
 
         capsfilter = Gst.ElementFactory.make("capsfilter", "capsfilter")
-        caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=RGBA")
+        caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=NV12")
         capsfilter.set_property("caps", caps)
 
         vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
