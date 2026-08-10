@@ -57,9 +57,14 @@ def optimize_gstreamer_ranks():
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY + 5000)
 
-        # AV1, H.264, H.265 코덱의 CPU SW 디코더 무력화 (NONE) -> HW 디코더 강제로 60 FPS 보장
+        # ARM 64-bit NEON SIMD 다중 스레드 디코더(dav1d) 랭크 상향 (Jetson Orin Nano 4K 60 FPS AV1 전속 재생)
+        dav1d = registry.find_feature("dav1d", Gst.ElementFactory.__gtype__)
+        if dav1d:
+            dav1d.set_rank(Gst.Rank.PRIMARY + 5000)
+
+        # 느린 단일 스레드 CPU 디코더만 무력화 (avdec_av1 등)
         sw_decoders = [
-            "av1dec", "dav1d", "avdec_av1",
+            "av1dec", "avdec_av1",
             "avdec_vp10", "avdec_vp8",
             "avdec_h264", "avdec_hevc", "avdec_mjpeg"
         ]
@@ -129,6 +134,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         factory = element.get_factory()
         fname = factory.get_name() if factory else ""
         ename = element.get_name()
+        if "dav1d" in fname or "dav1d" in ename:
+            if element.find_property("max-threads"):
+                element.set_property("max-threads", 6)
         if "nvv4l2decoder" in fname or "nvv4l2decoder" in ename:
             if element.find_property("num-extra-surfaces"):
                 element.set_property("num-extra-surfaces", 32)
