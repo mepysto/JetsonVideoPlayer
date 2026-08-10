@@ -315,12 +315,26 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         return False
 
     def on_sync_message(self, bus, message):
-        """
-        NVIDIA Direct 3D 하드웨어 오버레이 렌더링 최적화.
-        GTK Sub-Widget Window XID 핸들 바인딩으로 인한 GTK 메인 스레드 EGL 버퍼 락 경합을 완전 무력화하고,
-        nv3dsink/nveglglessink가 Direct 3D 하드웨어 풀스크린 오버레이 모드로 60 FPS 무결 렌더링되도록 처리합니다.
-        """
-        pass
+        """GTK 최상위 전체화면 Window XID에 비디오 화면을 직접 일치시켜 화면 미출력(검은 화면) 방지 및 부드러운 렌더링을 보장합니다."""
+        is_prepare_handle = False
+        if hasattr(GstVideo, "is_video_overlay_prepare_window_handle_message"):
+            is_prepare_handle = GstVideo.is_video_overlay_prepare_window_handle_message(message)
+        
+        if not is_prepare_handle and message.get_structure():
+            is_prepare_handle = (message.get_structure().get_name() == "prepare-window-handle")
+
+        if is_prepare_handle:
+            xid = getattr(self, "xid", None)
+            if not xid:
+                top_window = self.get_window() or self.drawing_area.get_window()
+                if top_window:
+                    if hasattr(top_window, "get_xid"):
+                        xid = top_window.get_xid()
+                    elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
+                        xid = GdkX11.X11Window.get_xid(top_window)
+                    self.xid = xid
+            if xid:
+                message.src.set_window_handle(xid)
 
     def on_bus_message(self, bus, message):
         """재생 완료(EOS) 및 에러 메시지 처리"""
