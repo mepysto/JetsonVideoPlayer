@@ -87,11 +87,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
 
-        # 2. 비디오가 임베딩될 Gtk DrawingArea 컨테이너 생성 (최대 확장 및 최소 높이 보장)
+        # 2. 비디오가 임베딩될 Gtk DrawingArea 컨테이너 생성 (GTK-EGL 그래픽 충돌 방지 최적화)
         self.drawing_area = Gtk.DrawingArea()
         self.drawing_area.set_hexpand(True)
         self.drawing_area.set_vexpand(True)
         self.drawing_area.set_size_request(640, 480) # [핵심] C-라이브러리 dst->h == 0 멈춤 에러 방지
+        self.drawing_area.set_double_buffered(False) # [핵심] GTK CPU 이중 버퍼링 무력화 (EGL 직통 렌더링)
+        self.drawing_area.set_app_paintable(True)    # [핵심] GTK 창 기본 배경 그리기 차단
+        self.drawing_area.connect("draw", lambda widget, cr: True) # [핵심] GTK repaint 이벤트 무력화
         self.add(self.drawing_area)
         
         # 화면 준비가 완료(realize)되면 재생을 시작하도록 이벤트 등록
