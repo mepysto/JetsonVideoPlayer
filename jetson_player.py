@@ -170,8 +170,6 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 element.set_property("enable-max-performance", True)
             if element.find_property("drop-frame-interval"):
                 element.set_property("drop-frame-interval", 0)
-            if element.find_property("disable-dpb"):
-                element.set_property("disable-dpb", True)
             if element.find_property("capture-buffer-dynamic-allocation"):
                 element.set_property("capture-buffer-dynamic-allocation", 1)
         if "nveglglessink" in fname or "nveglglessink" in ename:
