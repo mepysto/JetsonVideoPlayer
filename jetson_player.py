@@ -75,11 +75,61 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_single_file_mode = False # 단일 파일 반복 모드 여부
         self.xid = None # GTK 메인 스레드 안전 XID 캐시
         
+        # 4. 장시간 재생 멈춤 방지용 와치독(Watchdog) 상태 변수
+        self.last_position = -1
+        self.stall_count = 0
+        self.watchdog_timer_id = None
+
         self.build_playlist()
 
-        # 4. GStreamer 핵심 파이프라인 변수 초기화
+        # 5. GStreamer 핵심 파이프라인 변수 초기화
         self.pipeline = None
         self.bus = None
+
+    def start_watchdog(self):
+        """장시간 재생 시 영상/오디오 멈춤 현상을 실시간 감지하여 자동 복구하는 와치독 타이머를 구동합니다."""
+        if self.watchdog_timer_id is not None:
+            GLib.source_remove(self.watchdog_timer_id)
+            self.watchdog_timer_id = None
+        self.last_position = -1
+        self.stall_count = 0
+        self.watchdog_timer_id = GLib.timeout_add(3000, self.check_watchdog)
+
+    def check_watchdog(self):
+        """매 3초마다 재생 위치를 검사하여 영상이 멈춘 경우 자동으로 파이프라인을 복구합니다."""
+        if not self.pipeline:
+            return True
+
+        success, state, pending = self.pipeline.get_state(0)
+        if success == Gst.StateChangeReturn.SUCCESS and state == Gst.State.PLAYING:
+            pos_ok, pos_ns = self.pipeline.query_position(Gst.Format.TIME)
+            if pos_ok:
+                if pos_ns == self.last_position:
+                    self.stall_count += 1
+                    if self.stall_count >= 2:  # 6초 동안 재생 위치 변경이 없을 경우 멈춤으로 판단
+                        print("⚠️ [자동 복구 시스템] 영상/오디오 멈춤 현상 감지! 파이프라인을 즉시 재구축하여 복구합니다.")
+                        self.stall_count = 0
+                        self.last_position = -1
+                        self.play_current_video()
+                        return True
+                else:
+                    self.stall_count = 0
+                    self.last_position = pos_ns
+        return True
+
+    def on_deep_element_added(self, bin_elem, sub_bin, element):
+        """
+        GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder)를 감지하여 
+        DPB 프레임 버퍼(num-extra-surfaces=24) 및 고성능 모드를 동적 설정합니다.
+        """
+        factory = element.get_factory()
+        fname = factory.get_name() if factory else ""
+        ename = element.get_name()
+        if "nvv4l2decoder" in fname or "nvv4l2decoder" in ename:
+            if element.find_property("num-extra-surfaces"):
+                element.set_property("num-extra-surfaces", 24)
+            if element.find_property("enable-max-performance"):
+                element.set_property("enable-max-performance", True)
 
     def build_playlist(self):
         """입력값을 분석하여 재생 목록을 동적으로 구성합니다."""
@@ -153,13 +203,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 신규 playbin 파이프라인 생성
         self.pipeline = Gst.ElementFactory.make("playbin", "player")
 
+        # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
+        self.pipeline.connect("deep-element-added", self.on_deep_element_added)
+
         # Native 비디오 포맷 플래그 설정 (GStreamer의 불필요한 소프트웨어 converter 삽입 방지)
         current_flags = self.pipeline.get_property("flags")
         self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
 
-        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv + NVMM NV12 + nveglglessink)
-        # 10-bit VP9/AV1/HDR 버퍼를 HW VIC로 변환 후 nveglglessink로 Zero-Copy 직통 전달 (qos=true 설정 추가)
-        vsink_desc = "nvvidconv ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=true qos=true"
+        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 + NVMM NV12 + nveglglessink sync=true qos=true)
+        # compute-hw=1 (GPU 가속) 및 qos=true 적용으로 장시간 재생 시 VIC 엔진 과부하 및 오디오 시계 틀어짐 방지
+        vsink_desc = "nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=true qos=true"
         try:
             vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
             self.pipeline.set_property("video-sink", vsink_bin)
@@ -194,6 +247,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline.set_property("uri", video_uri)
         self.pipeline.set_state(Gst.State.PLAYING)
         
+        # 와치독 타이머 구동
+        self.start_watchdog()
+
         # 주기적으로 파이썬 레벨의 안 쓰이는 메모리를 정리
         gc.collect()
         return False
