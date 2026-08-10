@@ -204,9 +204,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # Native 비디오 포맷 플래그 설정 (GStreamer의 불필요한 소프트웨어 converter 삽입 방지)
-        current_flags = self.pipeline.get_property("flags")
-        self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
+        # Native 비디오 및 오디오 포맷 플래그 설정 (deinterlace, soft-colorbalance 등 CPU 필터 완전 차단)
+        # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
+        self.pipeline.set_property("flags", 0x00000063)
 
         # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (videoconvert ! nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true)
         # sync=false 및 compute-hw=1 적용으로 오디오 시계 드리프트 및 프레임 끊김 현상을 완벽 방지
