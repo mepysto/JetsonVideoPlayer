@@ -262,7 +262,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (GStreamer-CRITICAL 캡스 실패 에러 100% 방지)
+        # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (Direct NVMM BufAPI & Max Lateness -1 적용으로 프레임 드랍 무력화)
         vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
         if not vsink:
             vsink = Gst.ElementFactory.make("autovideosink", "vsink")
@@ -270,7 +270,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if vsink.find_property("sync"):
                 vsink.set_property("sync", False)
             if vsink.find_property("qos"):
-                vsink.set_property("qos", True)
+                vsink.set_property("qos", False)
+            if vsink.find_property("async"):
+                vsink.set_property("async", False)
+            if vsink.find_property("max-lateness"):
+                vsink.set_property("max-lateness", -1) # [핵심] 지연 프레임 강제 버림 방지 (무제한)
+            if vsink.find_property("bufapi-version"):
+                vsink.set_property("bufapi-version", True) # [핵심] NVIDIA Direct NVMM EGL API 활성화
             if vsink.find_property("force-aspect-ratio"):
                 vsink.set_property("force-aspect-ratio", False)
             self.pipeline.set_property("video-sink", vsink)
