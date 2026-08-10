@@ -262,10 +262,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (Direct NVMM BufAPI & Max Lateness -1 적용으로 프레임 드랍 무력화)
-        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+        # Jetson 전용 3D 하드웨어 직통 비디오 싱크 생성 (nv3dsink 우선 적용으로 X11 데스크톱 컴포지터 유더링 100% 회피)
+        vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
         if not vsink:
             vsink = Gst.ElementFactory.make("autovideosink", "vsink")
+
         if vsink:
             if vsink.find_property("sync"):
                 vsink.set_property("sync", False)
