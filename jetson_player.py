@@ -113,7 +113,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
         GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder) 및 비디오 싱크(nveglglessink)를 감지하여 
-        DPB 프레임 버퍼(num-extra-surfaces=32), 고성능 모드, 프레임 드랍 0 및 화면 왜곡 방지 옵션을 동적 설정합니다.
+        DPB 프레임 버퍼(num-extra-surfaces=32), disable-dpb low-latency 모드, 동적 메모리 할당, 
+        고성능 모드, 프레임 드랍 0 및 화면 왜곡 방지 옵션을 동적 설정합니다.
         """
         factory = element.get_factory()
         fname = factory.get_name() if factory else ""
@@ -125,6 +126,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 element.set_property("enable-max-performance", True)
             if element.find_property("drop-frame-interval"):
                 element.set_property("drop-frame-interval", 0)
+            if element.find_property("disable-dpb"):
+                element.set_property("disable-dpb", True)
+            if element.find_property("capture-buffer-dynamic-allocation"):
+                element.set_property("capture-buffer-dynamic-allocation", 1)
         if "nveglglessink" in fname or "nveglglessink" in ename:
             if element.find_property("force-aspect-ratio"):
                 element.set_property("force-aspect-ratio", False)
