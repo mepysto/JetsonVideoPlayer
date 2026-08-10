@@ -236,29 +236,26 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         if vsink:
             if vsink.find_property("sync"):
-                vsink.set_property("sync", False)
+                vsink.set_property("sync", True) # [핵심] GStreamer 파이프라인 시계 동기화로 버퍼 폭주 및 1초 멈춤 방지
             if vsink.find_property("qos"):
-                vsink.set_property("qos", False)
+                vsink.set_property("qos", True)
             if vsink.find_property("async"):
-                vsink.set_property("async", False)
+                vsink.set_property("async", True)
             if vsink.find_property("max-lateness"):
-                vsink.set_property("max-lateness", -1) # [핵심] 지연 프레임 강제 버림 방지 (무제한)
+                vsink.set_property("max-lateness", -1) # [핵심] 지연 프레임 버림 방지
             if vsink.find_property("force-aspect-ratio"):
                 vsink.set_property("force-aspect-ratio", False)
             self.pipeline.set_property("video-sink", vsink)
 
         # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
-        # audio-sink sync=false 및 provide-clock=false 설정으로 PulseAudio 클럭 홀드로 인한 비디오 멈칫 현상 완벽 방지
         for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
             asink = Gst.ElementFactory.make(sink_name, "asink")
             if asink:
                 if sink_name != "fakesink":
                     if asink.find_property("sync"):
-                        asink.set_property("sync", False)
+                        asink.set_property("sync", True)
                     if asink.find_property("async"):
-                        asink.set_property("async", False)
-                    if asink.find_property("provide-clock"):
-                        asink.set_property("provide-clock", False) # [핵심] PulseAudio 시계 점유로 인한 비디오 지연 차단
+                        asink.set_property("async", True)
                 self.pipeline.set_property("audio-sink", asink)
                 break
 
