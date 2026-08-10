@@ -72,8 +72,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
 
-        # 2. 비디오가 임베딩될 Gtk DrawingArea 컨테이너 생성
+        # 2. 비디오가 임베딩될 Gtk DrawingArea 컨테이너 생성 (최대 확장 및 최소 높이 보장)
         self.drawing_area = Gtk.DrawingArea()
+        self.drawing_area.set_hexpand(True)
+        self.drawing_area.set_vexpand(True)
+        self.drawing_area.set_size_request(640, 480) # [핵심] C-라이브러리 dst->h == 0 멈춤 에러 방지
         self.add(self.drawing_area)
         
         # 화면 준비가 완료(realize)되면 재생을 시작하도록 이벤트 등록
@@ -94,8 +97,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
-        GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder)를 감지하여 
-        DPB 프레임 버퍼(num-extra-surfaces=32) 및 고성능 모드를 동적 설정합니다.
+        GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder) 및 비디오 싱크(nveglglessink)를 감지하여 
+        DPB 프레임 버퍼(num-extra-surfaces=32), 고성능 모드 및 화면 왜곡 방지 옵션을 동적 설정합니다.
         """
         factory = element.get_factory()
         fname = factory.get_name() if factory else ""
@@ -105,6 +108,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 element.set_property("num-extra-surfaces", 32)
             if element.find_property("enable-max-performance"):
                 element.set_property("enable-max-performance", True)
+        if "nveglglessink" in fname or "nveglglessink" in ename:
+            if element.find_property("force-aspect-ratio"):
+                element.set_property("force-aspect-ratio", False)
 
     def build_playlist(self):
         """입력값을 분석하여 재생 목록을 동적으로 구성합니다."""
