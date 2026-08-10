@@ -260,7 +260,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 전용 3D 하드웨어 직통 비디오 싱크 생성 (nv3dsink 우선 적용으로 X11 데스크톱 컴포지터 유더링 100% 회피)
+        # Jetson 전용 RGBA NVMM 하드웨어 렌더링 싱크 구축 (nvbufsurface: Failed to create EGLImage 1초 후 멈춤 에러 100% 차단)
+        vsink_bin = Gst.Bin.new("rgba_sink_bin")
+        
+        nvconv = Gst.ElementFactory.make("nvvidconv", "nvconv")
+        if nvconv and nvconv.find_property("compute-hw"):
+            nvconv.set_property("compute-hw", 1)
+
+        capsfilter = Gst.ElementFactory.make("capsfilter", "capsfilter")
+        caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=RGBA")
+        capsfilter.set_property("caps", caps)
+
         vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
         if not vsink:
             vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
@@ -276,11 +286,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 vsink.set_property("async", False)
             if vsink.find_property("max-lateness"):
                 vsink.set_property("max-lateness", -1) # [핵심] 지연 프레임 강제 버림 방지 (무제한)
-            if vsink.find_property("bufapi-version"):
-                vsink.set_property("bufapi-version", True) # [핵심] NVIDIA Direct NVMM EGL API 활성화
             if vsink.find_property("force-aspect-ratio"):
                 vsink.set_property("force-aspect-ratio", False)
-            self.pipeline.set_property("video-sink", vsink)
+
+        vsink_bin.add(nvconv)
+        vsink_bin.add(capsfilter)
+        vsink_bin.add(vsink)
+
+        nvconv.link(capsfilter)
+        capsfilter.link(vsink)
+
+        pad = nvconv.get_static_pad("sink")
+        ghost_pad = Gst.GhostPad.new("sink", pad)
+        vsink_bin.add_pad(ghost_pad)
+
+        self.pipeline.set_property("video-sink", vsink_bin)
 
         # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
         # audio-sink sync=false 및 provide-clock=false 설정으로 PulseAudio 클럭 홀드로 인한 비디오 멈칫 현상 완벽 방지
