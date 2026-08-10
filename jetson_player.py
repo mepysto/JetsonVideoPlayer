@@ -208,9 +208,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (videoconvert ! nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true)
-        # sync=false 및 compute-hw=1 적용으로 오디오 시계 드리프트 및 프레임 끊김 현상을 완벽 방지
-        vsink_desc = "videoconvert ! nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true"
+        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true)
+        # 100% 순수 GPU 하드웨어 메모리(NVMM) 직통 파이프라인으로 CPU 메모리 복사 및 프레임 지연을 완전 차단
+        vsink_desc = "nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true"
         try:
             vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
             self.pipeline.set_property("video-sink", vsink_bin)
