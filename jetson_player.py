@@ -113,7 +113,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
         GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder) 및 비디오 싱크(nveglglessink)를 감지하여 
-        DPB 프레임 버퍼(num-extra-surfaces=32), 고성능 모드 및 화면 왜곡 방지 옵션을 동적 설정합니다.
+        DPB 프레임 버퍼(num-extra-surfaces=32), 고성능 모드, 프레임 드랍 0 및 화면 왜곡 방지 옵션을 동적 설정합니다.
         """
         factory = element.get_factory()
         fname = factory.get_name() if factory else ""
@@ -123,6 +123,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 element.set_property("num-extra-surfaces", 32)
             if element.find_property("enable-max-performance"):
                 element.set_property("enable-max-performance", True)
+            if element.find_property("drop-frame-interval"):
+                element.set_property("drop-frame-interval", 0)
         if "nveglglessink" in fname or "nveglglessink" in ename:
             if element.find_property("force-aspect-ratio"):
                 element.set_property("force-aspect-ratio", False)
@@ -225,11 +227,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 self.pipeline.set_property("video-sink", vsink)
 
         # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
+        # audio-sink sync=false 설정으로 PulseAudio 버퍼 지연으로 인한 비디오 프레임 끊김 완벽 방지
         for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
             asink = Gst.ElementFactory.make(sink_name, "asink")
             if asink:
-                if sink_name != "fakesink" and asink.find_property("sync"):
-                    asink.set_property("sync", True)
+                if sink_name != "fakesink":
+                    if asink.find_property("sync"):
+                        asink.set_property("sync", False)
+                    if asink.find_property("async"):
+                        asink.set_property("async", False)
                 self.pipeline.set_property("audio-sink", asink)
                 break
 
