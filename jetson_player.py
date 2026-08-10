@@ -93,20 +93,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.watchdog_timer_id = None
         self.last_position = -1
         self.stall_count = 0
-        self.watchdog_timer_id = GLib.timeout_add(3000, self.check_watchdog)
+        # 초기 버퍼링/프리로딩 대기 시간을 고려하여 5초 주기 와치독 구동
+        self.watchdog_timer_id = GLib.timeout_add(5000, self.check_watchdog)
 
     def check_watchdog(self):
-        """매 3초마다 재생 위치를 검사하여 영상이 멈춘 경우 자동으로 파이프라인을 복구합니다."""
+        """매 5초마다 재생 위치를 검사하여 영상이 실제로 멈춘 경우에만 파이프라인을 복구합니다."""
         if not self.pipeline:
             return True
 
         success, state, pending = self.pipeline.get_state(0)
         if success == Gst.StateChangeReturn.SUCCESS and state == Gst.State.PLAYING:
             pos_ok, pos_ns = self.pipeline.query_position(Gst.Format.TIME)
-            if pos_ok:
+            if pos_ok and pos_ns > 0:  # 실제 재생 위치가 0초 이상 진행된 상태에서만 멈춤 감지
                 if pos_ns == self.last_position:
                     self.stall_count += 1
-                    if self.stall_count >= 2:  # 6초 동안 재생 위치 변경이 없을 경우 멈춤으로 판단
+                    if self.stall_count >= 3:  # 15초 동안 지속적으로 재생 위치가 동일할 때만 멈춤 판정
                         print("⚠️ [자동 복구 시스템] 영상/오디오 멈춤 현상 감지! 파이프라인을 즉시 재구축하여 복구합니다.")
                         self.stall_count = 0
                         self.last_position = -1
