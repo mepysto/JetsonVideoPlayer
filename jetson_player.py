@@ -19,8 +19,9 @@ from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib
 
 def optimize_gstreamer_ranks():
     """
-    Jetson 하드웨어 디코더(nvv4l2decoder) 및 비디오 변환기(nvvidconv)의 랭크를 최우선(PRIMARY + 1000)으로 설정하고,
-    소프트웨어 CPU 디코더를 무력화하여 4K 60fps 영상을 FULL 60 FPS 하드웨어 가속으로 재생합니다.
+    Jetson 하드웨어 디코더(nvv4l2decoder)를 H.264/H.265 등에 적용하고,
+    JetPack nvv4l2decoder에서 DPB 버퍼 고갈 에러(VideoErrorInfo_OutputBufferUnavailable)를 유발하는 
+    AV1/VP9 10-bit WebM 코덱은 무결한 SW 디코더(av1dec, vp9dec)가 우선 할당되도록 랭크를 최적화합니다.
     """
     registry = Gst.Registry.get()
     
@@ -28,17 +29,30 @@ def optimize_gstreamer_ranks():
     hw_decoder = registry.find_feature("nvv4l2decoder", Gst.ElementFactory.__gtype__)
     
     if hw_decoder:
-        # Jetson 하드웨어 디코더 및 변환기 최우선 (PRIMARY + 1000)
+        # Jetson 하드웨어 디코더 및 변환기 우위 설정 (PRIMARY + 1000)
         hw_elements = ["nvv4l2decoder", "nvvidconv"]
         for name in hw_elements:
             elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY + 1000)
         
-        # CPU 소프트웨어 디코더 랭크 무력화 (NONE) -> HW 디코딩 강제 (FPS 저하 방지)
+        # AV1/H264/H265/VP9 스트림 파서 랭크 상향 (프레임 경계 추출 보장)
+        parsers = ["av1parse", "h264parse", "h265parse", "vp9parse"]
+        for name in parsers:
+            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
+            if elem:
+                elem.set_rank(Gst.Rank.PRIMARY + 1500)
+
+        # AV1 및 VP9 SW 디코더 랭크 최상위 상향 (JetPack HW AV1/VP9 DPB 드라이버 버그 완벽 회피)
+        sw_overrides = ["av1dec", "dav1d", "avdec_av1", "vp9dec", "avdec_vp9"]
+        for name in sw_overrides:
+            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
+            if elem:
+                elem.set_rank(Gst.Rank.PRIMARY + 5000)
+
+        # H.264, H.265, MJPEG 등 HW 디코딩이 100% 안정적인 코덱의 CPU 디코더 랭크 무력화
         sw_decoders = [
-            "av1dec", "dav1d", "avdec_av1", "av1parse",
-            "vp9dec", "avdec_vp9", "avdec_vp10", "avdec_vp8",
+            "avdec_vp10", "avdec_vp8",
             "avdec_h264", "avdec_hevc", "avdec_mjpeg"
         ]
         for name in sw_decoders:
@@ -46,13 +60,13 @@ def optimize_gstreamer_ranks():
             if elem:
                 elem.set_rank(Gst.Rank.NONE)
 
-        # CPU 소프트웨어 비디오 변환기/스케일러 랭크 무력화
+        # CPU 소프트웨어 비디오 변환기/스케일러 랭크 유지 (Standard Format Conversion 허용)
         for name in ["videoconvert", "videoscale"]:
             elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
             if elem:
-                elem.set_rank(Gst.Rank.NONE)
+                elem.set_rank(Gst.Rank.PRIMARY)
 
-        print("⚡ [하드웨어 가속 60 FPS] Jetson NVMM 하드웨어 디코더 및 GPU 가속 랭크 적용 완료.")
+        print("⚡ [하드웨어/소프트웨어 하이브리드 최적화] H.264/H.265 HW 가속 및 AV1/VP9 WebM 랭크 최적화 적용 완료.")
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
@@ -60,6 +74,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def __init__(self, input_path):
         super().__init__(title="Jetson Flexible Signage Player")
         
+        # [필수] 하드웨어/소프트웨어 가속 랭크 최적화 보장
+        optimize_gstreamer_ranks()
+
         # 1. 사이니지 전광판용 전체화면 빌드 (테두리 및 상단바 완전 제거)
         self.set_decorated(False)
         self.fullscreen()
@@ -83,14 +100,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_single_file_mode = False # 단일 파일 반복 모드 여부
         self.xid = None # GTK 메인 스레드 안전 XID 캐시
         
-        # 4. 장시간 재생 멈춤 방지용 와치독(Watchdog) 상태 변수
-        self.last_position = -1
-        self.stall_count = 0
-        self.watchdog_timer_id = None
-
         self.build_playlist()
 
-        # 5. GStreamer 핵심 파이프라인 변수 초기화
+        # 4. GStreamer 핵심 파이프라인 변수 초기화
         self.pipeline = None
         self.bus = None
 
@@ -183,25 +195,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # Native 비디오 포맷 플래그 설정 (GStreamer의 불필요한 소프트웨어 converter 삽입 방지)
-        current_flags = self.pipeline.get_property("flags")
-        self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
-
-        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 + NVMM NV12 + nveglglessink sync=false)
-        # sync=false 설정을 통해 오디오 시계 드리프트로 인한 비디오 멈춤 현상을 원천 방지
-        vsink_desc = "nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true"
-        try:
-            vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
-            self.pipeline.set_property("video-sink", vsink_bin)
-        except Exception as e:
-            print(f"⚠️ 커스텀 비디오 싱크 생성 실패, 기본 nveglglessink 사용: {e}")
-            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
-            if vsink:
-                if vsink.find_property("sync"):
-                    vsink.set_property("sync", False)
-                if vsink.find_property("qos"):
-                    vsink.set_property("qos", True)
-                self.pipeline.set_property("video-sink", vsink)
+        # Jetson 비디오 싱크 구축 (nveglglessink sync=false -> autovideosink)
+        # playbin이 HW(NVMM) 및 SW(I420/YUV) 디코더 포맷에 따라 videoconvert/nvvidconv를 자동 정밀 연결합니다.
+        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("autovideosink", "vsink")
+        if vsink:
+            if vsink.find_property("sync"):
+                vsink.set_property("sync", False)
+            if vsink.find_property("qos"):
+                vsink.set_property("qos", True)
+            self.pipeline.set_property("video-sink", vsink)
 
         # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
         for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
