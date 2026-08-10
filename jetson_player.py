@@ -20,43 +20,9 @@ from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11
 
 def enable_x11_compositor_bypass(gdk_window):
     """
-    GNOME Shell / Mutter X11 데스크톱 컴포지터(Compositor)의 이중 V-SYNC 버퍼링을 우회(Unredirect)하도록 
-    _NET_WM_BYPASS_COMPOSITOR X11 속성을 강제 주입하여 모니터 화면 끊김 현상을 완벽히 차단합니다.
+    GNOME Mutter 컴포지터의 EGL 서피스 스캔아웃 중단 방지를 위해 우회 설정을 비활성화합니다.
     """
-    try:
-        if not gdk_window:
-            return
-        xid = None
-        if hasattr(gdk_window, "get_xid"):
-            xid = gdk_window.get_xid()
-        elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
-            xid = GdkX11.X11Window.get_xid(gdk_window)
-
-        if not xid:
-            return
-
-        import ctypes
-        x11 = ctypes.cdll.LoadLibrary("libX11.so.6")
-        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
-        x11.XOpenDisplay.restype = ctypes.c_void_p
-        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_bool]
-        x11.XInternAtom.restype = ctypes.c_ulong
-        x11.XChangeProperty.argtypes = [
-            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
-            ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int
-        ]
-        x11.XChangeProperty.restype = ctypes.c_int
-
-        xdisplay = x11.XOpenDisplay(None)
-        if xdisplay:
-            # 1 = _NET_WM_BYPASS_COMPOSITOR_HINT_ON (GNOME/Mutter 컴포지팅 우회 강제)
-            atom = x11.XInternAtom(xdisplay, b"_NET_WM_BYPASS_COMPOSITOR", False)
-            val = ctypes.c_ulong(1)
-            x11.XChangeProperty(xdisplay, xid, atom, 6, 32, 0, ctypes.byref(val), 1)
-            x11.XFlush(xdisplay)
-            print(f"🚀 [GNOME 컴포지터 우회] X11 _NET_WM_BYPASS_COMPOSITOR = 1 주입 완료 (XID: {xid})")
-    except Exception as e:
-        print(f"⚠️ X11 컴포지터 우회 설정 중 보조 예외: {e}")
+    pass
 
 def optimize_gstreamer_ranks():
     """
