@@ -73,6 +73,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.playlist = []
         self.current_index = 0
         self.is_single_file_mode = False # 단일 파일 반복 모드 여부
+        self.xid = None # GTK 메인 스레드 안전 XID 캐시
         
         self.build_playlist()
 
@@ -115,9 +116,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             return
         print("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
         
-        # 마우스 커서 숨기기
-        gdk_window = self.get_window()
+        # GTK 메인 스레드에서 Window XID 사전 캐싱 (장시간 재생 시 X11 데드락 방지)
+        gdk_window = self.drawing_area.get_window() or self.get_window()
         if gdk_window:
+            if hasattr(gdk_window, "get_xid"):
+                self.xid = gdk_window.get_xid()
+            elif hasattr(Gdk, "X11Window") and hasattr(Gdk.X11Window, "get_xid"):
+                self.xid = Gdk.X11Window.get_xid(gdk_window)
+
             display = gdk_window.get_display()
             cursor = Gdk.Cursor.new_from_name(display, "none")
             gdk_window.set_cursor(cursor)
@@ -132,7 +138,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
         
-        # [핵심] 기존 파이프라인이 있으면 NULL 상태로 완전히 내린 뒤 파괴하여 하드웨어/EGL 자원을 완전히 세척합니다.
+        # [핵심] 기존 파이프라인 및 버스 시그널 감시 완전 해제 후 NULL 처리 (EGL Surface/VIC 락 세척)
+        if self.bus is not None:
+            try:
+                self.bus.remove_signal_watch()
+            except Exception:
+                pass
+            self.bus = None
+
         if self.pipeline is not None:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
@@ -145,8 +158,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
 
         # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv + NVMM NV12 + nveglglessink)
-        # 10-bit VP9/AV1/HDR 버퍼를 HW VIC로 변환 후 nveglglessink로 Zero-Copy 직통 전달
-        vsink_desc = "nvvidconv ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=true"
+        # 10-bit VP9/AV1/HDR 버퍼를 HW VIC로 변환 후 nveglglessink로 Zero-Copy 직통 전달 (qos=true 설정 추가)
+        vsink_desc = "nvvidconv ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=true qos=true"
         try:
             vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
             self.pipeline.set_property("video-sink", vsink_bin)
@@ -155,6 +168,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
             if vsink:
                 vsink.set_property("sync", True)
+                if vsink.find_property("qos"):
+                    vsink.set_property("qos", True)
                 self.pipeline.set_property("video-sink", vsink)
 
         # 오디오 출력 장치 지정
@@ -185,25 +200,33 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
     def on_sync_message(self, bus, message):
         """GTK DrawingArea에 비디오 화면을 일치시킵니다."""
-        if message.get_structure() and message.get_structure().get_name() == "prepare-window-handle":
-            sys_window = self.drawing_area.get_window()
-            if sys_window:
-                if hasattr(sys_window, "get_xid"): 
-                    xid = sys_window.get_xid()
-                else: 
-                    xid = Gdk.X11Window.get_xid(sys_window) if hasattr(Gdk, "X11Window") else sys_window.get_xid()
+        is_prepare_handle = False
+        if hasattr(GstVideo, "is_video_overlay_prepare_window_handle_message"):
+            is_prepare_handle = GstVideo.is_video_overlay_prepare_window_handle_message(message)
+        
+        if not is_prepare_handle and message.get_structure():
+            is_prepare_handle = (message.get_structure().get_name() == "prepare-window-handle")
+
+        if is_prepare_handle:
+            xid = getattr(self, "xid", None)
+            if not xid:
+                sys_window = self.drawing_area.get_window() or self.get_window()
+                if sys_window:
+                    if hasattr(sys_window, "get_xid"):
+                        xid = sys_window.get_xid()
+                    elif hasattr(Gdk, "X11Window") and hasattr(Gdk.X11Window, "get_xid"):
+                        xid = Gdk.X11Window.get_xid(sys_window)
+                    self.xid = xid
+            if xid:
                 message.src.set_window_handle(xid)
 
     def on_bus_message(self, bus, message):
         """재생 완료(EOS) 및 에러 메시지 처리"""
         if message.type == Gst.MessageType.EOS:
             if self.is_single_file_mode:
-                print("🔄 단일 영상 완료: 처음부터 다시 재생합니다.")
-                self.pipeline.seek_simple(
-                    Gst.Format.TIME, 
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 
-                    0
-                )
+                print("🔄 단일 영상 완료: 파이프라인 자원 세척 후 재선언 재생합니다.")
+                # 장시간 재생 시 EGL surface/시계동기화 락 방지를 위해 파이프라인 완전 재구축 수행
+                GLib.timeout_add(10, self.play_current_video)
             else:
                 self.play_next_video()
             
@@ -226,11 +249,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if target_ns < 0:
             target_ns = 0
 
-        self.pipeline.seek_simple(
+        res = self.pipeline.seek_simple(
             Gst.Format.TIME,
             Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
             target_ns
         )
+        if not res:
+            print("⚠️ 탐색 실패로 파이프라인을 재구축합니다.")
+            self.play_current_video()
+            return
+
         direction = "앞으로" if offset_seconds > 0 else "뒤로"
         print(f"⏩ {direction} {abs(offset_seconds)}초 이동 (현재 위치: {target_ns / Gst.SECOND:.1f}초)")
 
@@ -240,28 +268,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             return
             
         success, state, pending = self.pipeline.get_state(Gst.CLOCK_TIME_NONE)
-        if success == Gst.StateChangeReturn.SUCCESS:
-            if state == Gst.State.PLAYING:
+        if success in (Gst.StateChangeReturn.SUCCESS, Gst.StateChangeReturn.ASYNC):
+            target_state = pending if pending != Gst.State.VOID_PENDING else state
+            if target_state == Gst.State.PLAYING:
                 self.pipeline.set_state(Gst.State.PAUSED)
                 print("⏸ 일시 정지")
-            elif state == Gst.State.PAUSED:
+            elif target_state == Gst.State.PAUSED:
                 self.pipeline.set_state(Gst.State.PLAYING)
                 print("▶ 다시 재생")
 
     def play_next_video(self):
         """다음 영상으로 전환합니다."""
         if self.is_single_file_mode:
-            self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
+            GLib.timeout_add(10, self.play_current_video)
         else:
             self.current_index = (self.current_index + 1) % len(self.playlist)
             print("⏭ 다음 영상으로 넘어갑니다.")
-            # 50ms 미세 지연 후 다음 비디오를 동일 파이프라인에서 재생
             GLib.timeout_add(50, self.play_current_video)
 
     def play_prev_video(self):
         """이전 영상으로 전환합니다."""
         if self.is_single_file_mode:
-            self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
+            GLib.timeout_add(10, self.play_current_video)
         else:
             self.current_index = (self.current_index - 1 + len(self.playlist)) % len(self.playlist)
             print("⏮ 이전 영상으로 넘어갑니다.")
@@ -294,10 +322,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         return False
 
     def on_destroy(self, widget):
+        if self.bus is not None:
+            try:
+                self.bus.remove_signal_watch()
+            except Exception:
+                pass
+            self.bus = None
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
-        Gtk.main_quit()
+        if Gtk.main_level() > 0:
+            Gtk.main_quit()
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -314,4 +349,5 @@ if __name__ == "__main__":
     win = JetsonSignageFlexiblePlayer(user_input)
     win.show_all()
     Gtk.main()
+
 
