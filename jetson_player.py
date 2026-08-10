@@ -86,38 +86,6 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline = None
         self.bus = None
 
-    def start_watchdog(self):
-        """장시간 재생 시 영상/오디오 멈춤 현상을 실시간 감지하여 자동 복구하는 와치독 타이머를 구동합니다."""
-        if self.watchdog_timer_id is not None:
-            GLib.source_remove(self.watchdog_timer_id)
-            self.watchdog_timer_id = None
-        self.last_position = -1
-        self.stall_count = 0
-        # 초기 버퍼링/프리로딩 대기 시간을 고려하여 5초 주기 와치독 구동
-        self.watchdog_timer_id = GLib.timeout_add(5000, self.check_watchdog)
-
-    def check_watchdog(self):
-        """매 5초마다 재생 위치를 검사하여 영상이 실제로 멈춘 경우에만 파이프라인을 복구합니다."""
-        if not self.pipeline:
-            return True
-
-        success, state, pending = self.pipeline.get_state(0)
-        if success == Gst.StateChangeReturn.SUCCESS and state == Gst.State.PLAYING:
-            pos_ok, pos_ns = self.pipeline.query_position(Gst.Format.TIME)
-            if pos_ok and pos_ns > 0:  # 실제 재생 위치가 0초 이상 진행된 상태에서만 멈춤 감지
-                if pos_ns == self.last_position:
-                    self.stall_count += 1
-                    if self.stall_count >= 3:  # 15초 동안 지속적으로 재생 위치가 동일할 때만 멈춤 판정
-                        print("⚠️ [자동 복구 시스템] 영상/오디오 멈춤 현상 감지! 파이프라인을 즉시 재구축하여 복구합니다.")
-                        self.stall_count = 0
-                        self.last_position = -1
-                        self.play_current_video()
-                        return True
-                else:
-                    self.stall_count = 0
-                    self.last_position = pos_ns
-        return True
-
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
         GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder)를 감지하여 
@@ -211,9 +179,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         current_flags = self.pipeline.get_property("flags")
         self.pipeline.set_property("flags", current_flags | 0x00000020) # GST_PLAY_FLAG_NATIVE_VIDEO
 
-        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 + NVMM NV12 + nveglglessink sync=true qos=true)
-        # compute-hw=1 (GPU 가속) 및 qos=true 적용으로 장시간 재생 시 VIC 엔진 과부하 및 오디오 시계 틀어짐 방지
-        vsink_desc = "nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=true qos=true"
+        # Jetson 하드웨어 가속 비디오 싱크 빈 구축 (nvvidconv compute-hw=1 + NVMM NV12 + nveglglessink sync=false)
+        # sync=false 설정을 통해 오디오 시계 드리프트로 인한 비디오 멈춤 현상을 원천 방지
+        vsink_desc = "nvvidconv compute-hw=1 ! video/x-raw(memory:NVMM), format=NV12 ! nveglglessink sync=false qos=true"
         try:
             vsink_bin = Gst.parse_bin_from_description(vsink_desc, True)
             self.pipeline.set_property("video-sink", vsink_bin)
@@ -221,21 +189,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             print(f"⚠️ 커스텀 비디오 싱크 생성 실패, 기본 nveglglessink 사용: {e}")
             vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
             if vsink:
-                vsink.set_property("sync", True)
+                if vsink.find_property("sync"):
+                    vsink.set_property("sync", False)
                 if vsink.find_property("qos"):
                     vsink.set_property("qos", True)
                 self.pipeline.set_property("video-sink", vsink)
 
-        # 오디오 출력 장치 지정
-        asink = Gst.ElementFactory.make("pulsesink", "asink")
-        if asink:
-            asink.set_property("sync", True)
-            self.pipeline.set_property("audio-sink", asink)
-        else:
-            asink = Gst.ElementFactory.make("alsasink", "asink")
+        # 오디오 출력 장치 지정 (pulsesink -> alsasink -> autoaudiosink -> fakesink 순서 안전 지정)
+        for sink_name in ["pulsesink", "alsasink", "autoaudiosink", "fakesink"]:
+            asink = Gst.ElementFactory.make(sink_name, "asink")
             if asink:
-                asink.set_property("sync", True)
+                if sink_name != "fakesink" and asink.find_property("sync"):
+                    asink.set_property("sync", True)
                 self.pipeline.set_property("audio-sink", asink)
+                break
 
         # 버스 이벤트 연결
         self.bus = self.pipeline.get_bus()
@@ -248,9 +215,6 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline.set_property("uri", video_uri)
         self.pipeline.set_state(Gst.State.PLAYING)
         
-        # 와치독 타이머 구동
-        self.start_watchdog()
-
         # 주기적으로 파이썬 레벨의 안 쓰이는 메모리를 정리
         gc.collect()
         return False
