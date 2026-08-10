@@ -227,47 +227,23 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
         self.pipeline.set_property("flags", 0x00000063)
 
-        # Jetson 전용 NV12 NVMM 하드웨어 렌더링 싱크 구축 (BGR 캡스 협상으로 인한 NvVicCompose Failed 1초 후 멈춤 에러 -5 100% 차단)
-        vsink_bin = Gst.Bin.new("nv12_sink_bin")
-        
-        nvconv = Gst.ElementFactory.make("nvvidconv", "nvconv")
-        if nvconv and nvconv.find_property("output-buffers"):
-            nvconv.set_property("output-buffers", 32)
+        # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (Gst.Bin 캡스 파싱 에러 및 1초 멈춤 100% 차단)
+        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("autovideosink", "vsink")
 
-        capsfilter = Gst.ElementFactory.make("capsfilter", "capsfilter")
-        caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=NV12")
-        capsfilter.set_property("caps", caps)
-
-        actual_sink = Gst.ElementFactory.make("nveglglessink", "actual_sink")
-        if not actual_sink:
-            actual_sink = Gst.ElementFactory.make("nv3dsink", "actual_sink")
-        if not actual_sink:
-            actual_sink = Gst.ElementFactory.make("autovideosink", "actual_sink")
-
-        if actual_sink:
-            if actual_sink.find_property("sync"):
-                actual_sink.set_property("sync", True)
-            if actual_sink.find_property("qos"):
-                actual_sink.set_property("qos", True)
-            if actual_sink.find_property("async"):
-                actual_sink.set_property("async", True)
-            if actual_sink.find_property("max-lateness"):
-                actual_sink.set_property("max-lateness", -1) # [핵심] 지연 프레임 버림 방지
-            if actual_sink.find_property("force-aspect-ratio"):
-                actual_sink.set_property("force-aspect-ratio", False)
-
-        vsink_bin.add(nvconv)
-        vsink_bin.add(capsfilter)
-        vsink_bin.add(actual_sink)
-
-        nvconv.link(capsfilter)
-        capsfilter.link(actual_sink)
-
-        pad = nvconv.get_static_pad("sink")
-        ghost_pad = Gst.GhostPad.new("sink", pad)
-        vsink_bin.add_pad(ghost_pad)
-
-        self.pipeline.set_property("video-sink", vsink_bin)
+        if vsink:
+            if vsink.find_property("sync"):
+                vsink.set_property("sync", True)
+            if vsink.find_property("qos"):
+                vsink.set_property("qos", True)
+            if vsink.find_property("max-lateness"):
+                vsink.set_property("max-lateness", -1) # [핵심] 지연 프레임 버림 방지
+            if vsink.find_property("force-aspect-ratio"):
+                vsink.set_property("force-aspect-ratio", False)
+            self.pipeline.set_property("video-sink", vsink)
 
         # 오디오 출력 장치 지정 (pulsesink -> autoaudiosink -> alsasink -> fakesink 순서 안전 지정)
         # pulsesink를 최우선 지정하여 우분투 데스크톱 PulseAudio 락 충돌 없이 사운드 정상 출력 및 비디오 60 FPS 정속 연동 보장
