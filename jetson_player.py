@@ -157,7 +157,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         
         if os.path.isdir(abs_path):
             self.is_single_file_mode = False
-            extensions = ['*.webm', '*.mp4', '*.mkv', '*.mov']
+            extensions = ['*.webm', '*.mp4', '*.mkv', '*.mov', '*.avi']
             for ext in extensions:
                 self.playlist.extend(glob.glob(os.path.join(abs_path, ext)))
                 self.playlist.extend(glob.glob(os.path.join(abs_path, ext.upper())))
