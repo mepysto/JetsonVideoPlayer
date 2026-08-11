@@ -1,6 +1,8 @@
 import sys
 import os
 import glob
+import subprocess
+import shutil
 import gi
 import gc # [누수 방지] 명시적 가비지 컬렉션 처리를 위해 추가
 from urllib.request import pathname2url
@@ -151,32 +153,133 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if element.find_property("force-aspect-ratio"):
                 element.set_property("force-aspect-ratio", False)
 
+    def check_video_hw_support(self, file_path):
+        """
+        ffprobe를 사용하여 영상 파일의 코덱 및 색상 깊이를 분석하고,
+        Jetson NVDEC 하드웨어 디코더가 100% 가속 지원하는 포맷인지 검증합니다.
+        """
+        try:
+            cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,pix_fmt,profile",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                file_path
+            ]
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True).strip().split('\n')
+            codec = output[0].strip().lower() if len(output) > 0 else ""
+            pix_fmt = output[1].strip().lower() if len(output) > 1 else ""
+            profile = output[2].strip().lower() if len(output) > 2 else ""
+
+            # 1. H.265 / HEVC -> 8-bit & 10-bit 모두 NVDEC HW 칩 가속 100% 지원
+            if codec in ["hevc", "h265"]:
+                return True, "HEVC (H.265) HW 가속 지원"
+
+            # 2. H.264 / AVC -> 8-bit만 지원 (10-bit / yuv420p10le / High 10 프로파일은 HW 미지원)
+            if codec in ["h264", "avc"]:
+                if "10" in pix_fmt or "10" in profile or "p10" in pix_fmt:
+                    return False, f"H.264 10-bit ({pix_fmt}/{profile}) HW 미지원"
+                return True, "H.264 8-bit HW 가속 지원"
+
+            # 3. 그 외 (AV1, VP9, VP8 등) -> HW 미지원
+            return False, f"미지원 코덱 ({codec})"
+        except Exception as e:
+            return False, f"코덱 분석 실패 ({e})"
+
+    def auto_convert_to_h265(self, file_path):
+        """
+        하드웨어 디코딩 미지원 영상을 H.265 (HEVC) MP4 포맷으로 자동 변환하고,
+        원래 영상 파일은 'unsupported_originals' 백업 폴더로 안전하게 이동합니다.
+        """
+        dir_name = os.path.dirname(file_path)
+        base_name = os.path.basename(file_path)
+        name_no_ext, ext = os.path.splitext(base_name)
+
+        # 1. 백업 폴더 생성 (unsupported_originals)
+        backup_dir = os.path.join(dir_name, "unsupported_originals")
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, base_name)
+
+        # 2. H.265 변환 목표 파일 경로 생성 (.mp4)
+        target_mp4_path = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
+
+        # 3. 비트 심도 검사 (10-bit 소스는 H.265 10-bit 유지)
+        is_supported, reason = self.check_video_hw_support(file_path)
+        is_10bit = "10" in reason or "10bit" in file_path.lower()
+        pix_fmt = "yuv420p10le" if is_10bit else "yuv420p"
+
+        print(f"\n🔄 [자동 코덱 변환 개시] {base_name}")
+        print(f"   - 감지된 사유: {reason}")
+        print(f"   - 타겟 코덱: H.265 / HEVC MP4 ({pix_fmt})")
+        print(f"   - 백업 이동 경로: {backup_path}")
+
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-i", file_path,
+            "-pix_fmt", pix_fmt,
+            "-c:v", "libx265",
+            "-preset", "ultrafast",
+            "-crf", "20",
+            "-threads", "6",
+            "-c:a", "aac",
+            target_mp4_path
+        ]
+
+        try:
+            subprocess.run(ffmpeg_cmd, check=True)
+            print(f"✅ [H.265 변환 완료] {os.path.basename(target_mp4_path)}")
+
+            if os.path.exists(file_path) and file_path != target_mp4_path:
+                shutil.move(file_path, backup_path)
+                print(f"📦 [원본 파일 백업 이동 완료] {backup_path}")
+
+            return target_mp4_path
+        except Exception as e:
+            print(f"❌ [변환 실패] {file_path}: {e}")
+            return file_path
+
     def build_playlist(self):
-        """입력값을 분석하여 재생 목록을 동적으로 구성합니다."""
+        """입력값을 분석하여 재생 목록을 동적으로 구성하고, 하드웨어 미지원 코덱은 H.265로 자동 변환 및 백업합니다."""
         abs_path = os.path.abspath(self.input_path)
         
+        raw_playlist = []
         if os.path.isdir(abs_path):
             self.is_single_file_mode = False
             extensions = ['*.webm', '*.mp4', '*.mkv', '*.mov', '*.avi']
             for ext in extensions:
-                self.playlist.extend(glob.glob(os.path.join(abs_path, ext)))
-                self.playlist.extend(glob.glob(os.path.join(abs_path, ext.upper())))
-            self.playlist.sort()
+                raw_playlist.extend(glob.glob(os.path.join(abs_path, ext)))
+                raw_playlist.extend(glob.glob(os.path.join(abs_path, ext.upper())))
+            raw_playlist.sort()
             
-            if not self.playlist:
+            if not raw_playlist:
                 print(f"❌ 에러: [{self.input_path}] 폴더 내에 재생 가능한 영상 파일이 없습니다.")
                 sys.exit(1)
-            print(f"📂 [폴더 순환 모드] 총 {len(self.playlist)}개의 영상을 순서대로 재생합니다.")
 
         elif os.path.isfile(abs_path):
             self.is_single_file_mode = True
-            self.playlist.append(abs_path)
-            print(f"🎬 [단일 파일 반복 모드] 지정된 파일을 무한 반복 재생합니다.")
-            
+            raw_playlist.append(abs_path)
         else:
             print(f"❌ 에러: [{self.input_path}] 존재하지 않는 파일이거나 올바르지 않은 경로입니다.")
             sys.exit(1)
 
+        # 중복 제거 및 하드웨어 미지원 영상 자동 H.265 변환 / 백업 검사
+        processed_set = set()
+        for path in raw_playlist:
+            if not os.path.exists(path) or path in processed_set:
+                continue
+
+            is_supported, reason = self.check_video_hw_support(path)
+            if not is_supported:
+                # 하드웨어 미지원 코덱 발견시 H.265 변환 및 원본 백업 수행
+                final_path = self.auto_convert_to_h265(path)
+            else:
+                final_path = path
+
+            if final_path not in self.playlist:
+                self.playlist.append(final_path)
+                processed_set.add(final_path)
+
+        mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
+        print(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 NVDEC 가속 영상을 재생합니다.")
         for idx, path in enumerate(self.playlist):
             print(f"   [{idx}] {os.path.basename(path)}")
 
