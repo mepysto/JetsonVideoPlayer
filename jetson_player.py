@@ -3,8 +3,8 @@ import os
 import glob
 import subprocess
 import shutil
+import json
 import gi
-import gc # [누수 방지] 명시적 가비지 컬렉션 처리를 위해 추가
 from urllib.request import pathname2url
 
 # 환경 변수 자동 설정 (cannot open display 에러 방지)
@@ -52,28 +52,8 @@ def optimize_gstreamer_ranks():
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY + 1500)
 
-        # VP9 10-bit HDR 전용 SW 디코더 랭크 상향 (JetPack HW VP9 버퍼 에러 전용 회피)
-        sw_vp9 = ["vp9dec", "avdec_vp9"]
-        for name in sw_vp9:
-            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
-            if elem:
-                elem.set_rank(Gst.Rank.PRIMARY + 5000)
-
-        # ARM 64-bit NEON SIMD 다중 스레드 디코더(dav1d) 랭크 최우선 상향 (Jetson Orin Nano NVDEC AV1 부재 전용 60 FPS 가속)
-        dav1d = registry.find_feature("dav1d", Gst.ElementFactory.__gtype__)
-        if dav1d:
-            dav1d.set_rank(Gst.Rank.PRIMARY + 10000)
-
-        # 느린 단일 스레드 CPU 디코더만 무력화 (avdec_av1 등)
-        sw_decoders = [
-            "av1dec", "avdec_av1",
-            "avdec_vp10", "avdec_vp8",
-            "avdec_h264", "avdec_hevc", "avdec_mjpeg"
-        ]
-        for name in sw_decoders:
-            elem = registry.find_feature(name, Gst.ElementFactory.__gtype__)
-            if elem:
-                elem.set_rank(Gst.Rank.NONE)
+        # 소프트웨어 디코더는 기본 rank를 유지합니다. 하드웨어를 우선하되 특정
+        # 프로파일/드라이버 오류에서는 GStreamer가 안전하게 fallback할 수 있어야 합니다.
 
         # CPU 소프트웨어 비디오 변환기/스케일러 랭크 유지 (Standard Format Conversion 허용)
         for name in ["videoconvert", "videoscale"]:
@@ -87,45 +67,313 @@ def optimize_gstreamer_ranks():
 
 class JetsonSignageFlexiblePlayer(Gtk.Window):
     def __init__(self, input_path):
-        super().__init__(title="Jetson Flexible Signage Player")
+        super().__init__(title="Jetson Video Player")
         
         # [필수] 하드웨어 가속 랭크 최적화 보장
         optimize_gstreamer_ranks()
 
-        # 1. 사이니지 전광판용 전체화면 빌드 (테두리 및 상단바 완전 제거)
+        # 1. 플레이어 창 설정
         self.set_decorated(False)
         self.fullscreen()
         self.set_keep_above(True)
+        self.set_default_size(1280, 720)
         
         # 이벤트 연결 (종료 및 키보드 입력)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
 
-        # 2. 비디오가 임베딩될 Gtk DrawingArea 컨테이너 생성 (GTK-EGL 그래픽 충돌 방지 최적화)
+        # 2. 입력 경로 타입(폴더 vs 파일)을 분석하여 재생 목록 구성
+        self.input_path = input_path
+        self.playlist = []
+        self.current_index = 0
+        self.is_single_file_mode = False
+        self.xid = None
+        self.build_playlist()
+
+        # UI/재생 상태
+        self.is_playing = True
+        self.is_fullscreen = True
+        self.is_video_only = False
+        self.sidebar_was_visible = True
+        self.is_seeking = False
+        self.duration_ns = 0
+        self.playlist_rows = []
+        self.decoder_names = set()
+        self.video_sink = None
+        self.stats_ticks = 0
+        self.last_dropped_frames = 0
+        self.retry_counts = {}
+        self.max_retries = 2
+
+        # 3. 비디오가 임베딩될 Gtk DrawingArea 생성
         self.drawing_area = Gtk.DrawingArea()
         self.drawing_area.set_hexpand(True)
         self.drawing_area.set_vexpand(True)
         self.drawing_area.set_size_request(640, 480) # [핵심] C-라이브러리 dst->h == 0 멈춤 에러 방지
-        self.drawing_area.set_double_buffered(False) # [핵심] GTK CPU 이중 버퍼링 무력화 (EGL 직통 렌더링)
         self.drawing_area.set_app_paintable(True)    # [핵심] GTK 창 기본 배경 그리기 차단
         self.drawing_area.connect("draw", lambda widget, cr: True) # [핵심] GTK repaint 이벤트 무력화
-        self.add(self.drawing_area)
         
         # 화면 준비가 완료(realize)되면 재생을 시작하도록 이벤트 등록
         self.drawing_area.connect("realize", self.on_realize)
 
-        # 3. 입력 경로 타입(폴더 vs 파일)을 분석하여 재생 목록 구성
-        self.input_path = input_path
-        self.playlist = []
-        self.current_index = 0
-        self.is_single_file_mode = False # 단일 파일 반복 모드 여부
-        self.xid = None # GTK 메인 스레드 안전 XID 캐시
-        
-        self.build_playlist()
+        self.build_ui()
 
         # 4. GStreamer 핵심 파이프라인 변수 초기화
         self.pipeline = None
         self.bus = None
+
+        # 재생 위치와 UI 상태 갱신
+        self.position_timer_id = GLib.timeout_add(500, self.update_playback_ui)
+
+    def build_ui(self):
+        """Jetson EGL 출력과 충돌하지 않는 네이티브 GTK 플레이어 UI를 구성합니다."""
+        css = b"""
+        window { background: #090b10; color: #f4f6fb; }
+        .topbar, .controls { background: #11151d; }
+        .topbar { border-bottom: 1px solid #252b36; }
+        .controls { border-top: 1px solid #252b36; }
+        .brand { font-size: 17px; font-weight: 700; color: #ffffff; }
+        .muted { color: #8f98a8; font-size: 12px; }
+        .now-playing { color: #dce2ec; font-size: 13px; }
+        button { background: transparent; color: #dce2ec; border: 0; border-radius: 7px; padding: 7px 10px; }
+        button:hover { background: #252b36; color: #ffffff; }
+        .primary { background: #e9ff5b; color: #111318; border-radius: 20px; min-width: 28px; min-height: 28px; }
+        .primary:hover { background: #f2ff91; color: #111318; }
+        .sidebar { background: #0e1117; border-left: 1px solid #252b36; }
+        .section-title { font-size: 15px; font-weight: 700; color: #ffffff; }
+        .playlist-row { border-radius: 8px; padding: 7px; }
+        .playlist-row:hover { background: #1a1f29; }
+        .playlist-row-active { background: #242b35; border-left: 3px solid #e9ff5b; }
+        .track-number { color: #70798a; font-size: 12px; }
+        .track-title { color: #dce2ec; font-size: 13px; }
+        scale trough { background: #303744; min-height: 4px; border-radius: 3px; }
+        scale highlight { background: #e9ff5b; border-radius: 3px; }
+        scale slider { background: #ffffff; min-width: 13px; min-height: 13px; border-radius: 7px; }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.add(root)
+
+        self.topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.topbar.get_style_context().add_class("topbar")
+        self.topbar.set_border_width(10)
+        brand = Gtk.Label(label="JETSON  /  VIDEO PLAYER")
+        brand.get_style_context().add_class("brand")
+        self.topbar.pack_start(brand, False, False, 4)
+        self.now_playing_label = Gtk.Label(xalign=0)
+        self.now_playing_label.set_ellipsize(3)
+        self.now_playing_label.get_style_context().add_class("now-playing")
+        self.topbar.pack_start(self.now_playing_label, True, True, 12)
+        playlist_toggle = Gtk.Button(label="☷  재생목록")
+        playlist_toggle.set_tooltip_text("재생목록 열기/닫기")
+        playlist_toggle.connect("clicked", self.on_playlist_toggle)
+        self.topbar.pack_end(playlist_toggle, False, False, 0)
+        close_button = Gtk.Button(label="✕")
+        close_button.set_tooltip_text("종료 (Esc)")
+        close_button.connect("clicked", self.on_destroy)
+        self.topbar.pack_end(close_button, False, False, 0)
+        root.pack_start(self.topbar, False, False, 0)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        content.pack_start(self.drawing_area, True, True, 0)
+        self.sidebar = self.build_playlist_panel()
+        content.pack_end(self.sidebar, False, False, 0)
+        root.pack_start(content, True, True, 0)
+
+        self.controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.controls.get_style_context().add_class("controls")
+        self.controls.set_border_width(10)
+
+        timeline = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.position_label = Gtk.Label(label="00:00")
+        self.position_label.get_style_context().add_class("muted")
+        self.progress_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 0.1)
+        self.progress_scale.set_draw_value(False)
+        self.progress_scale.set_hexpand(True)
+        self.progress_scale.connect("button-press-event", self.on_seek_start)
+        self.progress_scale.connect("button-release-event", self.on_seek_end)
+        self.duration_label = Gtk.Label(label="00:00")
+        self.duration_label.get_style_context().add_class("muted")
+        timeline.pack_start(self.position_label, False, False, 0)
+        timeline.pack_start(self.progress_scale, True, True, 0)
+        timeline.pack_start(self.duration_label, False, False, 0)
+        self.controls.pack_start(timeline, False, False, 0)
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        prev_button = Gtk.Button(label="⏮")
+        prev_button.set_tooltip_text("이전 영상 (P)")
+        prev_button.connect("clicked", lambda _button: self.play_prev_video())
+        self.play_button = Gtk.Button(label="Ⅱ")
+        self.play_button.get_style_context().add_class("primary")
+        self.play_button.set_tooltip_text("재생/일시정지 (Space)")
+        self.play_button.connect("clicked", lambda _button: self.toggle_play_pause())
+        next_button = Gtk.Button(label="⏭")
+        next_button.set_tooltip_text("다음 영상 (N)")
+        next_button.connect("clicked", lambda _button: self.play_next_video())
+        rewind_button = Gtk.Button(label="↶ 10")
+        rewind_button.set_tooltip_text("10초 뒤로 (←)")
+        rewind_button.connect("clicked", lambda _button: self.seek_relative(-10))
+        forward_button = Gtk.Button(label="10 ↷")
+        forward_button.set_tooltip_text("10초 앞으로 (→)")
+        forward_button.connect("clicked", lambda _button: self.seek_relative(10))
+        for button in (prev_button, rewind_button, self.play_button, forward_button, next_button):
+            actions.pack_start(button, False, False, 0)
+
+        spacer = Gtk.Box()
+        actions.pack_start(spacer, True, True, 0)
+        volume_icon = Gtk.Label(label="◖)))")
+        volume_icon.get_style_context().add_class("muted")
+        actions.pack_start(volume_icon, False, False, 4)
+        self.volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.volume_scale.set_size_request(110, -1)
+        self.volume_scale.set_draw_value(False)
+        self.volume_scale.set_value(100)
+        self.volume_scale.connect("value-changed", self.on_volume_changed)
+        actions.pack_start(self.volume_scale, False, False, 0)
+        self.fullscreen_button = Gtk.Button(label="⛶")
+        self.fullscreen_button.set_tooltip_text("영상만 전체화면 (F)")
+        self.fullscreen_button.connect("clicked", lambda _button: self.toggle_fullscreen())
+        actions.pack_end(self.fullscreen_button, False, False, 0)
+        self.controls.pack_start(actions, False, False, 0)
+        root.pack_end(self.controls, False, False, 0)
+
+        self.refresh_playlist_ui()
+
+    def build_playlist_panel(self):
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panel.get_style_context().add_class("sidebar")
+        panel.set_size_request(310, -1)
+        panel.set_border_width(14)
+        heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        title = Gtk.Label(label="재생목록", xalign=0)
+        title.get_style_context().add_class("section-title")
+        count = Gtk.Label(label=f"{len(self.playlist)}개 영상", xalign=1)
+        count.get_style_context().add_class("muted")
+        heading.pack_start(title, True, True, 0)
+        heading.pack_end(count, False, False, 0)
+        panel.pack_start(heading, False, False, 4)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.playlist_box = Gtk.ListBox()
+        self.playlist_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.playlist_box.set_activate_on_single_click(True)
+        self.playlist_box.connect("row-activated", self.on_playlist_row_activated)
+        for index, path in enumerate(self.playlist):
+            row = Gtk.ListBoxRow()
+            row.get_style_context().add_class("playlist-row")
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            number = Gtk.Label(label=f"{index + 1:02d}")
+            number.get_style_context().add_class("track-number")
+            name = Gtk.Label(label=os.path.basename(path), xalign=0)
+            name.set_ellipsize(3)
+            name.set_tooltip_text(path)
+            name.get_style_context().add_class("track-title")
+            line.pack_start(number, False, False, 0)
+            line.pack_start(name, True, True, 0)
+            row.add(line)
+            self.playlist_box.add(row)
+            self.playlist_rows.append(row)
+        scroll.add(self.playlist_box)
+        panel.pack_start(scroll, True, True, 0)
+        return panel
+
+    def on_playlist_toggle(self, _button):
+        self.sidebar.set_visible(not self.sidebar.get_visible())
+
+    def on_playlist_row_activated(self, _listbox, row):
+        index = row.get_index()
+        if index != self.current_index:
+            self.current_index = index
+            self.play_current_video()
+
+    def refresh_playlist_ui(self):
+        if not self.playlist:
+            return
+        filename = os.path.basename(self.playlist[self.current_index])
+        self.now_playing_label.set_text(
+            f"재생 중  ·  {filename}   {self.current_index + 1}/{len(self.playlist)}"
+        )
+        for index, row in enumerate(self.playlist_rows):
+            context = row.get_style_context()
+            if index == self.current_index:
+                context.add_class("playlist-row-active")
+            else:
+                context.remove_class("playlist-row-active")
+
+    @staticmethod
+    def format_time(nanoseconds):
+        total_seconds = max(0, int(nanoseconds / Gst.SECOND))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+
+    def update_playback_ui(self):
+        if not self.pipeline:
+            return True
+        duration_ok, duration = self.pipeline.query_duration(Gst.Format.TIME)
+        position_ok, position = self.pipeline.query_position(Gst.Format.TIME)
+        if duration_ok and duration > 0:
+            self.duration_ns = duration
+            self.duration_label.set_text(self.format_time(duration))
+            if position_ok and not self.is_seeking:
+                self.progress_scale.set_value(min(100, position * 100 / duration))
+        if position_ok:
+            self.position_label.set_text(self.format_time(position))
+        self.stats_ticks += 1
+        if self.video_sink and self.stats_ticks % 20 == 0 and self.video_sink.find_property("stats"):
+            stats = self.video_sink.get_property("stats")
+            if stats:
+                rendered = stats.get_value("rendered") or 0
+                dropped = stats.get_value("dropped") or 0
+                if dropped > self.last_dropped_frames:
+                    print(f"📊 [렌더링 통계] rendered={rendered}, dropped={dropped}")
+                self.last_dropped_frames = dropped
+        return True
+
+    def on_seek_start(self, _scale, _event):
+        self.is_seeking = True
+        return False
+
+    def on_seek_end(self, scale, _event):
+        if self.pipeline and self.duration_ns > 0:
+            target = int(self.duration_ns * scale.get_value() / 100)
+            self.pipeline.seek_simple(
+                Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target
+            )
+        self.is_seeking = False
+        return False
+
+    def on_volume_changed(self, scale):
+        if self.pipeline:
+            self.pipeline.set_property("volume", scale.get_value() / 100.0)
+
+    def toggle_fullscreen(self):
+        """상단바, 재생목록, 컨트롤을 숨긴 영상 전용 전체화면을 전환합니다."""
+        if not self.is_video_only:
+            self.sidebar_was_visible = self.sidebar.get_visible()
+            self.topbar.hide()
+            self.sidebar.hide()
+            self.controls.hide()
+            self.fullscreen()
+            self.set_keep_above(True)
+            self.is_fullscreen = True
+            self.is_video_only = True
+            self.fullscreen_button.set_label("⧉")
+            print("🖥️ 영상 전용 전체화면")
+        else:
+            self.topbar.show()
+            self.controls.show()
+            if self.sidebar_was_visible:
+                self.sidebar.show()
+            self.is_video_only = False
+            self.fullscreen_button.set_label("⛶")
+            print("🖥️ 플레이어 UI 표시")
 
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
@@ -136,6 +384,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         factory = element.get_factory()
         fname = factory.get_name() if factory else ""
         ename = element.get_name()
+        klass = factory.get_metadata("klass") if factory else ""
+        if klass and "Decoder" in klass and "Video" in klass and fname not in self.decoder_names:
+            self.decoder_names.add(fname)
+            acceleration = "NVDEC 하드웨어" if fname == "nvv4l2decoder" else "소프트웨어 fallback"
+            print(f"🎬 [선택된 비디오 디코더] {fname} ({acceleration})")
         if "dav1d" in fname or "dav1d" in ename:
             if element.find_property("max-threads"):
                 element.set_property("max-threads", 6)
@@ -151,40 +404,69 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 element.set_property("output-buffers", 32)
         if "nveglglessink" in fname or "nveglglessink" in ename:
             if element.find_property("force-aspect-ratio"):
-                element.set_property("force-aspect-ratio", False)
+                element.set_property("force-aspect-ratio", True)
 
     def check_video_hw_support(self, file_path):
         """
-        ffprobe를 사용하여 영상 파일의 코덱 및 색상 깊이를 분석하고,
-        Jetson NVDEC 하드웨어 디코더가 100% 가속 지원하는 포맷인지 검증합니다.
+        ffprobe JSON과 현재 설치된 nvv4l2decoder caps를 함께 사용해 이 장치가
+        해당 코덱/프로파일을 하드웨어 디코딩할 수 있는지 판정합니다.
         """
         try:
             cmd = [
                 "ffprobe", "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,pix_fmt,profile",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "-show_entries",
+                "stream=codec_name,pix_fmt,profile,width,height,color_space,color_transfer,color_primaries",
+                "-of", "json",
                 file_path
             ]
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True).strip().split('\n')
-            codec = output[0].strip().lower() if len(output) > 0 else ""
-            pix_fmt = output[1].strip().lower() if len(output) > 1 else ""
-            profile = output[2].strip().lower() if len(output) > 2 else ""
+            data = json.loads(subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True))
+            if not data.get("streams"):
+                return False, "비디오 스트림 없음"
+            stream = data["streams"][0]
+            codec = stream.get("codec_name", "").lower()
+            pix_fmt = stream.get("pix_fmt", "").lower()
+            profile = stream.get("profile", "").lower()
+            media_types = {
+                "h264": "video/x-h264", "hevc": "video/x-h265",
+                "av1": "video/x-av1", "vp9": "video/x-vp9",
+                "vp8": "video/x-vp8", "mpeg4": "video/mpeg",
+                "mpeg2video": "video/mpeg", "mjpeg": "image/jpeg",
+            }
+            media_type = media_types.get(codec)
+            decoder = Gst.ElementFactory.find("nvv4l2decoder")
+            caps_text = ""
+            if decoder:
+                templates = decoder.get_static_pad_templates()
+                caps_text = " ".join(
+                    template.get_caps().to_string()
+                    for template in templates
+                    if template.direction == Gst.PadDirection.SINK
+                )
+            if not decoder or not media_type or media_type not in caps_text:
+                return False, f"NVDEC 미지원 코덱 ({codec or 'unknown'})"
 
-            # 1. H.265 / HEVC -> 8-bit & 10-bit 모두 NVDEC HW 칩 가속 100% 지원
-            if codec in ["hevc", "h265"]:
-                return True, "HEVC (H.265) HW 가속 지원"
+            # 이 Jetson의 H.264 NVDEC는 High 10/yuv420p10 계열을 지원하지 않습니다.
+            if codec == "h264" and ("10" in pix_fmt or "10" in profile or "p10" in pix_fmt):
+                return False, f"H.264 10-bit NVDEC 미지원 ({pix_fmt}/{profile})"
 
-            # 2. H.264 / AVC -> 8-bit만 지원 (10-bit / yuv420p10le / High 10 프로파일은 HW 미지원)
-            if codec in ["h264", "avc"]:
-                if "10" in pix_fmt or "10" in profile or "p10" in pix_fmt:
-                    return False, f"H.264 10-bit ({pix_fmt}/{profile}) HW 미지원"
-                return True, "H.264 8-bit HW 가속 지원"
-
-            # 3. 그 외 (AV1, VP9, VP8 등) -> HW 미지원
-            return False, f"미지원 코덱 ({codec})"
+            bit_depth = "10-bit" if "10" in pix_fmt or "p10" in pix_fmt else "8-bit"
+            return True, f"{codec.upper()} {bit_depth} NVDEC 지원"
         except Exception as e:
             return False, f"코덱 분석 실패 ({e})"
+
+    def probe_video(self, file_path):
+        """변환 품질 결정을 위해 이름 순서에 의존하지 않는 ffprobe 정보를 반환합니다."""
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries",
+            "stream=codec_name,pix_fmt,profile,color_space,color_transfer,color_primaries",
+            "-of", "json", file_path,
+        ]
+        data = json.loads(subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True))
+        if not data.get("streams"):
+            raise ValueError("비디오 스트림이 없습니다")
+        return data["streams"][0]
 
     def auto_convert_to_h265(self, file_path):
         """
@@ -193,7 +475,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         """
         dir_name = os.path.dirname(file_path)
         base_name = os.path.basename(file_path)
-        name_no_ext, ext = os.path.splitext(base_name)
+        name_no_ext, _ext = os.path.splitext(base_name)
 
         # 1. 백업 폴더 생성 (unsupported_originals)
         backup_dir = os.path.join(dir_name, "unsupported_originals")
@@ -202,11 +484,24 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         # 2. H.265 변환 목표 파일 경로 생성 (.mp4)
         target_mp4_path = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
+        if os.path.exists(target_mp4_path):
+            supported, _reason = self.check_video_hw_support(target_mp4_path)
+            if supported:
+                print(f"ℹ️ 기존 H.265 변환본을 사용합니다: {target_mp4_path}")
+                return target_mp4_path
 
         # 3. 비트 심도 검사 (10-bit 소스는 H.265 10-bit 유지)
-        is_supported, reason = self.check_video_hw_support(file_path)
-        is_10bit = "10" in reason or "10bit" in file_path.lower()
+        _is_supported, reason = self.check_video_hw_support(file_path)
+        try:
+            stream = self.probe_video(file_path)
+        except Exception as error:
+            print(f"❌ 변환용 영상 정보 확인 실패: {error}")
+            return file_path
+        source_pix_fmt = stream.get("pix_fmt", "").lower()
+        is_10bit = "10" in source_pix_fmt or "p10" in source_pix_fmt
         pix_fmt = "yuv420p10le" if is_10bit else "yuv420p"
+        profile = "main10" if is_10bit else "main"
+        temp_output = os.path.join(dir_name, f".{name_no_ext}_h265.part.mp4")
 
         print(f"\n🔄 [자동 코덱 변환 개시] {base_name}")
         print(f"   - 감지된 사유: {reason}")
@@ -215,26 +510,42 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         ffmpeg_cmd = [
             "ffmpeg", "-y", "-i", file_path,
+            "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?",
+            "-map_metadata", "0", "-map_chapters", "0",
             "-pix_fmt", pix_fmt,
             "-c:v", "libx265",
-            "-preset", "ultrafast",
-            "-crf", "20",
+            "-profile:v", profile,
+            "-preset", "fast",
+            "-crf", "18",
             "-threads", "6",
             "-c:a", "aac",
-            target_mp4_path
+            "-b:a", "256k",
+            "-c:s", "mov_text",
+            "-movflags", "+faststart",
+            "-tag:v", "hvc1",
+            temp_output
         ]
 
         try:
             subprocess.run(ffmpeg_cmd, check=True)
+            os.replace(temp_output, target_mp4_path)
             print(f"✅ [H.265 변환 완료] {os.path.basename(target_mp4_path)}")
 
             if os.path.exists(file_path) and file_path != target_mp4_path:
+                if os.path.exists(backup_path):
+                    base, suffix = os.path.splitext(base_name)
+                    counter = 1
+                    while os.path.exists(backup_path):
+                        backup_path = os.path.join(backup_dir, f"{base}_{counter}{suffix}")
+                        counter += 1
                 shutil.move(file_path, backup_path)
                 print(f"📦 [원본 파일 백업 이동 완료] {backup_path}")
 
             return target_mp4_path
         except Exception as e:
             print(f"❌ [변환 실패] {file_path}: {e}")
+            if os.path.exists(temp_output):
+                os.unlink(temp_output)
             return file_path
 
     def build_playlist(self):
@@ -267,7 +578,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if not os.path.exists(path) or path in processed_set:
                 continue
 
-            is_supported, reason = self.check_video_hw_support(path)
+            is_supported, _reason = self.check_video_hw_support(path)
             if not is_supported:
                 # 하드웨어 미지원 코덱 발견시 H.265 변환 및 원본 백업 수행
                 final_path = self.auto_convert_to_h265(path)
@@ -284,7 +595,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             print(f"   [{idx}] {os.path.basename(path)}")
 
     def on_realize(self, widget):
-        """GTK 창의 리소스가 로드되었을 때 마우스를 숨기고 영상 재생을 시작합니다."""
+        """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작합니다."""
         if self.pipeline is not None:
             return
         print("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
@@ -302,17 +613,19 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
                 self.xid = GdkX11.X11Window.get_xid(gdk_window)
 
-            display = gdk_window.get_display()
-            cursor = Gdk.Cursor.new_from_name(display, "none")
-            gdk_window.set_cursor(cursor)
-            print("🐭 마우스 커서가 숨김 처리되었습니다.")
-            
         self.play_current_video()
 
     def play_current_video(self):
         """[성능 최적화] 영상 전환 시 기존 파이프라인을 완전히 해제하고 신규 구축하여 EGL surface 및 하드웨어 디코더 락을 방지합니다."""
         video_path = self.playlist[self.current_index]
         print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {os.path.basename(video_path)}")
+        self.refresh_playlist_ui()
+        self.duration_ns = 0
+        self.progress_scale.set_value(0)
+        self.position_label.set_text("00:00")
+        self.duration_label.set_text("00:00")
+        self.decoder_names.clear()
+        self.last_dropped_frames = 0
 
         video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
         
@@ -334,9 +647,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # Native 비디오 및 오디오 포맷 플래그 설정 (deinterlace, soft-colorbalance 등 CPU 필터 완전 차단)
-        # 0x01 (video) + 0x02 (audio) + 0x20 (native-audio) + 0x40 (native-video) = 0x00000063
-        self.pipeline.set_property("flags", 0x00000063)
+        # video + audio + soft-volume. 변환 요소를 금지하지 않아 HW 협상 실패 시
+        # 소프트웨어 디코더/색상 변환 fallback도 정상 동작하게 합니다.
+        self.pipeline.set_property("flags", 0x00000013)
 
         # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (Gst.Bin 캡스 파싱 에러 및 1초 멈춤 100% 차단)
         vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
@@ -351,21 +664,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if vsink.find_property("qos"):
                 vsink.set_property("qos", True)
             if vsink.find_property("max-lateness"):
-                vsink.set_property("max-lateness", -1) # [핵심] 지연 프레임 버림 방지
+                # 실시간보다 1프레임 이상 늦으면 버려 누적 지연을 회복합니다.
+                vsink.set_property("max-lateness", 40 * Gst.MSECOND)
             if vsink.find_property("force-aspect-ratio"):
-                vsink.set_property("force-aspect-ratio", False)
+                vsink.set_property("force-aspect-ratio", True)
             self.pipeline.set_property("video-sink", vsink)
+            self.video_sink = vsink
 
-        # 오디오 출력 장치 지정 (pulsesink -> autoaudiosink -> alsasink -> fakesink 순서 안전 지정)
-        # pulsesink를 최우선 지정하여 우분투 데스크톱 PulseAudio 락 충돌 없이 사운드 정상 출력 및 비디오 60 FPS 정속 연동 보장
-        for sink_name in ["pulsesink", "autoaudiosink", "alsasink", "fakesink"]:
+        # autoaudiosink가 실제 사용 가능한 PulseAudio/ALSA 장치를 선택하게 합니다.
+        for sink_name in ["autoaudiosink", "fakesink"]:
             asink = Gst.ElementFactory.make(sink_name, "asink")
             if asink:
                 if sink_name != "fakesink":
                     if asink.find_property("sync"):
-                        asink.set_property("sync", False)
-                    if asink.find_property("async"):
-                        asink.set_property("async", False)
+                        asink.set_property("sync", True)
                 self.pipeline.set_property("audio-sink", asink)
                 break
 
@@ -378,10 +690,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         # URI 속성 갱신 후 플레이 시작
         self.pipeline.set_property("uri", video_uri)
+        self.pipeline.set_property("volume", self.volume_scale.get_value() / 100.0)
         self.pipeline.set_state(Gst.State.PLAYING)
+        self.is_playing = True
+        self.play_button.set_label("Ⅱ")
         
-        # 주기적으로 파이썬 레벨의 안 쓰이는 메모리를 정리
-        gc.collect()
         return False
 
     def on_sync_message(self, bus, message):
@@ -409,6 +722,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def on_bus_message(self, bus, message):
         """재생 완료(EOS) 및 에러 메시지 처리"""
         if message.type == Gst.MessageType.EOS:
+            self.retry_counts.pop(self.playlist[self.current_index], None)
             if self.is_single_file_mode:
                 print("🔄 단일 영상 완료: 파이프라인 자원 세척 후 재선언 재생합니다.")
                 # 장시간 재생 시 EGL surface/시계동기화 락 방지를 위해 파이프라인 완전 재구축 수행
@@ -419,7 +733,25 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
             print(f"❌ 재생 중 에러 발생: {err}")
-            self.play_next_video()
+            if debug:
+                print(f"   GStreamer: {debug}")
+            path = self.playlist[self.current_index]
+            retries = self.retry_counts.get(path, 0)
+            if retries < self.max_retries:
+                self.retry_counts[path] = retries + 1
+                print(f"🔄 재생 파이프라인 재시도 ({retries + 1}/{self.max_retries})")
+                GLib.timeout_add(250, self.play_current_video)
+            elif self.is_single_file_mode:
+                print("⏹ 반복 오류로 재생을 중단합니다. 원본과 디코더 로그를 확인하세요.")
+                self.pipeline.set_state(Gst.State.PAUSED)
+            else:
+                print("⏭ 반복 오류 항목을 건너뜁니다.")
+                self.play_next_video()
+
+        elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
+            _old_state, new_state, _pending = message.parse_state_changed()
+            self.is_playing = new_state == Gst.State.PLAYING
+            self.play_button.set_label("Ⅱ" if self.is_playing else "▶")
 
     def seek_relative(self, offset_seconds):
         """현재 재생 위치를 기준으로 지정된 초만큼 앞/뒤로 이동합니다."""
@@ -453,15 +785,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if not self.pipeline:
             return
             
-        success, state, pending = self.pipeline.get_state(Gst.CLOCK_TIME_NONE)
-        if success in (Gst.StateChangeReturn.SUCCESS, Gst.StateChangeReturn.ASYNC):
-            target_state = pending if pending != Gst.State.VOID_PENDING else state
-            if target_state == Gst.State.PLAYING:
-                self.pipeline.set_state(Gst.State.PAUSED)
-                print("⏸ 일시 정지")
-            elif target_state == Gst.State.PAUSED:
-                self.pipeline.set_state(Gst.State.PLAYING)
-                print("▶ 다시 재생")
+        if self.is_playing:
+            self.pipeline.set_state(Gst.State.PAUSED)
+            self.is_playing = False
+            self.play_button.set_label("▶")
+            print("⏸ 일시 정지")
+        else:
+            self.pipeline.set_state(Gst.State.PLAYING)
+            self.is_playing = True
+            self.play_button.set_label("Ⅱ")
+            print("▶ 다시 재생")
 
     def play_next_video(self):
         """다음 영상으로 전환합니다."""
@@ -485,7 +818,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         """키보드 입력 이벤트 제어"""
         keyname = Gdk.keyval_name(event.keyval)
         
-        if keyname in ["Escape", "q", "Q"]:
+        if keyname == "Escape" and self.is_video_only:
+            self.toggle_fullscreen()
+            return True
+        elif keyname in ["Escape", "q", "Q"]:
             print("⏹ 프로그램 종료.")
             self.on_destroy(widget)
             return True
@@ -504,10 +840,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif keyname in ["p", "P"]:
             self.play_prev_video()
             return True
+        elif keyname in ["f", "F"]:
+            self.toggle_fullscreen()
+            return True
             
         return False
 
     def on_destroy(self, widget):
+        if getattr(self, "position_timer_id", None):
+            GLib.source_remove(self.position_timer_id)
+            self.position_timer_id = None
         if self.bus is not None:
             try:
                 self.bus.remove_signal_watch()
@@ -528,12 +870,7 @@ if __name__ == "__main__":
     Gst.init(None)
     Gtk.init(None)
     
-    # [필수] 하드웨어 가속 디코더/변환기 랭크 최적화 적용
-    optimize_gstreamer_ranks()
-    
     user_input = sys.argv[1]
     win = JetsonSignageFlexiblePlayer(user_input)
     win.show_all()
     Gtk.main()
-
-
