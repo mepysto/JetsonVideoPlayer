@@ -102,6 +102,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.video_sink = None
         self.stats_ticks = 0
         self.last_dropped_frames = 0
+        self.last_ui_pos_sec = -1
         self.retry_counts = {}
         self.max_retries = 2
 
@@ -111,6 +112,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.drawing_area.set_vexpand(True)
         self.drawing_area.set_size_request(640, 480) # [핵심] C-라이브러리 dst->h == 0 멈춤 에러 방지
         self.drawing_area.set_app_paintable(True)    # [핵심] GTK 창 기본 배경 그리기 차단
+        self.drawing_area.set_double_buffered(False) # [최적화] EGL 직결 위젯의 불필요한 백버퍼 더블버퍼링 차단
         self.drawing_area.connect("draw", lambda widget, cr: True) # [핵심] GTK repaint 이벤트 무력화
         
         # 화면 준비가 완료(realize)되면 재생을 시작하도록 이벤트 등록
@@ -122,8 +124,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline = None
         self.bus = None
 
-        # 재생 위치와 UI 상태 갱신
-        self.position_timer_id = GLib.timeout_add(500, self.update_playback_ui)
+        # 재생 위치와 UI 상태 갱신 (1초 주기로 최적화하여 X11 UI 경합 방지)
+        self.position_timer_id = GLib.timeout_add(1000, self.update_playback_ui)
 
     def build_ui(self):
         """Jetson EGL 출력과 충돌하지 않는 네이티브 GTK 플레이어 UI를 구성합니다."""
@@ -316,17 +318,24 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def update_playback_ui(self):
         if not self.pipeline:
             return True
-        duration_ok, duration = self.pipeline.query_duration(Gst.Format.TIME)
         position_ok, position = self.pipeline.query_position(Gst.Format.TIME)
-        if duration_ok and duration > 0:
-            self.duration_ns = duration
-            self.duration_label.set_text(self.format_time(duration))
-            if position_ok and not self.is_seeking:
-                self.progress_scale.set_value(min(100, position * 100 / duration))
-        if position_ok:
-            self.position_label.set_text(self.format_time(position))
+        pos_sec = int(position / Gst.SECOND) if position_ok else -1
+
+        # 초(second) 단위가 바뀌었을 때만 GTK UI를 갱신하여 X11 Re-draw 부하 제거
+        if position_ok and pos_sec != self.last_ui_pos_sec:
+            self.last_ui_pos_sec = pos_sec
+            if not self.is_video_only:
+                self.position_label.set_text(self.format_time(position))
+                if self.duration_ns == 0:
+                    duration_ok, duration = self.pipeline.query_duration(Gst.Format.TIME)
+                    if duration_ok and duration > 0:
+                        self.duration_ns = duration
+                        self.duration_label.set_text(self.format_time(duration))
+                if self.duration_ns > 0 and not self.is_seeking:
+                    self.progress_scale.set_value(min(100, position * 100 / self.duration_ns))
+
         self.stats_ticks += 1
-        if self.video_sink and self.stats_ticks % 20 == 0 and self.video_sink.find_property("stats"):
+        if self.video_sink and self.stats_ticks % 10 == 0 and self.video_sink.find_property("stats"):
             stats = self.video_sink.get_property("stats")
             if stats:
                 rendered = stats.get_value("rendered") or 0
@@ -617,6 +626,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.duration_label.set_text("00:00")
         self.decoder_names.clear()
         self.last_dropped_frames = 0
+        self.last_ui_pos_sec = -1
 
         video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
         
@@ -638,9 +648,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # video + audio + soft-volume. 변환 요소를 금지하지 않아 HW 협상 실패 시
-        # 소프트웨어 디코더/색상 변환 fallback도 정상 동작하게 합니다.
-        self.pipeline.set_property("flags", 0x00000013)
+        # 0x01 (video) + 0x02 (audio) + 0x10 (soft-volume) + 0x40 (native-video) = 0x00000053
+        # Native 비디오 플래그를 설정하여 불필요한 CPU 변환기 삽입을 차단하고 HW EGL 파이프라인 직결 보장
+        self.pipeline.set_property("flags", 0x00000053)
 
         # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (Gst.Bin 캡스 파싱 에러 및 1초 멈춤 100% 차단)
         vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
@@ -655,8 +665,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if vsink.find_property("qos"):
                 vsink.set_property("qos", True)
             if vsink.find_property("max-lateness"):
-                # 실시간보다 1프레임 이상 늦으면 버려 누적 지연을 회복합니다.
-                vsink.set_property("max-lateness", 40 * Gst.MSECOND)
+                # 미세 지연 시 프레임 폐기를 방지하여 끊김 없는 60 FPS 스무스 재생 보장
+                vsink.set_property("max-lateness", -1)
             if vsink.find_property("force-aspect-ratio"):
                 vsink.set_property("force-aspect-ratio", True)
             self.pipeline.set_property("video-sink", vsink)
