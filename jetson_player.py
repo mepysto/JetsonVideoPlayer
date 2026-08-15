@@ -22,9 +22,22 @@ from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11
 
 def enable_x11_compositor_bypass(gdk_window):
     """
-    GNOME Mutter 컴포지터의 EGL 서피스 스캔아웃 중단 방지를 위해 우회 설정을 비활성화합니다.
+    GNOME Mutter 윈도우 컴포지터의 중간 재합성으로 인한 프레임 지터를 차단하기 위해
+    X11 _NET_WM_BYPASS_COMPOSITOR 힌트를 지정하여 Direct GPU 스캔아웃을 활성화합니다.
     """
-    pass
+    try:
+        xid = None
+        if hasattr(gdk_window, "get_xid"):
+            xid = gdk_window.get_xid()
+        elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
+            xid = GdkX11.X11Window.get_xid(gdk_window)
+        if xid:
+            subprocess.run(
+                ["xprop", "-id", str(xid), "-f", "_NET_WM_BYPASS_COMPOSITOR", "32c", "-set", "_NET_WM_BYPASS_COMPOSITOR", "1"],
+                capture_output=True, check=False
+            )
+    except Exception:
+        pass
 
 def optimize_gstreamer_ranks():
     """
@@ -651,24 +664,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # 0x01 (video) + 0x02 (audio) + 0x10 (soft-volume) + 0x40 (native-video) = 0x00000053
-        # Native 비디오 플래그를 설정하여 불필요한 CPU 변환기 삽입을 차단하고 HW EGL 파이프라인 직결 보장
-        self.pipeline.set_property("flags", 0x00000053)
+        # 0x01 (video) + 0x02 (audio) + 0x10 (soft-volume) = 0x00000013
+        # NVDEC(nvv4l2decoder) 하드웨어 디코더의 NVMM 메모리를 OpenGL 셰이더로 자동 브릿지 허용
+        self.pipeline.set_property("flags", 0x00000013)
 
-        # Jetson GPU 3D 고화질 렌더러(nv3dsink) 우선 생성 (픽셀 블러링 제거 및 60Hz V-Sync 보장)
-        vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
-        if not vsink:
-            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+        # 시스템 표준 OpenGL 고화질 렌더러(glimagesink / autovideosink) 우선 생성
+        # (Totem 수준의 쨍한 픽셀 선명도, 60Hz V-Sync 일치, 모션 저더 완전 제거)
+        vsink = Gst.ElementFactory.make("glimagesink", "vsink")
         if not vsink:
             vsink = Gst.ElementFactory.make("autovideosink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
+        if not vsink:
+            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
 
         if vsink:
             if vsink.find_property("sync"):
                 vsink.set_property("sync", True)
             if vsink.find_property("qos"):
-                vsink.set_property("qos", True)
+                # 미세 지연 시 업스트림 프레임 드랍(스킵)을 차단하여 균일한 프레임 페이싱 유지
+                vsink.set_property("qos", False)
             if vsink.find_property("max-lateness"):
-                # 미세 지연 시 프레임 폐기를 방지하여 끊김 없는 60 FPS 스무스 재생 보장
+                # 프레임 폐기를 방지하여 끊김 없는 60 FPS 스무스 재생 보장
                 vsink.set_property("max-lateness", -1)
             if vsink.find_property("force-aspect-ratio"):
                 vsink.set_property("force-aspect-ratio", True)
