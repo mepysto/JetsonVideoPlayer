@@ -130,6 +130,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         
         # 화면 준비가 완료(realize)되면 재생을 시작하도록 이벤트 등록
         self.drawing_area.connect("realize", self.on_realize)
+        self.drawing_area.connect("size-allocate", self.on_size_allocate)
 
         self.build_ui()
 
@@ -610,6 +611,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         for idx, path in enumerate(self.playlist):
             print(f"   [{idx}] {os.path.basename(path)}")
 
+    def on_size_allocate(self, widget, allocation):
+        """GTK 창/위젯 크기 변경 시 비디오 싱크 렌더링 사각형을 실제 픽셀 해상도에 1:1 동기화하여 텍스처 뭉개짐을 완벽 방지합니다."""
+        target_sink = getattr(self, "video_sink", None)
+        if target_sink:
+            try:
+                if isinstance(target_sink, GstVideo.VideoOverlay) or hasattr(target_sink, "set_render_rectangle"):
+                    target_sink.set_render_rectangle(0, 0, allocation.width, allocation.height)
+                    target_sink.expose()
+                elif self.pipeline and hasattr(self.pipeline, "set_render_rectangle"):
+                    self.pipeline.set_render_rectangle(0, 0, allocation.width, allocation.height)
+                    self.pipeline.expose()
+            except Exception:
+                pass
+
     def on_realize(self, widget):
         """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작합니다."""
         if self.pipeline is not None:
@@ -665,18 +680,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
         # 0x01 (video) + 0x02 (audio) + 0x10 (soft-volume) = 0x00000013
-        # NVDEC(nvv4l2decoder) 하드웨어 디코더의 NVMM 메모리를 OpenGL 셰이더로 자동 브릿지 허용
+        # NVDEC(nvv4l2decoder) 하드웨어 디코더의 NVMM 메모리를 EGL 셰이더로 자동 브릿지 허용
         self.pipeline.set_property("flags", 0x00000013)
 
-        # 시스템 표준 OpenGL 고화질 렌더러(glimagesink / autovideosink) 우선 생성
-        # (Totem 수준의 쨍한 픽셀 선명도, 60Hz V-Sync 일치, 모션 저더 완전 제거)
-        vsink = Gst.ElementFactory.make("glimagesink", "vsink")
-        if not vsink:
-            vsink = Gst.ElementFactory.make("autovideosink", "vsink")
+        # Jetson 전용 NVDEC HW 가속 직결 EGL 비디오 싱크 생성 (4K 60fps 무결 렌더링)
+        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
         if not vsink:
             vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
         if not vsink:
-            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+            vsink = Gst.ElementFactory.make("autovideosink", "vsink")
 
         if vsink:
             if vsink.find_property("sync"):
