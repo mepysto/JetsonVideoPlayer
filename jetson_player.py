@@ -119,18 +119,22 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.retry_counts = {}
         self.max_retries = 2
 
-        # 3. 비디오가 임베딩될 Gtk DrawingArea 생성
-        self.drawing_area = Gtk.DrawingArea()
-        self.drawing_area.set_hexpand(True)
-        self.drawing_area.set_vexpand(True)
-        self.drawing_area.set_size_request(640, 480) # [핵심] C-라이브러리 dst->h == 0 멈춤 에러 방지
-        self.drawing_area.set_app_paintable(True)    # [핵심] GTK 창 기본 배경 그리기 차단
-        self.drawing_area.set_double_buffered(False) # [최적화] EGL 직결 위젯의 불필요한 백버퍼 더블버퍼링 차단
-        self.drawing_area.connect("draw", lambda widget, cr: True) # [핵심] GTK repaint 이벤트 무력화
-        
-        # 화면 준비가 완료(realize)되면 재생을 시작하도록 이벤트 등록
-        self.drawing_area.connect("realize", self.on_realize)
-        self.drawing_area.connect("size-allocate", self.on_size_allocate)
+        # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
+        self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
+        if self.gtk_sink:
+            self.video_sink_bin = Gst.ElementFactory.make("glsinkbin", "glsinkbin")
+            self.video_sink_bin.set_property("sink", self.gtk_sink)
+            self.video_widget = self.gtk_sink.get_property("widget")
+            self.video_sink = self.video_sink_bin
+        else:
+            self.gtk_sink = Gst.ElementFactory.make("gtksink", "gtk_sink")
+            self.video_widget = self.gtk_sink.get_property("widget") if self.gtk_sink else Gtk.DrawingArea()
+            self.video_sink = self.gtk_sink
+
+        self.video_widget.set_hexpand(True)
+        self.video_widget.set_vexpand(True)
+        self.video_widget.set_size_request(640, 480)
+        self.video_widget.connect("realize", self.on_realize)
 
         self.build_ui()
 
@@ -196,7 +200,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         root.pack_start(self.topbar, False, False, 0)
 
         content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        content.pack_start(self.drawing_area, True, True, 0)
+        content.pack_start(self.video_widget, True, True, 0)
         self.sidebar = self.build_playlist_panel()
         content.pack_end(self.sidebar, False, False, 0)
         root.pack_start(content, True, True, 0)
@@ -611,38 +615,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         for idx, path in enumerate(self.playlist):
             print(f"   [{idx}] {os.path.basename(path)}")
 
-    def on_size_allocate(self, widget, allocation):
-        """GTK 창/위젯 크기 변경 시 비디오 싱크 렌더링 사각형을 실제 픽셀 해상도에 1:1 동기화하여 텍스처 뭉개짐을 완벽 방지합니다."""
-        target_sink = getattr(self, "video_sink", None)
-        if target_sink:
-            try:
-                if isinstance(target_sink, GstVideo.VideoOverlay) or hasattr(target_sink, "set_render_rectangle"):
-                    target_sink.set_render_rectangle(0, 0, allocation.width, allocation.height)
-                    target_sink.expose()
-                elif self.pipeline and hasattr(self.pipeline, "set_render_rectangle"):
-                    self.pipeline.set_render_rectangle(0, 0, allocation.width, allocation.height)
-                    self.pipeline.expose()
-            except Exception:
-                pass
-
     def on_realize(self, widget):
         """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작합니다."""
         if self.pipeline is not None:
             return
         print("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
         
-        # GTK 메인 스레드에서 Window XID 사전 캐싱 및 GNOME 데스크톱 컴포지터 우회 강제
         top_window = self.get_window()
         if top_window:
             enable_x11_compositor_bypass(top_window)
-
-        gdk_window = self.drawing_area.get_window() or top_window
-        if gdk_window:
-            enable_x11_compositor_bypass(gdk_window)
-            if hasattr(gdk_window, "get_xid"):
-                self.xid = gdk_window.get_xid()
-            elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
-                self.xid = GdkX11.X11Window.get_xid(gdk_window)
 
         self.play_current_video()
 
@@ -680,29 +661,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
         # 0x01 (video) + 0x02 (audio) + 0x10 (soft-volume) = 0x00000013
-        # NVDEC(nvv4l2decoder) 하드웨어 디코더의 NVMM 메모리를 EGL 셰이더로 자동 브릿지 허용
         self.pipeline.set_property("flags", 0x00000013)
 
-        # Jetson 전용 NVDEC HW 가속 직결 EGL 비디오 싱크 생성 (4K 60fps 무결 렌더링)
-        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
-        if not vsink:
-            vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
-        if not vsink:
-            vsink = Gst.ElementFactory.make("autovideosink", "vsink")
-
-        if vsink:
-            if vsink.find_property("sync"):
-                vsink.set_property("sync", True)
-            if vsink.find_property("qos"):
-                # 미세 지연 시 업스트림 프레임 드랍(스킵)을 차단하여 균일한 프레임 페이싱 유지
-                vsink.set_property("qos", False)
-            if vsink.find_property("max-lateness"):
-                # 프레임 폐기를 방지하여 끊김 없는 60 FPS 스무스 재생 보장
-                vsink.set_property("max-lateness", -1)
-            if vsink.find_property("force-aspect-ratio"):
-                vsink.set_property("force-aspect-ratio", True)
-            self.pipeline.set_property("video-sink", vsink)
-            self.video_sink = vsink
+        # Totem 공식 네이티브 GTK OpenGL 비디오 싱크 할당 (60Hz V-Sync 완벽 일치 & 4K 1:1 선명도 보장)
+        if self.video_sink:
+            if self.video_sink.find_property("sync"):
+                self.video_sink.set_property("sync", True)
+            if self.video_sink.find_property("qos"):
+                self.video_sink.set_property("qos", False)
+            if self.video_sink.find_property("max-lateness"):
+                self.video_sink.set_property("max-lateness", -1)
+            self.pipeline.set_property("video-sink", self.video_sink)
 
         # autoaudiosink가 실제 사용 가능한 PulseAudio/ALSA 장치를 선택하게 합니다.
         for sink_name in ["autoaudiosink", "fakesink"]:
@@ -731,7 +700,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         return False
 
     def on_sync_message(self, bus, message):
-        """GTK DrawingArea XID에 비디오 화면을 일치시켜 GTK 자식 위젯 덮어쓰기 및 1초 후 멈춤을 방지합니다."""
+        """VideoOverlay 인터페이스가 필요한 fallback 싱크를 위한 창 핸들 연결"""
         is_prepare_handle = False
         if hasattr(GstVideo, "is_video_overlay_prepare_window_handle_message"):
             is_prepare_handle = GstVideo.is_video_overlay_prepare_window_handle_message(message)
@@ -740,20 +709,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             is_prepare_handle = (message.get_structure().get_name() == "prepare-window-handle")
 
         if is_prepare_handle:
-            xid = getattr(self, "xid", None)
-            if not xid:
-                target_window = self.drawing_area.get_window() or self.get_window()
-                if target_window:
-                    if hasattr(target_window, "get_xid"):
-                        xid = target_window.get_xid()
-                    elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
-                        xid = GdkX11.X11Window.get_xid(target_window)
-                    self.xid = xid
-            if xid:
-                if isinstance(message.src, GstVideo.VideoOverlay) or hasattr(message.src, "set_window_handle"):
-                    message.src.set_window_handle(xid)
-                elif self.pipeline and hasattr(self.pipeline, "set_window_handle"):
-                    self.pipeline.set_window_handle(xid)
+            target_window = getattr(self, "video_widget", None)
+            gdk_win = target_window.get_window() if target_window else self.get_window()
+            if gdk_win:
+                xid = None
+                if hasattr(gdk_win, "get_xid"):
+                    xid = gdk_win.get_xid()
+                elif hasattr(GdkX11, "X11Window") and hasattr(GdkX11.X11Window, "get_xid"):
+                    xid = GdkX11.X11Window.get_xid(gdk_win)
+                if xid:
+                    if isinstance(message.src, GstVideo.VideoOverlay) or hasattr(message.src, "set_window_handle"):
+                        message.src.set_window_handle(xid)
 
     def on_bus_message(self, bus, message):
         """재생 완료(EOS) 및 에러 메시지 처리"""
