@@ -408,8 +408,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
     def check_video_hw_support(self, file_path):
         """
-        ffprobe JSON과 현재 설치된 nvv4l2decoder caps를 함께 사용해 이 장치가
-        해당 코덱/프로파일을 하드웨어 디코딩할 수 있는지 판정합니다.
+        ffprobe JSON 정보를 분석하여 Jetson NVDEC 하드웨어 디코더가
+        100% 안정적으로 가속 지원하는 포맷(H.265/HEVC 및 H.264 8-bit)인지 판정합니다.
+        JetPack 드라이버 상 DPB/버퍼 결함이 발생하는 AV1, VP9 등의 코덱이나
+        H.264 10-bit 영상은 미지원으로 분류하여 H.265로 자동 변환하도록 유도합니다.
         """
         try:
             cmd = [
@@ -427,31 +429,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             codec = stream.get("codec_name", "").lower()
             pix_fmt = stream.get("pix_fmt", "").lower()
             profile = stream.get("profile", "").lower()
-            media_types = {
-                "h264": "video/x-h264", "hevc": "video/x-h265",
-                "av1": "video/x-av1", "vp9": "video/x-vp9",
-                "vp8": "video/x-vp8", "mpeg4": "video/mpeg",
-                "mpeg2video": "video/mpeg", "mjpeg": "image/jpeg",
-            }
-            media_type = media_types.get(codec)
-            decoder = Gst.ElementFactory.find("nvv4l2decoder")
-            caps_text = ""
-            if decoder:
-                templates = decoder.get_static_pad_templates()
-                caps_text = " ".join(
-                    template.get_caps().to_string()
-                    for template in templates
-                    if template.direction == Gst.PadDirection.SINK
-                )
-            if not decoder or not media_type or media_type not in caps_text:
-                return False, f"NVDEC 미지원 코덱 ({codec or 'unknown'})"
 
-            # 이 Jetson의 H.264 NVDEC는 High 10/yuv420p10 계열을 지원하지 않습니다.
-            if codec == "h264" and ("10" in pix_fmt or "10" in profile or "p10" in pix_fmt):
-                return False, f"H.264 10-bit NVDEC 미지원 ({pix_fmt}/{profile})"
+            # 1. H.265 / HEVC -> 8-bit 및 10-bit 모두 Jetson NVDEC 하드웨어 가속 100% 완벽 지원
+            if codec in ["hevc", "h265"]:
+                bit_depth = "10-bit" if "10" in pix_fmt or "p10" in pix_fmt else "8-bit"
+                return True, f"HEVC ({codec.upper()}) {bit_depth} NVDEC 지원"
 
-            bit_depth = "10-bit" if "10" in pix_fmt or "p10" in pix_fmt else "8-bit"
-            return True, f"{codec.upper()} {bit_depth} NVDEC 지원"
+            # 2. H.264 / AVC -> 8-bit만 지원 (High 10 / yuv420p10le 등 10-bit는 NVDEC 미지원)
+            if codec in ["h264", "avc"]:
+                if "10" in pix_fmt or "10" in profile or "p10" in pix_fmt:
+                    return False, f"H.264 10-bit NVDEC 미지원 ({pix_fmt}/{profile})"
+                return True, "H.264 8-bit NVDEC 지원"
+
+            # 3. 그 외 (AV1, VP9, VP8 등) -> JetPack nvv4l2decoder DPB 결함 및 SW 디코딩 병목 방지를 위해 H.265 변환 대상
+            return False, f"NVDEC 미지원/불안정 코덱 ({codec.upper()})"
         except Exception as e:
             return False, f"코덱 분석 실패 ({e})"
 
