@@ -18,11 +18,36 @@ Main10 10-bit로 보존합니다.
 - 영상 종료 시 다음 항목 자동 재생
 - 실제 선택 디코더와 프레임 드롭 통계 로그
 
-## 실행
+## 설치 (어디서든 실행하기)
+
+프로젝트 디렉토리에서 설치 스크립트를 실행하면 `~/.local/bin`에 등록되어 터미널 어디서든 명령어로 바로 실행할 수 있습니다:
 
 ```bash
+./install.sh
+```
+
+*(시스템 전체 설치를 원할 경우 `sudo ./install.sh --system`)*
+
+제거하려면:
+```bash
+./uninstall.sh
+```
+
+## 실행
+
+설치 후 터미널 어디서든 `jetson-player` (또는 `jetson_player`) 명령어로 실행할 수 있습니다:
+
+```bash
+# 디렉토리 내 모든 동영상 연속 재생
+jetson-player /path/to/video-directory
+
+# 단일 동영상 파일 재생
+jetson-player /path/to/video.mp4
+```
+
+Python 스크립트로 직접 실행할 수도 있습니다:
+```bash
 python3 jetson_player.py /path/to/video-directory
-python3 jetson_player.py /path/to/video.mp4
 ```
 
 ## 키보드 단축키

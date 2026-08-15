@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Jetson Video Player Launcher Script
+set -e
+
+# 스크립트의 실제 디렉토리 경로 탐색 (심볼릭 링크 지원)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+# 프로젝트 루트 디렉토리 탐색
+if [ -f "$SCRIPT_DIR/jetson_player.py" ]; then
+    PLAYER_SCRIPT="$SCRIPT_DIR/jetson_player.py"
+elif [ -f "$SCRIPT_DIR/../jetson_player.py" ]; then
+    PLAYER_SCRIPT="$(cd "$SCRIPT_DIR/.." && pwd)/jetson_player.py"
+else
+    echo "❌ 오류: jetson_player.py 파일을 찾을 수 없습니다." >&2
+    exit 1
+fi
+
+# GUI 환경 변수 기본값 설정
+export DISPLAY="${DISPLAY:-:0}"
+if [ -z "$XDG_RUNTIME_DIR" ]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+
+# 실행
+exec python3 "$PLAYER_SCRIPT" "$@"
