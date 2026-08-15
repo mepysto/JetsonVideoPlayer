@@ -411,6 +411,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if "nvvidconv" in fname or "nvvidconv" in ename:
             if element.find_property("output-buffers"):
                 element.set_property("output-buffers", 32)
+            if element.find_property("interpolation-method"):
+                # 최고 품질 보간 알고리즘 (5: Nicest 10-tap) 적용하여 픽셀 선명도 극대화
+                element.set_property("interpolation-method", 5)
         if "nveglglessink" in fname or "nveglglessink" in ename:
             if element.find_property("force-aspect-ratio"):
                 element.set_property("force-aspect-ratio", True)
@@ -652,10 +655,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # Native 비디오 플래그를 설정하여 불필요한 CPU 변환기 삽입을 차단하고 HW EGL 파이프라인 직결 보장
         self.pipeline.set_property("flags", 0x00000053)
 
-        # Jetson 전용 하드웨어 EGL 비디오 싱크 생성 (Gst.Bin 캡스 파싱 에러 및 1초 멈춤 100% 차단)
-        vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
+        # Jetson GPU 3D 고화질 렌더러(nv3dsink) 우선 생성 (픽셀 블러링 제거 및 60Hz V-Sync 보장)
+        vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
         if not vsink:
-            vsink = Gst.ElementFactory.make("nv3dsink", "vsink")
+            vsink = Gst.ElementFactory.make("nveglglessink", "vsink")
         if not vsink:
             vsink = Gst.ElementFactory.make("autovideosink", "vsink")
 
@@ -718,7 +721,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                         xid = GdkX11.X11Window.get_xid(target_window)
                     self.xid = xid
             if xid:
-                message.src.set_window_handle(xid)
+                if isinstance(message.src, GstVideo.VideoOverlay) or hasattr(message.src, "set_window_handle"):
+                    message.src.set_window_handle(xid)
+                elif self.pipeline and hasattr(self.pipeline, "set_window_handle"):
+                    self.pipeline.set_window_handle(xid)
 
     def on_bus_message(self, bus, message):
         """재생 완료(EOS) 및 에러 메시지 처리"""
