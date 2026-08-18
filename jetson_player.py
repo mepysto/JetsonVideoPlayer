@@ -5,6 +5,8 @@ import glob
 import subprocess
 import shutil
 import json
+import re
+import hashlib
 import gi
 from urllib.request import pathname2url
 
@@ -79,6 +81,314 @@ def optimize_gstreamer_ranks():
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
+SUBTITLE_COLORS = ["#FFFFFF", "#E9FF5B", "#80D8FF", "#FF80AB", "#B388FF", "#69F0AE"]
+
+def ms_to_srt_time(ms):
+    """밀리초(ms)를 SRT 타임코드(HH:MM:SS,mmm) 포맷으로 변환합니다."""
+    hours = ms // 3600000
+    ms %= 3600000
+    minutes = ms // 60000
+    ms %= 60000
+    seconds = ms // 1000
+    ms %= 1000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
+
+def srt_time_to_ms(time_str):
+    """00:01:23,456 또는 00:01:23.456 형태의 타임코드를 밀리초(ms)로 변환합니다."""
+    time_str = time_str.strip().replace(',', '.')
+    parts = time_str.split(':')
+    try:
+        if len(parts) == 3:
+            h = int(parts[0])
+            m = int(parts[1])
+            s_parts = parts[2].split('.')
+            s = int(s_parts[0])
+            ms = int(s_parts[1].ljust(3, '0')[:3]) if len(s_parts) > 1 else 0
+            return (h * 3600 + m * 60 + s) * 1000 + ms
+        elif len(parts) == 2:
+            m = int(parts[0])
+            s_parts = parts[1].split('.')
+            s = int(s_parts[0])
+            ms = int(s_parts[1].ljust(3, '0')[:3]) if len(s_parts) > 1 else 0
+            return (m * 60 + s) * 1000 + ms
+    except Exception:
+        pass
+    return 0
+
+def read_subtitle_text(file_path):
+    """다양한 인코딩(UTF-8, CP949, EUC-KR 등)을 자동 감지하여 자막 텍스트를 로드합니다."""
+    encodings = ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr', 'utf-16', 'latin-1']
+    for enc in encodings:
+        try:
+            with open(file_path, 'r', encoding=enc) as f:
+                content = f.read()
+                return content, enc
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    with open(file_path, 'r', encoding='latin-1', errors='replace') as f:
+        return f.read(), 'latin-1'
+
+def parse_smi_to_events(content):
+    """SAMI (.smi) 텍스트를 [(start_ms, end_ms, text), ...] 목록으로 파싱합니다."""
+    sync_pattern = re.compile(r'<sync\s+start\s*=\s*["\']?(\d+)["\']?[^>]*>(.*?)(?=<sync|$)', re.IGNORECASE | re.DOTALL)
+    tag_cleaner = re.compile(r'<[^>]+>')
+    raw_entries = []
+    for match in sync_pattern.finditer(content):
+        start_ms = int(match.group(1))
+        body = match.group(2)
+        body = re.sub(r'<br\s*/?>', '\n', body, flags=re.IGNORECASE)
+        clean = tag_cleaner.sub('', body)
+        clean = clean.replace('&nbsp;', ' ').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&quot;', '"')
+        clean = "\n".join([line.strip() for line in clean.splitlines() if line.strip()])
+        raw_entries.append((start_ms, clean))
+    
+    events = []
+    for i in range(len(raw_entries)):
+        start_ms, text = raw_entries[i]
+        if not text or text == '&nbsp;' or text.isspace():
+            continue
+        if i + 1 < len(raw_entries):
+            end_ms = raw_entries[i+1][0]
+            if end_ms - start_ms > 7000:
+                end_ms = start_ms + 4000
+        else:
+            end_ms = start_ms + 4000
+        if end_ms <= start_ms:
+            end_ms = start_ms + 1000
+        events.append((start_ms, end_ms, text))
+    return events
+
+def parse_srt_or_vtt_to_events(content):
+    """SRT / WebVTT 텍스트를 [(start_ms, end_ms, text), ...] 목록으로 파싱합니다."""
+    time_pat = re.compile(r'(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3}|\d{1,2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3}|\d{1,2}:\d{2}[,\.]\d{1,3})')
+    tag_cleaner = re.compile(r'<[^>]+>')
+    blocks = re.split(r'\n\s*\n', content.strip())
+    events = []
+    for block in blocks:
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        time_match = None
+        text_lines = []
+        for line in lines:
+            m = time_pat.search(line)
+            if m:
+                time_match = m
+            elif time_match:
+                clean = tag_cleaner.sub('', line)
+                if clean:
+                    text_lines.append(clean)
+        if time_match and text_lines:
+            start_ms = srt_time_to_ms(time_match.group(1))
+            end_ms = srt_time_to_ms(time_match.group(2))
+            text = "\n".join(text_lines)
+            if end_ms > start_ms:
+                events.append((start_ms, end_ms, text))
+    return events
+
+def parse_ass_to_events(content):
+    """ASS / SSA 자막 텍스트를 [(start_ms, end_ms, text), ...] 목록으로 파싱합니다."""
+    tag_cleaner = re.compile(r'\{.*?\}')
+    events = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line.startswith("Dialogue:"):
+            continue
+        parts = line.split(",", 9)
+        if len(parts) >= 10:
+            start_ms = srt_time_to_ms(parts[1])
+            end_ms = srt_time_to_ms(parts[2])
+            raw_text = parts[9]
+            clean = tag_cleaner.sub('', raw_text)
+            clean = clean.replace('\\N', '\n').replace('\\n', '\n').strip()
+            if clean and end_ms > start_ms:
+                events.append((start_ms, end_ms, clean))
+    return events
+
+def parse_subtitle_file_events(file_path):
+    """자막 파일의 인코딩을 자동 감지하고 포맷에 맞게 파싱하여 타임라인 이벤트 목록을 반환합니다."""
+    try:
+        content, _enc = read_subtitle_text(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.smi':
+            return parse_smi_to_events(content)
+        elif ext in ['.ass', '.ssa']:
+            return parse_ass_to_events(content)
+        else:
+            return parse_srt_or_vtt_to_events(content)
+    except Exception as e:
+        print(f"⚠️ 자막 파싱 실패 ({file_path}): {e}")
+        return []
+
+def get_subtitle_label(file_path):
+    """자막 파일명에서 언어 태그를 감지하여 사람이 읽기 쉬운 레이블을 생성합니다."""
+    base = os.path.basename(file_path)
+    stem, _ext = os.path.splitext(base)
+    stem_lower = stem.lower()
+    
+    # 한국어
+    if any(k in stem_lower for k in ['.ko', '.kor', '.kr', '_ko', '_kor', '_kr', '.korean', '한국어', '한글']):
+        return f"🇰🇷 한국어 ({base})"
+    # 영어
+    elif any(k in stem_lower for k in ['.en', '.eng', '_en', '_eng', '.english', '영어', '영문']):
+        return f"🇺🇸 영어 ({base})"
+    # 일본어
+    elif any(k in stem_lower for k in ['.ja', '.jpn', '.jp', '_ja', '_jpn', '.japanese', '일본어', '일어']):
+        return f"🇯🇵 일본어 ({base})"
+    # 중국어
+    elif any(k in stem_lower for k in ['.zh', '.chi', '.zho', '_zh', '_chi', '.chinese', '중국어', '중문', '.cmn']):
+        return f"🇨🇳 중국어 ({base})"
+    # 스페인어
+    elif any(k in stem_lower for k in ['.es', '.spa', '_es', '_spa', '.spanish', '스페인어']):
+        return f"🇪🇸 스페인어 ({base})"
+    # 프랑스어
+    elif any(k in stem_lower for k in ['.fr', '.fre', '.fra', '_fr', '_fre', '.french', '프랑스어']):
+        return f"🇫🇷 프랑스어 ({base})"
+    # 독일어
+    elif any(k in stem_lower for k in ['.de', '.ger', '.deu', '_de', '_ger', '.german', '독일어']):
+        return f"🇩🇪 독일어 ({base})"
+    
+    return f"📄 {base}"
+
+def find_all_matching_subtitles(video_path):
+    """동영상 파일과 관련된 모든 자막 파일(.srt, .smi, .vtt, .ass, .ssa, .sub) 목록을 탐색하여 반환합니다."""
+    dir_name = os.path.dirname(os.path.abspath(video_path))
+    base_name = os.path.basename(video_path)
+    stem, _ = os.path.splitext(base_name)
+    stem_lower = stem.lower()
+    sub_exts = ['.srt', '.smi', '.vtt', '.ass', '.ssa', '.sub']
+    
+    found_files = []
+    seen = set()
+    
+    # 1. 동일한 파일명 (대소문자 무관)
+    for ext in sub_exts:
+        for c_ext in [ext, ext.upper()]:
+            cand = os.path.join(dir_name, stem + c_ext)
+            if os.path.isfile(cand) and cand not in seen:
+                seen.add(cand)
+                found_files.append(cand)
+                
+    # 2. 언어 태그 및 확장자 매칭
+    try:
+        for fname in os.listdir(dir_name):
+            cand_path = os.path.join(dir_name, fname)
+            if not os.path.isfile(cand_path) or cand_path in seen:
+                continue
+            f_lower = fname.lower()
+            if any(f_lower.endswith(ext) for ext in sub_exts):
+                if f_lower.startswith(stem_lower) or stem_lower in f_lower:
+                    seen.add(cand_path)
+                    found_files.append(cand_path)
+    except Exception:
+        pass
+        
+    # 만약 위 규칙으로 찾은 자막이 없고 디렉토리에 자막 파일이 있다면 모두 포함
+    if not found_files:
+        try:
+            for fname in os.listdir(dir_name):
+                cand_path = os.path.join(dir_name, fname)
+                if os.path.isfile(cand_path) and any(fname.lower().endswith(ext) for ext in sub_exts):
+                    if cand_path not in seen:
+                        seen.add(cand_path)
+                        found_files.append(cand_path)
+        except Exception:
+            pass
+
+    # 한국어, 영어 순서가 앞으로 오도록 스마트 정렬
+    def sort_key(path):
+        lbl = get_subtitle_label(path)
+        if "한국어" in lbl:
+            return (0, path)
+        if "영어" in lbl:
+            return (1, path)
+        if "일본어" in lbl:
+            return (2, path)
+        return (3, path)
+
+    found_files.sort(key=sort_key)
+    return found_files
+
+def merge_subtitle_tracks(tracks):
+    """
+    여러 자막 트랙 [(label, color, events), ...]의 타임라인을 정밀 분할하여
+    화면에 여러 자막이 동시에 겹침 없이 표시되도록 단일 다중 색상 SRT 문자열로 병합합니다.
+    """
+    if not tracks:
+        return ""
+        
+    time_points = set()
+    for _, _, events in tracks:
+        for start_ms, end_ms, _ in events:
+            time_points.add(start_ms)
+            time_points.add(end_ms)
+            
+    sorted_times = sorted(list(time_points))
+    if len(sorted_times) < 2:
+        return ""
+        
+    srt_blocks = []
+    is_multi = len(tracks) > 1
+    
+    for i in range(len(sorted_times) - 1):
+        t_start = sorted_times[i]
+        t_end = sorted_times[i + 1]
+        if t_end <= t_start:
+            continue
+            
+        active_lines = []
+        for _label, color, events in tracks:
+            for ev_start, ev_end, text in events:
+                if ev_start <= t_start and ev_end >= t_end:
+                    if text and not text.isspace():
+                        if is_multi and color:
+                            styled = f'<span color="{color}">{text}</span>'
+                        else:
+                            styled = text
+                        active_lines.append(styled)
+                    break
+                    
+        if active_lines:
+            combined_text = "\n".join(active_lines)
+            srt_blocks.append((t_start, t_end, combined_text))
+            
+    # 연속된 동일 텍스트 블록 병합 최적화
+    merged_blocks = []
+    for start, end, text in srt_blocks:
+        if merged_blocks and merged_blocks[-1][1] == start and merged_blocks[-1][2] == text:
+            merged_blocks[-1] = (merged_blocks[-1][0], end, text)
+        else:
+            merged_blocks.append((start, end, text))
+            
+    out = []
+    for idx, (start, end, text) in enumerate(merged_blocks, 1):
+        out.append(f"{idx}\n{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}\n{text}\n")
+        
+    return "\n".join(out)
+
+def generate_merged_subtitle_file(active_tracks, video_path):
+    """
+    선택된 자막 트랙들을 병합하여 임시 캐시 디렉토리에 SRT 파일로 생성하고 그 경로를 반환합니다.
+    """
+    if not active_tracks:
+        return None
+        
+    cache_dir = "/tmp/jetson_subtitles"
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    track_ids = "_".join([t[0] for t in active_tracks])
+    h = hashlib.md5((video_path + track_ids).encode('utf-8')).hexdigest()[:14]
+    target_file = os.path.join(cache_dir, f"merged_sub_{h}.srt")
+    
+    srt_content = merge_subtitle_tracks(active_tracks)
+    if not srt_content:
+        return None
+        
+    with open(target_file, 'w', encoding='utf-8') as f:
+        f.write(srt_content)
+        
+    return target_file
+
 class JetsonSignageFlexiblePlayer(Gtk.Window):
     def __init__(self, input_path):
         super().__init__(title="Jetson Video Player")
@@ -92,9 +402,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.set_keep_above(True)
         self.set_default_size(1280, 720)
         
-        # 이벤트 연결 (종료 및 키보드 입력)
+        # 이벤트 연결 (종료, 키보드 및 마우스 감지)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("motion-notify-event", self.on_mouse_motion)
+        self.connect("button-press-event", self.on_window_button_press)
 
         # 2. 입력 경로 타입(폴더 vs 파일)을 분석하여 재생 목록 구성
         self.input_path = input_path
@@ -119,6 +432,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.last_ui_pos_sec = -1
         self.retry_counts = {}
         self.max_retries = 2
+
+        # 마우스 커서 숨김 제어 상태
+        self.cursor_hide_timer_id = None
+        self.is_cursor_hidden = False
+
+        # 다중 자막(Subtitle) 상태 변수 초기화
+        self.subtitles_enabled = True
+        self.has_subtitles = False
+        self.available_subtitles = []  # list of dicts: {'path', 'label', 'color', 'events'}
+        self.active_subtitle_indices = set()  # set of int indices
+        self.sub_popover = None
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
         self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
@@ -170,6 +494,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         scale trough { background: #303744; min-height: 4px; border-radius: 3px; }
         scale highlight { background: #e9ff5b; border-radius: 3px; }
         scale slider { background: #ffffff; min-width: 13px; min-height: 13px; border-radius: 7px; }
+        popover { background: #131822; border: 1px solid #2a3240; border-radius: 9px; color: #f4f6fb; padding: 6px; }
+        .popover-title { font-size: 13px; font-weight: 700; color: #e9ff5b; margin-bottom: 4px; }
+        .sub-btn-row button { background: #1c222e; border-radius: 5px; padding: 4px 8px; font-size: 11px; }
+        .sub-btn-row button:hover { background: #2a3344; }
+        checkbutton { color: #dce2ec; font-size: 12px; }
+        checkbutton:hover { color: #ffffff; }
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
@@ -260,6 +590,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.fullscreen_button.set_tooltip_text("영상만 전체화면 (F)")
         self.fullscreen_button.connect("clicked", lambda _button: self.toggle_fullscreen())
         actions.pack_end(self.fullscreen_button, False, False, 0)
+
+        self.sub_button = Gtk.Button(label="💬 자막")
+        self.sub_button.set_tooltip_text("자막 켜기/끄기 (S)")
+        self.sub_button.connect("clicked", self.on_sub_button_clicked)
+        actions.pack_end(self.sub_button, False, False, 4)
+
         self.controls.pack_start(actions, False, False, 0)
         root.pack_end(self.controls, False, False, 0)
 
@@ -381,6 +717,58 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if self.pipeline:
             self.pipeline.set_property("volume", scale.get_value() / 100.0)
 
+    def hide_cursor(self):
+        """마우스 커서를 투명(숨김) 커서로 설정합니다."""
+        self.cursor_hide_timer_id = None
+        gdk_win = self.get_window()
+        if gdk_win:
+            display = gdk_win.get_display()
+            blank_cursor = None
+            try:
+                blank_cursor = Gdk.Cursor.new_from_name(display, "none")
+            except Exception:
+                pass
+            if not blank_cursor:
+                blank_cursor = Gdk.Cursor.new_for_display(display, Gdk.CursorType.BLANK_CURSOR)
+            gdk_win.set_cursor(blank_cursor)
+            self.is_cursor_hidden = True
+        return False
+
+    def show_cursor(self):
+        """마우스 커서를 기본 포인터로 복원합니다."""
+        if getattr(self, "cursor_hide_timer_id", None):
+            try:
+                GLib.source_remove(self.cursor_hide_timer_id)
+            except Exception:
+                pass
+            self.cursor_hide_timer_id = None
+        gdk_win = self.get_window()
+        if gdk_win:
+            gdk_win.set_cursor(None)
+        self.is_cursor_hidden = False
+
+    def on_mouse_motion(self, widget, event):
+        """마우스 움직임 감지 시 커서를 표시하고 2.5초 후 자동 숨김 타이머를 재설정합니다."""
+        if self.is_video_only:
+            if self.is_cursor_hidden:
+                self.show_cursor()
+            if getattr(self, "cursor_hide_timer_id", None):
+                try:
+                    GLib.source_remove(self.cursor_hide_timer_id)
+                except Exception:
+                    pass
+            self.cursor_hide_timer_id = GLib.timeout_add(2500, self.hide_cursor)
+        return False
+
+    def on_window_button_press(self, widget, event):
+        """더블클릭 시 전체화면 전환 및 마우스 조작 감지"""
+        if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
+            self.toggle_fullscreen()
+            return True
+        if self.is_video_only:
+            self.on_mouse_motion(widget, event)
+        return False
+
     def toggle_fullscreen(self):
         """상단바, 재생목록, 컨트롤을 숨긴 영상 전용 전체화면을 전환합니다."""
         if not self.is_video_only:
@@ -393,7 +781,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.is_fullscreen = True
             self.is_video_only = True
             self.fullscreen_button.set_label("⧉")
-            print("🖥️ 영상 전용 전체화면")
+            # 전체화면 전환 시 마우스 커서 즉시 숨김
+            self.hide_cursor()
+            print("🖥️ 영상 전용 전체화면 (마우스 커서 자동 숨김)")
         else:
             self.topbar.show()
             self.controls.show()
@@ -401,6 +791,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 self.sidebar.show()
             self.is_video_only = False
             self.fullscreen_button.set_label("⛶")
+            # 일반 모드 복귀 시 마우스 커서 복원
+            self.show_cursor()
             print("🖥️ 플레이어 UI 표시")
 
     def on_deep_element_added(self, bin_elem, sub_bin, element):
@@ -436,6 +828,29 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if "nveglglessink" in fname or "nveglglessink" in ename:
             if element.find_property("force-aspect-ratio"):
                 element.set_property("force-aspect-ratio", True)
+
+        # 자막 렌더링 요소 최적화 (외곽선, Noto Sans 폰트, 하단 정렬, 비디오 멈춤 방지)
+        if any(k in fname or k in ename for k in ["textoverlay", "subtitleoverlay", "textrender"]):
+            if element.find_property("font-desc"):
+                element.set_property("font-desc", "Noto Sans, NanumGothic, Sans Bold 24")
+            if element.find_property("valignment"):
+                element.set_property("valignment", 1)  # bottom
+            if element.find_property("halignment"):
+                element.set_property("halignment", 1)  # center
+            if element.find_property("wait-text"):
+                # 자막 패킷 대기로 인한 비디오 지연/멈춤 방지
+                element.set_property("wait-text", False)
+            if element.find_property("shaded-background"):
+                element.set_property("shaded-background", False)
+            if element.find_property("outline-color"):
+                element.set_property("outline-color", 0xFF000000)
+            if element.find_property("color"):
+                element.set_property("color", 0xFFFFFFFF)
+            if element.find_property("auto-resize"):
+                element.set_property("auto-resize", True)
+        if "subparse" in fname or "subparse" in ename:
+            if element.find_property("subtitle-encoding"):
+                element.set_property("subtitle-encoding", "UTF-8")
 
     def check_video_hw_support(self, file_path):
         """
@@ -577,10 +992,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         raw_playlist = []
         if os.path.isdir(abs_path):
             self.is_single_file_mode = False
-            extensions = ['*.webm', '*.mp4', '*.mkv', '*.mov', '*.avi']
-            for ext in extensions:
-                raw_playlist.extend(glob.glob(os.path.join(abs_path, ext)))
-                raw_playlist.extend(glob.glob(os.path.join(abs_path, ext.upper())))
+            video_exts = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
+            try:
+                for fname in os.listdir(abs_path):
+                    _stem, ext = os.path.splitext(fname)
+                    if ext.lower() in video_exts:
+                        full_p = os.path.join(abs_path, fname)
+                        if os.path.isfile(full_p):
+                            raw_playlist.append(full_p)
+            except Exception as e:
+                print(f"❌ 디렉토리 읽기 실패 ({abs_path}): {e}")
+                sys.exit(1)
             raw_playlist.sort()
             
             if not raw_playlist:
@@ -661,8 +1083,32 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # 0x01 (video) + 0x02 (audio) + 0x10 (soft-volume) = 0x00000013
-        self.pipeline.set_property("flags", 0x00000013)
+        # 자막 파일 전체 탐색 및 파싱
+        all_sub_files = find_all_matching_subtitles(video_path)
+        self.available_subtitles = []
+        for idx, s_path in enumerate(all_sub_files):
+            evs = parse_subtitle_file_events(s_path)
+            if evs:
+                color = SUBTITLE_COLORS[idx % len(SUBTITLE_COLORS)]
+                lbl = get_subtitle_label(s_path)
+                self.available_subtitles.append({
+                    'path': s_path,
+                    'label': lbl,
+                    'color': color,
+                    'events': evs
+                })
+
+        # 기본 선택: 첫 번째 자막 활성화
+        self.active_subtitle_indices = set()
+        if self.available_subtitles:
+            self.active_subtitle_indices.add(0)
+            self.has_subtitles = True
+            print(f"💬 [자막 발견 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
+        else:
+            self.has_subtitles = False
+
+        # 0x01 (video) + 0x02 (audio) + 0x04 (text/subtitles) + 0x10 (soft-volume) = 0x00000017
+        self.pipeline.set_property("flags", 0x00000017)
 
         # Totem 공식 네이티브 GTK OpenGL 비디오 싱크 할당 (60Hz V-Sync 완벽 일치 & 4K 1:1 선명도 보장)
         if self.video_sink:
@@ -694,6 +1140,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # URI 속성 갱신 후 플레이 시작
         self.pipeline.set_property("uri", video_uri)
         self.pipeline.set_property("volume", self.volume_scale.get_value() / 100.0)
+
+        # 선택된 자막 파일 병합 및 즉시 적용
+        self.reload_and_apply_subtitles()
+
         self.pipeline.set_state(Gst.State.PLAYING)
         self.is_playing = True
         self.play_button.set_label("Ⅱ")
@@ -817,6 +1267,176 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             print("⏮ 이전 영상으로 넘어갑니다.")
             GLib.timeout_add(50, self.play_current_video)
 
+    def build_subtitle_popover(self):
+        """다중 자막 선택 팝오버(Popover) 창을 구성합니다."""
+        self.sub_popover = Gtk.Popover(relative_to=self.sub_button)
+        self.sub_popover.set_position(Gtk.PositionType.TOP)
+        self.sub_popover.set_border_width(12)
+        
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        
+        # 헤더
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        title = Gtk.Label(label="💬 자막 선택 (다중 동시 표시 지원)", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        header.pack_start(title, True, True, 0)
+        container.pack_start(header, False, False, 2)
+        
+        hint = Gtk.Label(label="여러 개를 체크하면 화면에 동시에 색상별로 표시됩니다.", xalign=0)
+        hint.get_style_context().add_class("muted")
+        container.pack_start(hint, False, False, 0)
+        
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        container.pack_start(sep, False, False, 2)
+
+        # 자막 체크박스 리스트
+        self.sub_checkboxes = []
+        for idx, sub in enumerate(self.available_subtitles):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            
+            # 색상 표시 원형 인디케이터
+            color_box = Gtk.DrawingArea()
+            color_box.set_size_request(12, 12)
+            c_hex = sub['color']
+            def draw_color_dot(widget, cr, col_hex):
+                try:
+                    r = int(col_hex[1:3], 16) / 255.0
+                    g = int(col_hex[3:5], 16) / 255.0
+                    b = int(col_hex[5:7], 16) / 255.0
+                    cr.set_source_rgb(r, g, b)
+                    cr.arc(6, 6, 5, 0, 2 * 3.14159)
+                    cr.fill()
+                except Exception:
+                    pass
+            color_box.connect("draw", draw_color_dot, c_hex)
+            row.pack_start(color_box, False, False, 2)
+            
+            chk = Gtk.CheckButton(label=sub['label'])
+            chk.set_active(idx in self.active_subtitle_indices)
+            chk.connect("toggled", self.on_subtitle_checkbox_toggled, idx)
+            row.pack_start(chk, True, True, 0)
+            
+            self.sub_checkboxes.append(chk)
+            container.pack_start(row, False, False, 2)
+            
+        # 전체 선택 / 전체 해제 버튼
+        btn_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_bar.get_style_context().add_class("sub-btn-row")
+        select_all_btn = Gtk.Button(label="모두 선택")
+        select_all_btn.connect("clicked", self.on_select_all_subtitles)
+        deselect_all_btn = Gtk.Button(label="모두 해제")
+        deselect_all_btn.connect("clicked", self.on_deselect_all_subtitles)
+        btn_bar.pack_start(select_all_btn, True, True, 0)
+        btn_bar.pack_start(deselect_all_btn, True, True, 0)
+        container.pack_start(btn_bar, False, False, 4)
+        
+        container.show_all()
+        self.sub_popover.add(container)
+
+    def show_subtitle_popover(self):
+        """자막 선택 팝오버를 열거나 닫습니다."""
+        if not self.available_subtitles:
+            print("ℹ️ 현재 영상에 사용 가능한 자막이 없습니다.")
+            return
+        if self.sub_popover:
+            self.sub_popover.destroy()
+            self.sub_popover = None
+        self.build_subtitle_popover()
+        self.sub_popover.show_all()
+        self.sub_popover.popup()
+
+    def on_sub_button_clicked(self, widget):
+        """자막 버튼 클릭 시 단일 자막은 토글, 다중 자막은 팝오버 메뉴를 표시합니다."""
+        if not self.available_subtitles:
+            return
+        if len(self.available_subtitles) == 1:
+            self.toggle_subtitles()
+        else:
+            self.show_subtitle_popover()
+
+    def on_subtitle_checkbox_toggled(self, chk_button, track_idx):
+        """자막 체크박스 토글 시 실시간으로 활성 자막 목록을 갱신하고 화면에 즉시 반영합니다."""
+        if chk_button.get_active():
+            self.active_subtitle_indices.add(track_idx)
+            self.subtitles_enabled = True
+        else:
+            self.active_subtitle_indices.discard(track_idx)
+            if not self.active_subtitle_indices:
+                self.subtitles_enabled = False
+        self.reload_and_apply_subtitles()
+
+    def on_select_all_subtitles(self, _btn):
+        """모든 자막 체크 활성화"""
+        for chk in getattr(self, "sub_checkboxes", []):
+            chk.set_active(True)
+
+    def on_deselect_all_subtitles(self, _btn):
+        """모든 자막 체크 해제"""
+        for chk in getattr(self, "sub_checkboxes", []):
+            chk.set_active(False)
+
+    def reload_and_apply_subtitles(self):
+        """선택된 다중 자막 트랙들을 실시간 병합하여 GStreamer 파이프라인에 즉시 반영합니다."""
+        if not self.pipeline:
+            return
+            
+        video_path = self.playlist[self.current_index]
+        active_tracks = []
+        for idx in sorted(list(self.active_subtitle_indices)):
+            if 0 <= idx < len(self.available_subtitles):
+                sub = self.available_subtitles[idx]
+                active_tracks.append((sub['label'], sub['color'], sub['events']))
+                
+        if active_tracks and self.subtitles_enabled:
+            merged_file = generate_merged_subtitle_file(active_tracks, video_path)
+            if merged_file:
+                sub_uri = f"file://{pathname2url(os.path.abspath(merged_file))}"
+                self.pipeline.set_property("suburi", sub_uri)
+                self.pipeline.set_property("current-text", 0)
+                selected_labels = [t[0] for t in active_tracks]
+                print(f"💬 [다중 자막 렌더링 ({len(active_tracks)}개)] " + ", ".join(selected_labels))
+            else:
+                self.pipeline.set_property("current-text", -1)
+        else:
+            self.pipeline.set_property("current-text", -1)
+            print("💬 [자막] 표시 꺼짐 (OFF)")
+            
+        self.update_subtitle_button_ui()
+
+    def update_subtitle_button_ui(self):
+        """자막 버튼 레이블 및 활성화 상태 갱신"""
+        if not hasattr(self, "sub_button"):
+            return
+        total = len(self.available_subtitles)
+        if total == 0:
+            self.sub_button.set_label("💬 자막 없음")
+            self.sub_button.set_sensitive(False)
+            self.sub_button.set_tooltip_text("자막 없음")
+        elif total == 1:
+            if self.subtitles_enabled and self.active_subtitle_indices:
+                self.sub_button.set_label("💬 자막 ON")
+            else:
+                self.sub_button.set_label("💬 자막 OFF")
+            self.sub_button.set_sensitive(True)
+            self.sub_button.set_tooltip_text("자막 켜기/끄기 (S)")
+        else:
+            active_cnt = len(self.active_subtitle_indices) if self.subtitles_enabled else 0
+            self.sub_button.set_label(f"💬 자막 ({active_cnt}/{total})")
+            self.sub_button.set_sensitive(True)
+            self.sub_button.set_tooltip_text(f"다중 자막 선택 메뉴 (S: 토글, C: 선택 창) - {total}개 사용 가능")
+
+    def toggle_subtitles(self):
+        """자막 켜기/끄기 상태를 토글합니다."""
+        if not self.available_subtitles:
+            print("ℹ️ 현재 영상에 로드된 자막이 없습니다.")
+            return
+
+        self.subtitles_enabled = not self.subtitles_enabled
+        if self.subtitles_enabled and not self.active_subtitle_indices:
+            self.active_subtitle_indices.add(0)
+            
+        self.reload_and_apply_subtitles()
+
     def on_key_press(self, widget, event):
         """키보드 입력 이벤트 제어"""
         keyname = Gdk.keyval_name(event.keyval)
@@ -843,6 +1463,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif keyname in ["p", "P"]:
             self.play_prev_video()
             return True
+        elif keyname in ["s", "S"]:
+            self.toggle_subtitles()
+            return True
+        elif keyname in ["c", "C"]:
+            self.show_subtitle_popover()
+            return True
         elif keyname in ["f", "F"]:
             self.toggle_fullscreen()
             return True
@@ -850,8 +1476,19 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         return False
 
     def on_destroy(self, widget):
+        if getattr(self, "cursor_hide_timer_id", None):
+            try:
+                GLib.source_remove(self.cursor_hide_timer_id)
+            except Exception:
+                pass
+            self.cursor_hide_timer_id = None
+        self.show_cursor()
+
         if getattr(self, "position_timer_id", None):
-            GLib.source_remove(self.position_timer_id)
+            try:
+                GLib.source_remove(self.position_timer_id)
+            except Exception:
+                pass
             self.position_timer_id = None
         if self.bus is not None:
             try:
