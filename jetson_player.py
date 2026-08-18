@@ -7,6 +7,7 @@ import shutil
 import json
 import re
 import hashlib
+import html
 import gi
 from urllib.request import pathname2url
 
@@ -363,7 +364,9 @@ def get_subtitle_short_badge(label):
 def merge_subtitle_tracks(tracks, font_scale=1.0, offset_ms=0):
     """
     여러 자막 트랙 [(label, color, events), ...]의 타임라인을 정밀 분할하고
-    싱크 오프셋(offset_ms)을 적용하여 화면에 여러 자막이 동시에 깨짐 없이 표시되도록 단일 SRT 문자열로 병합합니다.
+    언어별 고유 색상(<font color="...">) 및 싱크 오프셋을 적용하여 SAMI(.smi) 포맷 문자열로 병합합니다.
+    GStreamer subparse는 SAMI 포맷의 <font color="..."> 태그를 완벽한 Pango markup(<span foreground="...">)으로
+    변환하여 화면에 줄별 고유 색상으로 선명하게 렌더링합니다.
     """
     if not tracks:
         return ""
@@ -384,7 +387,7 @@ def merge_subtitle_tracks(tracks, font_scale=1.0, offset_ms=0):
     if len(sorted_times) < 2:
         return ""
         
-    srt_blocks = []
+    smi_blocks = []
     is_multi = len(offset_tracks) > 1
     
     for i in range(len(sorted_times) - 1):
@@ -394,24 +397,28 @@ def merge_subtitle_tracks(tracks, font_scale=1.0, offset_ms=0):
             continue
             
         active_lines = []
-        for label, _color, events in offset_tracks:
+        for label, color, events in offset_tracks:
             for ev_start, ev_end, text in events:
                 if ev_start <= t_start and ev_end >= t_end:
                     if text and not text.isspace():
                         badge = get_subtitle_short_badge(label) if is_multi else ""
+                        c = color if color else "#FFFFFF"
                         lines = [line.strip() for line in text.splitlines() if line.strip()]
                         if lines:
-                            lines[0] = f"{badge}{lines[0]}"
-                            active_lines.append("\n".join(lines))
+                            escaped_first = html.escape(f"{badge}{lines[0]}")
+                            styled_lines = [f'<font color="{c}">{escaped_first}</font>']
+                            for extra_line in lines[1:]:
+                                styled_lines.append(f'<font color="{c}">{html.escape(extra_line)}</font>')
+                            active_lines.append("<br>".join(styled_lines))
                     break
                     
         if active_lines:
-            combined_text = "\n".join(active_lines)
-            srt_blocks.append((t_start, t_end, combined_text))
+            combined_text = "<br>".join(active_lines)
+            smi_blocks.append((t_start, t_end, combined_text))
             
     # 인접 동일 텍스트 블록 병합 및 80ms 미만 극미세 구간 스무딩 최적화
     smoothed = []
-    for start, end, text in srt_blocks:
+    for start, end, text in smi_blocks:
         if not text or text.isspace():
             continue
         if end - start < 80:
@@ -425,15 +432,31 @@ def merge_subtitle_tracks(tracks, font_scale=1.0, offset_ms=0):
         else:
             smoothed.append((start, end, text))
             
-    out = []
-    for idx, (start, end, text) in enumerate(smoothed, 1):
-        out.append(f"{idx}\n{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}\n{text}\n")
-        
+    # SAMI 표준 문서 생성
+    out = [
+        '<SAMI>',
+        '<HEAD>',
+        '<TITLE>Jetson Multi Subtitles</TITLE>',
+        '<STYLE TYPE="text/css"><!-- P { font-family: sans-serif; text-align: center; } .KRCC { Name: Korean; lang: ko-KR; } --></STYLE>',
+        '</HEAD>',
+        '<BODY>'
+    ]
+    
+    for idx, (start, end, text) in enumerate(smoothed):
+        out.append(f'<SYNC Start={start}><P Class=KRCC>{text}</SYNC>')
+        next_start = smoothed[idx + 1][0] if idx + 1 < len(smoothed) else end + 1000
+        # 다음 대사와의 간격이 200ms 이상일 때만 공백 자막을 삽입하여 subparse 큐 지연 및 싱크 왜곡 방지
+        if next_start - end >= 200:
+            out.append(f'<SYNC Start={end}><P Class=KRCC>&nbsp;</SYNC>')
+            
+    out.append('</BODY>')
+    out.append('</SAMI>')
+    
     return "\n".join(out)
 
 def generate_merged_subtitle_file(active_tracks, video_path, font_scale=1.0, offset_ms=0):
     """
-    선택된 자막 트랙들을 병합하여 임시 캐시 디렉토리에 SRT 파일로 생성하고 그 경로를 반환합니다.
+    선택된 자막 트랙들을 언어별 고유 색상이 적용된 SAMI(.smi) 파일로 생성하고 그 경로를 반환합니다.
     """
     if not active_tracks:
         return None
@@ -443,14 +466,14 @@ def generate_merged_subtitle_file(active_tracks, video_path, font_scale=1.0, off
     
     track_ids = "_".join([t[0] for t in active_tracks])
     h = hashlib.md5((video_path + track_ids + f"_{font_scale:.2f}_{offset_ms}").encode('utf-8')).hexdigest()[:14]
-    target_file = os.path.join(cache_dir, f"merged_sub_{h}.srt")
+    target_file = os.path.join(cache_dir, f"merged_sub_{h}.smi")
     
-    srt_content = merge_subtitle_tracks(active_tracks, font_scale=font_scale, offset_ms=offset_ms)
-    if not srt_content:
+    smi_content = merge_subtitle_tracks(active_tracks, font_scale=font_scale, offset_ms=offset_ms)
+    if not smi_content:
         return None
         
     with open(target_file, 'w', encoding='utf-8') as f:
-        f.write(srt_content)
+        f.write(smi_content)
         
     return target_file
 
@@ -509,6 +532,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.active_subtitle_indices = set()  # set of int indices
         self.current_suburi = None
         self.pending_seek_ns = 0
+        self.last_known_pos_ns = 0  # 자막 전환 시 0초 튕김 방지용 백업 위치
+        self.is_updating_sub_checkboxes = False  # 모두 선택/해제 일괄 변경 락
+        self.sub_reload_timer_id = None  # 자막 리로드 디바운스 타이머
         self.subtitle_font_scale = 1.0  # 자막 크기 스케일 (0.6 ~ 1.6)
         self.subtitle_offset_ms = 0  # 자막 싱크 오프셋 (ms 단위, 음수: 빠르게, 양수: 느리게)
         self.scale_label = None
@@ -745,6 +771,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if not self.pipeline:
             return True
         position_ok, position = self.pipeline.query_position(Gst.Format.TIME)
+        if position_ok and position > 0:
+            self.last_known_pos_ns = position
         pos_sec = int(position / Gst.SECOND) if position_ok else -1
 
         # 초(second) 단위가 바뀌었을 때만 GTK UI를 갱신하여 X11 Re-draw 부하 제거
@@ -778,8 +806,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def on_seek_end(self, scale, _event):
         if self.pipeline and self.duration_ns > 0:
             target = int(self.duration_ns * scale.get_value() / 100)
+            self.last_known_pos_ns = target
             self.pipeline.seek_simple(
-                Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target
+                Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE, target
             )
         self.is_seeking = False
         return False
@@ -1289,7 +1318,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         self.update_subtitle_button_ui()
 
-        self.pipeline.set_state(Gst.State.PLAYING)
+        # 재생 중간 위치에서 자막을 재로드할 경우, 비디오/오디오/자막 스트림의 완벽한 Preroll을 위해
+        # PAUSED 상태로 진입 후 ASYNC_DONE에서 정밀 Seek를 수행하고 PLAYING으로 전환합니다.
+        if self.pending_seek_ns > 0:
+            self.pipeline.set_state(Gst.State.PAUSED)
+        else:
+            self.pipeline.set_state(Gst.State.PLAYING)
+            
         self.is_playing = True
         self.play_button.set_label("Ⅱ")
         
@@ -1350,11 +1385,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if getattr(self, "pending_seek_ns", 0) > 0 and self.pipeline:
                 seek_ns = self.pending_seek_ns
                 self.pending_seek_ns = 0
+                # 비디오/오디오/자막 전체 파이프라인에 FLUSH & ACCURATE Seek를 전달하여 
+                # 과거 Preroll 자막을 완전히 날리고 정확한 현재 시점 자막으로 동기화
                 self.pipeline.seek_simple(
                     Gst.Format.TIME,
                     Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
                     seek_ns
                 )
+                self.pipeline.set_state(Gst.State.PLAYING)
 
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             _old_state, new_state, _pending = message.parse_state_changed()
@@ -1375,14 +1413,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if target_ns < 0:
             target_ns = 0
 
+        self.last_known_pos_ns = target_ns
         res = self.pipeline.seek_simple(
             Gst.Format.TIME,
-            Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+            Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
             target_ns
         )
         if not res:
             print("⚠️ 탐색 실패로 파이프라인을 재구축합니다.")
-            self.play_current_video()
+            self.play_current_video(start_position_ns=target_ns)
             return
 
         direction = "앞으로" if offset_seconds > 0 else "뒤로"
@@ -1621,7 +1660,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.show_subtitle_popover()
 
     def on_subtitle_checkbox_toggled(self, chk_button, track_idx):
-        """자막 체크박스 토글 시 실시간으로 활성 자막 목록을 갱신하고 화면에 즉시 반영합니다."""
+        """자막 체크박스 토글 시 실시간으로 활성 자막 목록을 갱신하고 화면에 안전하게 반영합니다."""
+        if getattr(self, "is_updating_sub_checkboxes", False):
+            return
+            
         if chk_button.get_active():
             self.active_subtitle_indices.add(track_idx)
             self.subtitles_enabled = True
@@ -1629,17 +1671,46 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.active_subtitle_indices.discard(track_idx)
             if not self.active_subtitle_indices:
                 self.subtitles_enabled = False
-        self.reload_and_apply_subtitles()
+        self.schedule_subtitles_reload()
 
     def on_select_all_subtitles(self, _btn):
-        """모든 자막 체크 활성화"""
-        for chk in getattr(self, "sub_checkboxes", []):
-            chk.set_active(True)
+        """모든 자막 체크 활성화 (일괄 락 적용으로 프로그램 충돌 및 중복 리로드 차단)"""
+        self.is_updating_sub_checkboxes = True
+        try:
+            self.active_subtitle_indices = set(range(len(self.available_subtitles)))
+            self.subtitles_enabled = bool(self.active_subtitle_indices)
+            for chk in getattr(self, "sub_checkboxes", []):
+                chk.set_active(True)
+        finally:
+            self.is_updating_sub_checkboxes = False
+        self.schedule_subtitles_reload()
 
     def on_deselect_all_subtitles(self, _btn):
-        """모든 자막 체크 해제"""
-        for chk in getattr(self, "sub_checkboxes", []):
-            chk.set_active(False)
+        """모든 자막 체크 해제 (일괄 락 적용으로 프로그램 충돌 및 중복 리로드 차단)"""
+        self.is_updating_sub_checkboxes = True
+        try:
+            self.active_subtitle_indices.clear()
+            self.subtitles_enabled = False
+            for chk in getattr(self, "sub_checkboxes", []):
+                chk.set_active(False)
+        finally:
+            self.is_updating_sub_checkboxes = False
+        self.schedule_subtitles_reload()
+
+    def schedule_subtitles_reload(self):
+        """빠른 체크박스 연타나 일괄 변경 시 파이프라인 중복 파괴를 막기 위해 50ms 디바운스로 안전하게 재로드합니다."""
+        if getattr(self, "sub_reload_timer_id", None):
+            try:
+                GLib.source_remove(self.sub_reload_timer_id)
+            except Exception:
+                pass
+            self.sub_reload_timer_id = None
+        self.sub_reload_timer_id = GLib.timeout_add(50, self._deferred_reload_subtitles)
+
+    def _deferred_reload_subtitles(self):
+        self.sub_reload_timer_id = None
+        self.reload_and_apply_subtitles()
+        return False
 
     def reload_and_apply_subtitles(self):
         """선택된 다중 자막 트랙들을 실시간 병합하여 GStreamer 파이프라인에 즉시 반영합니다."""
@@ -1660,16 +1731,26 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 offset_ms=self.subtitle_offset_ms
             )
             new_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}" if merged_file else None
+        else:
+            new_suburi = None
             
-            # GStreamer playbin은 실행 중 suburi 변경 시 내부 파서를 다시 읽지 않으므로,
-            # 자막 스트림이 변경된 경우 현재 재생 위치(초 단위)를 보존하여 즉시 매끄럽게 재로드합니다.
-            if new_suburi != getattr(self, "current_suburi", None):
-                success, pos_ns = self.pipeline.query_position(Gst.Format.TIME)
-                if not success or pos_ns < 0:
-                    pos_ns = 0
-                self.play_current_video(start_position_ns=pos_ns)
+        # GStreamer playbin은 실행 중 suburi 변경 시 내부 파서를 다시 읽지 않으므로,
+        # 자막 스트림이 변경된 경우 현재 재생 위치(초 단위)를 100% 보존하여 즉시 매끄럽게 재로드합니다.
+        if new_suburi != getattr(self, "current_suburi", None):
+            pos_ns = 0
+            if self.pipeline:
+                success, q_pos = self.pipeline.query_position(Gst.Format.TIME)
+                if success and q_pos > 0:
+                    pos_ns = q_pos
+                elif getattr(self, "last_known_pos_ns", 0) > 0:
+                    pos_ns = self.last_known_pos_ns
+            self.play_current_video(start_position_ns=pos_ns)
+        else:
+            if not self.subtitles_enabled or not active_tracks:
+                self.pipeline.set_property("current-text", -1)
             else:
                 self.pipeline.set_property("current-text", 0)
+                
         if getattr(self, "subtitle_overlay_element", None):
             try:
                 self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
@@ -1776,6 +1857,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 pass
             self.cursor_hide_timer_id = None
         self.show_cursor()
+
+        if getattr(self, "sub_reload_timer_id", None):
+            try:
+                GLib.source_remove(self.sub_reload_timer_id)
+            except Exception:
+                pass
+            self.sub_reload_timer_id = None
 
         if getattr(self, "position_timer_id", None):
             try:
