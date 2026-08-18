@@ -442,6 +442,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.has_subtitles = False
         self.available_subtitles = []  # list of dicts: {'path', 'label', 'color', 'events'}
         self.active_subtitle_indices = set()  # set of int indices
+        self.current_suburi = None
+        self.pending_seek_ns = 0
         self.sub_popover = None
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
@@ -1050,19 +1052,45 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         self.play_current_video()
 
-    def play_current_video(self):
-        """[성능 최적화] 영상 전환 시 기존 파이프라인을 완전히 해제하고 신규 구축하여 EGL surface 및 하드웨어 디코더 락을 방지합니다."""
+    def play_current_video(self, start_position_ns=0):
+        """[성능 최적화] 영상 전환 및 다중 자막 변경 시 파이프라인 자원을 완전 세척 후 신규 구축합니다."""
         video_path = self.playlist[self.current_index]
-        print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {os.path.basename(video_path)}")
-        self.refresh_playlist_ui()
-        self.duration_ns = 0
-        self.progress_scale.set_value(0)
-        self.position_label.set_text("00:00")
-        self.duration_label.set_text("00:00")
-        self.decoder_names.clear()
-        self.last_dropped_frames = 0
-        self.last_ui_pos_sec = -1
+        
+        if start_position_ns == 0:
+            print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {os.path.basename(video_path)}")
+            self.refresh_playlist_ui()
+            self.duration_ns = 0
+            self.progress_scale.set_value(0)
+            self.position_label.set_text("00:00")
+            self.duration_label.set_text("00:00")
+            self.decoder_names.clear()
+            self.last_dropped_frames = 0
+            self.last_ui_pos_sec = -1
 
+            # 신규 영상인 경우 자막 파일 전체 탐색 및 파싱 초기화
+            all_sub_files = find_all_matching_subtitles(video_path)
+            self.available_subtitles = []
+            for idx, s_path in enumerate(all_sub_files):
+                evs = parse_subtitle_file_events(s_path)
+                if evs:
+                    color = SUBTITLE_COLORS[idx % len(SUBTITLE_COLORS)]
+                    lbl = get_subtitle_label(s_path)
+                    self.available_subtitles.append({
+                        'path': s_path,
+                        'label': lbl,
+                        'color': color,
+                        'events': evs
+                    })
+
+            self.active_subtitle_indices = set()
+            if self.available_subtitles:
+                self.active_subtitle_indices.add(0)
+                self.has_subtitles = True
+                print(f"💬 [자막 발견 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
+            else:
+                self.has_subtitles = False
+
+        self.pending_seek_ns = start_position_ns
         video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
         
         # [핵심] 기존 파이프라인 및 버스 시그널 감시 완전 해제 후 NULL 처리 (EGL Surface/VIC 락 세척)
@@ -1083,32 +1111,27 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
 
-        # 자막 파일 전체 탐색 및 파싱
-        all_sub_files = find_all_matching_subtitles(video_path)
-        self.available_subtitles = []
-        for idx, s_path in enumerate(all_sub_files):
-            evs = parse_subtitle_file_events(s_path)
-            if evs:
-                color = SUBTITLE_COLORS[idx % len(SUBTITLE_COLORS)]
-                lbl = get_subtitle_label(s_path)
-                self.available_subtitles.append({
-                    'path': s_path,
-                    'label': lbl,
-                    'color': color,
-                    'events': evs
-                })
-
-        # 기본 선택: 첫 번째 자막 활성화
-        self.active_subtitle_indices = set()
-        if self.available_subtitles:
-            self.active_subtitle_indices.add(0)
-            self.has_subtitles = True
-            print(f"💬 [자막 발견 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
-        else:
-            self.has_subtitles = False
-
         # 0x01 (video) + 0x02 (audio) + 0x04 (text/subtitles) + 0x10 (soft-volume) = 0x00000017
         self.pipeline.set_property("flags", 0x00000017)
+
+        # 활성화된 자막 병합 파일 준비 및 suburi 설정
+        active_tracks = []
+        for idx in sorted(list(self.active_subtitle_indices)):
+            if 0 <= idx < len(self.available_subtitles):
+                sub = self.available_subtitles[idx]
+                active_tracks.append((sub['label'], sub['color'], sub['events']))
+
+        if active_tracks and self.subtitles_enabled:
+            merged_file = generate_merged_subtitle_file(active_tracks, video_path)
+            if merged_file:
+                self.current_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}"
+                self.pipeline.set_property("suburi", self.current_suburi)
+                selected_labels = [t[0] for t in active_tracks]
+                print(f"💬 [다중 자막 로드 완료 ({len(active_tracks)}개)] " + ", ".join(selected_labels))
+            else:
+                self.current_suburi = None
+        else:
+            self.current_suburi = None
 
         # Totem 공식 네이티브 GTK OpenGL 비디오 싱크 할당 (60Hz V-Sync 완벽 일치 & 4K 1:1 선명도 보장)
         if self.video_sink:
@@ -1141,8 +1164,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.pipeline.set_property("uri", video_uri)
         self.pipeline.set_property("volume", self.volume_scale.get_value() / 100.0)
 
-        # 선택된 자막 파일 병합 및 즉시 적용
-        self.reload_and_apply_subtitles()
+        if not self.subtitles_enabled or not active_tracks:
+            self.pipeline.set_property("current-text", -1)
+
+        self.update_subtitle_button_ui()
 
         self.pipeline.set_state(Gst.State.PLAYING)
         self.is_playing = True
@@ -1200,6 +1225,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             else:
                 print("⏭ 반복 오류 항목을 건너뜁니다.")
                 self.play_next_video()
+
+        elif message.type == Gst.MessageType.ASYNC_DONE:
+            if getattr(self, "pending_seek_ns", 0) > 0 and self.pipeline:
+                seek_ns = self.pending_seek_ns
+                self.pending_seek_ns = 0
+                self.pipeline.seek_simple(
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
+                    seek_ns
+                )
 
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             _old_state, new_state, _pending = message.parse_state_changed()
@@ -1389,14 +1424,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 
         if active_tracks and self.subtitles_enabled:
             merged_file = generate_merged_subtitle_file(active_tracks, video_path)
-            if merged_file:
-                sub_uri = f"file://{pathname2url(os.path.abspath(merged_file))}"
-                self.pipeline.set_property("suburi", sub_uri)
-                self.pipeline.set_property("current-text", 0)
-                selected_labels = [t[0] for t in active_tracks]
-                print(f"💬 [다중 자막 렌더링 ({len(active_tracks)}개)] " + ", ".join(selected_labels))
+            new_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}" if merged_file else None
+            
+            # GStreamer playbin은 실행 중 suburi 변경 시 내부 파서를 다시 읽지 않으므로,
+            # 자막 스트림이 변경된 경우 현재 재생 위치(초 단위)를 보존하여 즉시 매끄럽게 재로드합니다.
+            if new_suburi != getattr(self, "current_suburi", None):
+                success, pos_ns = self.pipeline.query_position(Gst.Format.TIME)
+                if not success or pos_ns < 0:
+                    pos_ns = 0
+                self.play_current_video(start_position_ns=pos_ns)
             else:
-                self.pipeline.set_property("current-text", -1)
+                self.pipeline.set_property("current-text", 0)
         else:
             self.pipeline.set_property("current-text", -1)
             print("💬 [자막] 표시 꺼짐 (OFF)")
