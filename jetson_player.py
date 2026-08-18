@@ -81,7 +81,40 @@ def optimize_gstreamer_ranks():
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
-SUBTITLE_COLORS = ["#FFFFFF", "#E9FF5B", "#80D8FF", "#FF80AB", "#B388FF", "#69F0AE"]
+LANGUAGE_COLORS = {
+    'ko': '#FFFFFF',  # 🇰🇷 한국어: 화이트 (메인 기본)
+    'en': '#FFE066',  # 🇺🇸 영어: 레몬 옐로우 (화사하고 뛰어난 가독성)
+    'zh': '#64D2FF',  # 🇨🇳 중국어: 시안/스카이블루 (시원하고 직관적)
+    'ja': '#69F0AE',  # 🇯🇵 일본어: 네온 민트 (눈에 편안한 그린)
+    'es': '#FF80AB',  # 🇪🇸 스페인어: 소프트 핑크
+    'fr': '#FFB74D',  # 🇫🇷 프랑스어: 앰버 오렌지
+    'de': '#D1C4E9',  # 🇩🇪 독일어: 소프트 라벤더
+    'ru': '#FF8A80',  # 🇷🇺 러시아어: 코랄 레드
+}
+
+FALLBACK_PALETTE = ["#B388FF", "#80CBC4", "#FFF59D", "#FFAB91", "#CE93D8", "#80DEEA"]
+
+def get_subtitle_color(file_path, index=0):
+    """자막 파일의 언어 태그를 분석하여 언어별 최적 고대비 고유 색상을 반환합니다."""
+    stem = os.path.basename(file_path).lower()
+    if any(k in stem for k in ['.ko', '.kor', '.kr', '_ko', '_kor', '_kr', '.korean', '한국어', '한글']):
+        return LANGUAGE_COLORS['ko']
+    elif any(k in stem for k in ['.en', '.eng', '_en', '_eng', '.english', '영어', '영문']):
+        return LANGUAGE_COLORS['en']
+    elif any(k in stem for k in ['.zh', '.chi', '.zho', '_zh', '_chi', '.chinese', '중국어', '중문', '.cmn', 'zh-tw', 'zh-cn']):
+        return LANGUAGE_COLORS['zh']
+    elif any(k in stem for k in ['.ja', '.jpn', '.jp', '_ja', '_jpn', '.japanese', '일본어', '일어']):
+        return LANGUAGE_COLORS['ja']
+    elif any(k in stem for k in ['.es', '.spa', '_es', '_spa', '.spanish', '스페인어']):
+        return LANGUAGE_COLORS['es']
+    elif any(k in stem for k in ['.fr', '.fre', '.fra', '_fr', '_fre', '.french', '프랑스어']):
+        return LANGUAGE_COLORS['fr']
+    elif any(k in stem for k in ['.de', '.ger', '.deu', '_de', '_ger', '.german', '독일어']):
+        return LANGUAGE_COLORS['de']
+    elif any(k in stem for k in ['.ru', '.rus', '_ru', '_rus', '.russian', '러시아어']):
+        return LANGUAGE_COLORS['ru']
+    
+    return FALLBACK_PALETTE[index % len(FALLBACK_PALETTE)]
 
 def ms_to_srt_time(ms):
     """밀리초(ms)를 SRT 타임코드(HH:MM:SS,mmm) 포맷으로 변환합니다."""
@@ -309,26 +342,50 @@ def find_all_matching_subtitles(video_path):
     found_files.sort(key=sort_key)
     return found_files
 
-def merge_subtitle_tracks(tracks):
+def get_subtitle_short_badge(label):
+    """자막 레이블에서 직관적인 언어 뱃지([KR], [TW], [EN], [JP] 등)를 추출합니다."""
+    if "한국어" in label:
+        return "[KR] "
+    elif "영어" in label:
+        return "[EN] "
+    elif "중국어" in label or "대만" in label or "zh-TW" in label or "zh-tw" in label:
+        return "[TW] "
+    elif "일본어" in label:
+        return "[JP] "
+    elif "스페인어" in label:
+        return "[ES] "
+    elif "프랑스어" in label:
+        return "[FR] "
+    elif "독일어" in label:
+        return "[DE] "
+    return ""
+
+def merge_subtitle_tracks(tracks, font_scale=1.0, offset_ms=0):
     """
-    여러 자막 트랙 [(label, color, events), ...]의 타임라인을 정밀 분할하여
-    화면에 여러 자막이 동시에 겹침 없이 표시되도록 단일 다중 색상 SRT 문자열로 병합합니다.
+    여러 자막 트랙 [(label, color, events), ...]의 타임라인을 정밀 분할하고
+    싱크 오프셋(offset_ms)을 적용하여 화면에 여러 자막이 동시에 깨짐 없이 표시되도록 단일 SRT 문자열로 병합합니다.
     """
     if not tracks:
         return ""
         
     time_points = set()
-    for _, _, events in tracks:
-        for start_ms, end_ms, _ in events:
-            time_points.add(start_ms)
-            time_points.add(end_ms)
+    offset_tracks = []
+    for label, color, events in tracks:
+        shifted_events = []
+        for start_ms, end_ms, text in events:
+            s = max(0, start_ms + offset_ms)
+            e = max(s + 50, end_ms + offset_ms)
+            shifted_events.append((s, e, text))
+            time_points.add(s)
+            time_points.add(e)
+        offset_tracks.append((label, color, shifted_events))
             
     sorted_times = sorted(list(time_points))
     if len(sorted_times) < 2:
         return ""
         
     srt_blocks = []
-    is_multi = len(tracks) > 1
+    is_multi = len(offset_tracks) > 1
     
     for i in range(len(sorted_times) - 1):
         t_start = sorted_times[i]
@@ -337,36 +394,44 @@ def merge_subtitle_tracks(tracks):
             continue
             
         active_lines = []
-        for _label, color, events in tracks:
+        for label, _color, events in offset_tracks:
             for ev_start, ev_end, text in events:
                 if ev_start <= t_start and ev_end >= t_end:
                     if text and not text.isspace():
-                        if is_multi and color:
-                            styled = f'<span color="{color}">{text}</span>'
-                        else:
-                            styled = text
-                        active_lines.append(styled)
+                        badge = get_subtitle_short_badge(label) if is_multi else ""
+                        lines = [line.strip() for line in text.splitlines() if line.strip()]
+                        if lines:
+                            lines[0] = f"{badge}{lines[0]}"
+                            active_lines.append("\n".join(lines))
                     break
                     
         if active_lines:
             combined_text = "\n".join(active_lines)
             srt_blocks.append((t_start, t_end, combined_text))
             
-    # 연속된 동일 텍스트 블록 병합 최적화
-    merged_blocks = []
+    # 인접 동일 텍스트 블록 병합 및 80ms 미만 극미세 구간 스무딩 최적화
+    smoothed = []
     for start, end, text in srt_blocks:
-        if merged_blocks and merged_blocks[-1][1] == start and merged_blocks[-1][2] == text:
-            merged_blocks[-1] = (merged_blocks[-1][0], end, text)
+        if not text or text.isspace():
+            continue
+        if end - start < 80:
+            if smoothed and smoothed[-1][2] == text:
+                smoothed[-1] = (smoothed[-1][0], end, text)
+                continue
+            elif end - start < 40:
+                continue
+        if smoothed and smoothed[-1][1] == start and smoothed[-1][2] == text:
+            smoothed[-1] = (smoothed[-1][0], end, text)
         else:
-            merged_blocks.append((start, end, text))
+            smoothed.append((start, end, text))
             
     out = []
-    for idx, (start, end, text) in enumerate(merged_blocks, 1):
+    for idx, (start, end, text) in enumerate(smoothed, 1):
         out.append(f"{idx}\n{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}\n{text}\n")
         
     return "\n".join(out)
 
-def generate_merged_subtitle_file(active_tracks, video_path):
+def generate_merged_subtitle_file(active_tracks, video_path, font_scale=1.0, offset_ms=0):
     """
     선택된 자막 트랙들을 병합하여 임시 캐시 디렉토리에 SRT 파일로 생성하고 그 경로를 반환합니다.
     """
@@ -377,10 +442,10 @@ def generate_merged_subtitle_file(active_tracks, video_path):
     os.makedirs(cache_dir, exist_ok=True)
     
     track_ids = "_".join([t[0] for t in active_tracks])
-    h = hashlib.md5((video_path + track_ids).encode('utf-8')).hexdigest()[:14]
+    h = hashlib.md5((video_path + track_ids + f"_{font_scale:.2f}_{offset_ms}").encode('utf-8')).hexdigest()[:14]
     target_file = os.path.join(cache_dir, f"merged_sub_{h}.srt")
     
-    srt_content = merge_subtitle_tracks(active_tracks)
+    srt_content = merge_subtitle_tracks(active_tracks, font_scale=font_scale, offset_ms=offset_ms)
     if not srt_content:
         return None
         
@@ -444,6 +509,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.active_subtitle_indices = set()  # set of int indices
         self.current_suburi = None
         self.pending_seek_ns = 0
+        self.subtitle_font_scale = 1.0  # 자막 크기 스케일 (0.6 ~ 1.6)
+        self.subtitle_offset_ms = 0  # 자막 싱크 오프셋 (ms 단위, 음수: 빠르게, 양수: 느리게)
+        self.scale_label = None
+        self.sync_label = None
         self.sub_popover = None
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
@@ -797,6 +866,27 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.show_cursor()
             print("🖥️ 플레이어 UI 표시")
 
+    def get_current_subtitle_font_desc(self):
+        """
+        한국어(KR), 중국어 번체/대만어(TC), 간체(SC), 일본어(JP), 영문 알파벳을
+        한 글자의 빠짐이나 깨짐 없이 100% 온전하게 렌더링하는 CJK 통합 폰트 디스크립터를 반환합니다.
+        """
+        active_indices = getattr(self, "active_subtitle_indices", set())
+        
+        num_tracks = len(active_indices) if active_indices else 1
+        if num_tracks <= 1:
+            base_pt = 22
+        elif num_tracks == 2:
+            base_pt = 17
+        else:
+            base_pt = 14
+        final_pt = max(10, min(36, int(base_pt * getattr(self, "subtitle_font_scale", 1.0))))
+        
+        # Noto Sans CJK TC는 대만 번체 한자(13,053자)와 한글(11,172자), 영문, 기호를 단일 폰트 내에 100% 내장하고 있어
+        # 한국어 단독, 중국어 단독, 한국어+중국어+영어 다중 자막 어떤 조합에서도 폰트 폴백 결함 없이 완벽히 렌더링됩니다.
+        font_stack = "Noto Sans CJK TC, Noto Sans CJK KR, Noto Sans CJK SC, Noto Sans CJK JP, Sans"
+        return f"{font_stack} Bold {final_pt}"
+
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
         GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder) 및 비디오 싱크(nveglglessink)를 감지하여 
@@ -811,16 +901,25 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.decoder_names.add(fname)
             acceleration = "NVDEC 하드웨어" if fname == "nvv4l2decoder" else "소프트웨어 fallback"
             print(f"🎬 [선택된 비디오 디코더] {fname} ({acceleration})")
+
         if "dav1d" in fname or "dav1d" in ename:
             if element.find_property("max-threads"):
                 element.set_property("max-threads", 6)
         if "nvv4l2decoder" in fname or "nvv4l2decoder" in ename:
-            if element.find_property("num-extra-surfaces"):
-                element.set_property("num-extra-surfaces", 32)
+            # NVDEC 하드웨어 디코더 파라미터 최적화
             if element.find_property("enable-max-performance"):
                 element.set_property("enable-max-performance", True)
+            if element.find_property("num-extra-surfaces"):
+                element.set_property("num-extra-surfaces", 32)
+            if element.find_property("qos"):
+                element.set_property("qos", False)
+            if element.find_property("drop-on-latency"):
+                element.set_property("drop-on-latency", False)
             if element.find_property("drop-frame-interval"):
                 element.set_property("drop-frame-interval", 0)
+            if element.find_property("max-errors"):
+                element.set_property("max-errors", -1)
+
         if "nvvidconv" in fname or "nvvidconv" in ename:
             if element.find_property("output-buffers"):
                 element.set_property("output-buffers", 32)
@@ -831,25 +930,37 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if element.find_property("force-aspect-ratio"):
                 element.set_property("force-aspect-ratio", True)
 
-        # 자막 렌더링 요소 최적화 (외곽선, Noto Sans 폰트, 하단 정렬, 비디오 멈춤 방지)
-        if any(k in fname or k in ename for k in ["textoverlay", "subtitleoverlay", "textrender"]):
+        # 자막 렌더링 요소 최적화 (외곽선, Noto Sans CJK 한글/한자 유니버설 폰트, 하단 중앙 정렬, 자동 줄바꿈, 완벽한 A/V 싱크)
+        if any(k in fname or k in ename for k in ["textoverlay", "subtitleoverlay", "textrender", "playsink"]):
+            if "textoverlay" in fname or "textoverlay" in ename or "subtitleoverlay" in fname or "subtitleoverlay" in ename:
+                self.subtitle_overlay_element = element
             if element.find_property("font-desc"):
-                element.set_property("font-desc", "Noto Sans, NanumGothic, Sans Bold 24")
+                element.set_property("font-desc", self.get_current_subtitle_font_desc())
+            if element.find_property("subtitle-font-desc"):
+                element.set_property("subtitle-font-desc", self.get_current_subtitle_font_desc())
             if element.find_property("valignment"):
                 element.set_property("valignment", 1)  # bottom
             if element.find_property("halignment"):
                 element.set_property("halignment", 1)  # center
-            if element.find_property("wait-text"):
-                # 자막 패킷 대기로 인한 비디오 지연/멈춤 방지
-                element.set_property("wait-text", False)
-            if element.find_property("shaded-background"):
-                element.set_property("shaded-background", False)
+            if element.find_property("line-alignment"):
+                element.set_property("line-alignment", 1)  # center
+            if element.find_property("wrap-mode"):
+                element.set_property("wrap-mode", 2)  # wordchar (화면 폭 초과 시 자동 줄바꿈)
+            if element.find_property("draw-outline"):
+                element.set_property("draw-outline", True)
+            if element.find_property("draw-shadow"):
+                element.set_property("draw-shadow", False)
             if element.find_property("outline-color"):
                 element.set_property("outline-color", 0xFF000000)
             if element.find_property("color"):
                 element.set_property("color", 0xFFFFFFFF)
+            if element.find_property("wait-text"):
+                # GStreamer A/V 및 자막 타임스탬프 100% 정밀 동기화
+                element.set_property("wait-text", True)
+            if element.find_property("shaded-background"):
+                element.set_property("shaded-background", False)
             if element.find_property("auto-resize"):
-                element.set_property("auto-resize", True)
+                element.set_property("auto-resize", False)
         if "subparse" in fname or "subparse" in ename:
             if element.find_property("subtitle-encoding"):
                 element.set_property("subtitle-encoding", "UTF-8")
@@ -1073,7 +1184,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             for idx, s_path in enumerate(all_sub_files):
                 evs = parse_subtitle_file_events(s_path)
                 if evs:
-                    color = SUBTITLE_COLORS[idx % len(SUBTITLE_COLORS)]
+                    color = get_subtitle_color(s_path, idx)
                     lbl = get_subtitle_label(s_path)
                     self.available_subtitles.append({
                         'path': s_path,
@@ -1122,12 +1233,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 active_tracks.append((sub['label'], sub['color'], sub['events']))
 
         if active_tracks and self.subtitles_enabled:
-            merged_file = generate_merged_subtitle_file(active_tracks, video_path)
+            merged_file = generate_merged_subtitle_file(
+                active_tracks, video_path,
+                font_scale=self.subtitle_font_scale,
+                offset_ms=self.subtitle_offset_ms
+            )
             if merged_file:
                 self.current_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}"
                 self.pipeline.set_property("suburi", self.current_suburi)
+                if self.pipeline.find_property("subtitle-font-desc"):
+                    self.pipeline.set_property("subtitle-font-desc", self.get_current_subtitle_font_desc())
+                if self.pipeline.find_property("subtitle-encoding"):
+                    self.pipeline.set_property("subtitle-encoding", "UTF-8")
                 selected_labels = [t[0] for t in active_tracks]
-                print(f"💬 [다중 자막 로드 완료 ({len(active_tracks)}개)] " + ", ".join(selected_labels))
+                sync_info = f" / 싱크 {self.subtitle_offset_ms/1000:+.1f}s" if self.subtitle_offset_ms != 0 else ""
+                print(f"💬 [다중 자막 로드 완료 ({len(active_tracks)}개 / 크기 {int(self.subtitle_font_scale*100)}%{sync_info})] " + ", ".join(selected_labels))
             else:
                 self.current_suburi = None
         else:
@@ -1303,7 +1423,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             GLib.timeout_add(50, self.play_current_video)
 
     def build_subtitle_popover(self):
-        """다중 자막 선택 팝오버(Popover) 창을 구성합니다."""
+        """다중 자막 선택, 크기 조절 및 싱크 조절 팝오버(Popover) 창을 구성합니다."""
         self.sub_popover = Gtk.Popover(relative_to=self.sub_button)
         self.sub_popover.set_position(Gtk.PositionType.TOP)
         self.sub_popover.set_border_width(12)
@@ -1312,17 +1432,80 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         
         # 헤더
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        title = Gtk.Label(label="💬 자막 선택 (다중 동시 표시 지원)", xalign=0)
+        title = Gtk.Label(label="💬 자막 선택 & 설정", xalign=0)
         title.get_style_context().add_class("popover-title")
         header.pack_start(title, True, True, 0)
         container.pack_start(header, False, False, 2)
         
-        hint = Gtk.Label(label="여러 개를 체크하면 화면에 동시에 색상별로 표시됩니다.", xalign=0)
+        hint = Gtk.Label(label="다중 자막 선택 시 언어별 뱃지와 함께 동시에 표시됩니다.", xalign=0)
         hint.get_style_context().add_class("muted")
         container.pack_start(hint, False, False, 0)
         
-        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        container.pack_start(sep, False, False, 2)
+        sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        container.pack_start(sep1, False, False, 2)
+
+        # 🗚 자막 크기 조절 바
+        size_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        size_bar.get_style_context().add_class("sub-btn-row")
+        
+        size_lbl = Gtk.Label(label="🗚 크기:")
+        size_lbl.get_style_context().add_class("muted")
+        size_bar.pack_start(size_lbl, False, False, 0)
+        
+        dec_btn = Gtk.Button(label="작게 (-)")
+        dec_btn.set_tooltip_text("자막 크기 축소 (단축키: [ )")
+        dec_btn.connect("clicked", lambda _b: self.adjust_subtitle_scale(-0.1))
+        size_bar.pack_start(dec_btn, True, True, 0)
+        
+        pct_str = f"{int(self.subtitle_font_scale * 100)}%"
+        self.scale_label = Gtk.Label(label=pct_str)
+        self.scale_label.set_width_chars(5)
+        size_bar.pack_start(self.scale_label, False, False, 2)
+        
+        inc_btn = Gtk.Button(label="크게 (+)")
+        inc_btn.set_tooltip_text("자막 크기 확대 (단축키: ] )")
+        inc_btn.connect("clicked", lambda _b: self.adjust_subtitle_scale(0.1))
+        size_bar.pack_start(inc_btn, True, True, 0)
+        
+        reset_size_btn = Gtk.Button(label="100%")
+        reset_size_btn.set_tooltip_text("기본 크기(100%)로 복원")
+        reset_size_btn.connect("clicked", self.reset_subtitle_scale)
+        size_bar.pack_start(reset_size_btn, False, False, 0)
+        
+        container.pack_start(size_bar, False, False, 2)
+
+        # ⏱️ 자막 싱크(Sync) 조절 바
+        sync_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        sync_bar.get_style_context().add_class("sub-btn-row")
+        
+        sync_lbl = Gtk.Label(label="⏱️ 싱크:")
+        sync_lbl.get_style_context().add_class("muted")
+        sync_bar.pack_start(sync_lbl, False, False, 0)
+        
+        fast_btn = Gtk.Button(label="-0.5s")
+        fast_btn.set_tooltip_text("자막 0.5초 빠르게 (단축키: Z, ,: -0.1s)")
+        fast_btn.connect("clicked", lambda _b: self.adjust_subtitle_sync(-500))
+        sync_bar.pack_start(fast_btn, True, True, 0)
+        
+        sync_str = f"{self.subtitle_offset_ms / 1000:+.1f}s"
+        self.sync_label = Gtk.Label(label=sync_str)
+        self.sync_label.set_width_chars(6)
+        sync_bar.pack_start(self.sync_label, False, False, 2)
+        
+        slow_btn = Gtk.Button(label="+0.5s")
+        slow_btn.set_tooltip_text("자막 0.5초 느리게 (단축키: X, .: +0.1s)")
+        slow_btn.connect("clicked", lambda _b: self.adjust_subtitle_sync(500))
+        sync_bar.pack_start(slow_btn, True, True, 0)
+        
+        reset_sync_btn = Gtk.Button(label="0.0s")
+        reset_sync_btn.set_tooltip_text("자막 싱크 기본값(0.0초)으로 복원")
+        reset_sync_btn.connect("clicked", self.reset_subtitle_sync)
+        sync_bar.pack_start(reset_sync_btn, False, False, 0)
+        
+        container.pack_start(sync_bar, False, False, 2)
+
+        sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        container.pack_start(sep2, False, False, 2)
 
         # 자막 체크박스 리스트
         self.sub_checkboxes = []
@@ -1367,6 +1550,54 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         
         container.show_all()
         self.sub_popover.add(container)
+
+    def adjust_subtitle_scale(self, delta):
+        """자막 크기를 delta만큼 확대/축소하고 즉시 화면에 반영합니다."""
+        new_scale = round(max(0.6, min(1.6, self.subtitle_font_scale + delta)), 2)
+        if new_scale != self.subtitle_font_scale:
+            self.subtitle_font_scale = new_scale
+            pct = int(self.subtitle_font_scale * 100)
+            print(f"🗚 [자막 크기 조절] {pct}%")
+            if getattr(self, "scale_label", None):
+                self.scale_label.set_text(f"{pct}%")
+            if getattr(self, "subtitle_overlay_element", None):
+                try:
+                    self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
+                except Exception:
+                    pass
+            self.reload_and_apply_subtitles()
+
+    def reset_subtitle_scale(self, _btn=None):
+        """자막 크기를 기본값(100%)으로 복원합니다."""
+        if self.subtitle_font_scale != 1.0:
+            self.subtitle_font_scale = 1.0
+            print("🗚 [자막 크기 조절] 100% (기본값)")
+            if getattr(self, "scale_label", None):
+                self.scale_label.set_text("100%")
+            if getattr(self, "subtitle_overlay_element", None):
+                try:
+                    self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
+                except Exception:
+                    pass
+            self.reload_and_apply_subtitles()
+
+    def adjust_subtitle_sync(self, delta_ms):
+        """자막 싱크를 delta_ms만큼 앞당기거나 늦추고 즉시 화면에 반영합니다."""
+        self.subtitle_offset_ms += delta_ms
+        sec_str = f"{self.subtitle_offset_ms / 1000:+.1f}s"
+        print(f"⏱️ [자막 싱크 조절] {sec_str}")
+        if getattr(self, "sync_label", None):
+            self.sync_label.set_text(sec_str)
+        self.reload_and_apply_subtitles()
+
+    def reset_subtitle_sync(self, _btn=None):
+        """자막 싱크를 기본값(0.0초)으로 복원합니다."""
+        if self.subtitle_offset_ms != 0:
+            self.subtitle_offset_ms = 0
+            print("⏱️ [자막 싱크 조절] 0.0s (기본값)")
+            if getattr(self, "sync_label", None):
+                self.sync_label.set_text("0.0s")
+            self.reload_and_apply_subtitles()
 
     def show_subtitle_popover(self):
         """자막 선택 팝오버를 열거나 닫습니다."""
@@ -1423,7 +1654,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 active_tracks.append((sub['label'], sub['color'], sub['events']))
                 
         if active_tracks and self.subtitles_enabled:
-            merged_file = generate_merged_subtitle_file(active_tracks, video_path)
+            merged_file = generate_merged_subtitle_file(
+                active_tracks, video_path,
+                font_scale=self.subtitle_font_scale,
+                offset_ms=self.subtitle_offset_ms
+            )
             new_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}" if merged_file else None
             
             # GStreamer playbin은 실행 중 suburi 변경 시 내부 파서를 다시 읽지 않으므로,
@@ -1435,10 +1670,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 self.play_current_video(start_position_ns=pos_ns)
             else:
                 self.pipeline.set_property("current-text", 0)
-        else:
-            self.pipeline.set_property("current-text", -1)
-            print("💬 [자막] 표시 꺼짐 (OFF)")
-            
+        if getattr(self, "subtitle_overlay_element", None):
+            try:
+                self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
+            except Exception:
+                pass
+
         self.update_subtitle_button_ui()
 
     def update_subtitle_button_ui(self):
@@ -1461,7 +1698,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             active_cnt = len(self.active_subtitle_indices) if self.subtitles_enabled else 0
             self.sub_button.set_label(f"💬 자막 ({active_cnt}/{total})")
             self.sub_button.set_sensitive(True)
-            self.sub_button.set_tooltip_text(f"다중 자막 선택 메뉴 (S: 토글, C: 선택 창) - {total}개 사용 가능")
+            self.sub_button.set_tooltip_text(f"다중 자막 선택 메뉴 (S: 토글, C: 설정 창, [/]: 크기, Z/X: 싱크) - {total}개 사용 가능")
 
     def toggle_subtitles(self):
         """자막 켜기/끄기 상태를 토글합니다."""
@@ -1506,6 +1743,24 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             return True
         elif keyname in ["c", "C"]:
             self.show_subtitle_popover()
+            return True
+        elif keyname in ["[", "bracketleft"]:
+            self.adjust_subtitle_scale(-0.1)
+            return True
+        elif keyname in ["]", "bracketright"]:
+            self.adjust_subtitle_scale(0.1)
+            return True
+        elif keyname in ["z", "Z"]:
+            self.adjust_subtitle_sync(-500)
+            return True
+        elif keyname in ["x", "X"]:
+            self.adjust_subtitle_sync(500)
+            return True
+        elif keyname in [",", "comma", "less"]:
+            self.adjust_subtitle_sync(-100)
+            return True
+        elif keyname in [".", "period", "greater"]:
+            self.adjust_subtitle_sync(100)
             return True
         elif keyname in ["f", "F"]:
             self.toggle_fullscreen()
