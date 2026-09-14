@@ -13,7 +13,10 @@ from urllib.request import pathname2url
 
 # 환경 변수 자동 설정 (cannot open display 에러 방지)
 if "DISPLAY" not in os.environ:
-    os.environ["DISPLAY"] = ":0"
+    if os.path.exists("/tmp/.X11-unix/X1"):
+        os.environ["DISPLAY"] = ":1"
+    else:
+        os.environ["DISPLAY"] = ":0"
 if "XDG_RUNTIME_DIR" not in os.environ:
     os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
 
@@ -490,12 +493,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.set_keep_above(True)
         self.set_default_size(1280, 720)
         
-        # 이벤트 연결 (종료, 키보드 및 마우스 감지)
+        # 이벤트 연결 (종료, 키보드, 마우스 및 스크롤 감지)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
-        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
         self.connect("motion-notify-event", self.on_mouse_motion)
         self.connect("button-press-event", self.on_window_button_press)
+        self.connect("scroll-event", self.on_scroll_event)
 
         # 2. 입력 경로 타입(폴더 vs 파일)을 분석하여 재생 목록 구성
         self.input_path = input_path
@@ -512,7 +516,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.sidebar_was_visible = True
         self.is_seeking = False
         self.duration_ns = 0
-        self.playlist_rows = []
+        self.tree_store = None
+        self.playlist_treeview = None
+        self.playlist_tree_iters = {}
         self.decoder_names = set()
         self.video_sink = None
         self.stats_ticks = 0
@@ -524,6 +530,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 마우스 커서 숨김 제어 상태
         self.cursor_hide_timer_id = None
         self.is_cursor_hidden = False
+
+        # 재생 속도(Playback Speed/Rate) 상태 변수
+        self.playback_rate = 1.0
+        self.rate_applied_on_preroll = False
+        self.speed_button = None
+        self.speed_popover = None
+        self.fs_speed_button = None
+
+        # 전체화면 플로팅 컨트롤 바 및 OSD 상태 변수
+        self.fs_controls_box = None
+        self.is_fs_controls_visible = False
+        self.is_mouse_over_fs_controls = False
+        self.is_popover_open = False
+        self.osd_box = None
+        self.osd_label = None
+        self.osd_timer_id = None
+        self.fs_progress_scale = None
+        self.fs_position_label = None
+        self.fs_duration_label = None
+        self.fs_play_button = None
+        self.fs_sub_button = None
+        self.fs_volume_scale = None
 
         # 다중 자막(Subtitle) 상태 변수 초기화
         self.subtitles_enabled = True
@@ -567,6 +595,304 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 재생 위치와 UI 상태 갱신 (1초 주기로 최적화하여 X11 UI 경합 방지)
         self.position_timer_id = GLib.timeout_add(1000, self.update_playback_ui)
 
+    def show_osd(self, text, timeout_ms=1200):
+        """화면 상단 중앙에 설정 변경 상태(속도, 탐색 등)를 알려주는 OSD 박스를 표시합니다."""
+        if not getattr(self, "osd_box", None) or not getattr(self, "osd_label", None):
+            return
+        self.osd_label.set_text(text)
+        self.osd_box.show_all()
+        if getattr(self, "osd_timer_id", None):
+            try:
+                GLib.source_remove(self.osd_timer_id)
+            except Exception:
+                pass
+        self.osd_timer_id = GLib.timeout_add(timeout_ms, self._hide_osd)
+
+    def _hide_osd(self):
+        if getattr(self, "osd_box", None):
+            self.osd_box.hide()
+        self.osd_timer_id = None
+        return False
+
+    def set_playback_rate(self, new_rate):
+        """GStreamer 파이프라인에 재생 속도(Playback Rate)를 적용합니다."""
+        new_rate = round(max(0.25, min(3.0, new_rate)), 2)
+        self.playback_rate = new_rate
+        self.rate_applied_on_preroll = True
+
+        if self.pipeline:
+            pos = self.last_known_pos_ns
+            success, q_pos = self.pipeline.query_position(Gst.Format.TIME)
+            if success and q_pos > 0:
+                pos = q_pos
+                self.last_known_pos_ns = q_pos
+
+            flags = Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT
+            res = self.pipeline.seek(
+                self.playback_rate,
+                Gst.Format.TIME,
+                flags,
+                Gst.SeekType.SET,
+                pos,
+                Gst.SeekType.NONE,
+                -1
+            )
+            if not res:
+                print(f"⚠️ 재생 속도 {new_rate:.2f}x 설정 실패")
+            else:
+                print(f"⚡ [재생 속도 변경] {new_rate:.2f}x (현재 위치: {self.format_time(pos)})")
+
+        self.update_speed_button_ui()
+        self.show_osd(f"⚡ 속도: {self.playback_rate:.2f}x")
+
+    def step_playback_rate(self, delta):
+        """현재 재생 속도에서 delta만큼 속도를 증감합니다."""
+        new_rate = self.playback_rate + delta
+        self.set_playback_rate(new_rate)
+
+    def reset_playback_rate(self):
+        """재생 속도를 1.0x (기본값)으로 복원합니다."""
+        self.set_playback_rate(1.0)
+
+    def update_speed_button_ui(self):
+        """재생 속도 버튼 텍스트를 현재 배속에 맞게 갱신합니다."""
+        rate_str = f"{self.playback_rate:.2f}x" if (self.playback_rate * 10) % 1 != 0 else f"{self.playback_rate:.1f}x"
+        if rate_str.endswith(".0x") and self.playback_rate == 1.0:
+            rate_str = "1.0x"
+        if getattr(self, "speed_button", None):
+            self.speed_button.set_label(f"⚡ {rate_str}")
+        if getattr(self, "fs_speed_button", None):
+            self.fs_speed_button.set_label(f"⚡ {rate_str}")
+
+    def build_speed_popover(self, parent_btn):
+        """재생 속도 선택 팝오버 메뉴를 구성합니다."""
+        if getattr(self, "speed_popover", None):
+            try:
+                self.speed_popover.destroy()
+            except Exception:
+                pass
+            self.speed_popover = None
+
+        self.speed_popover = Gtk.Popover(relative_to=parent_btn)
+        self.speed_popover.set_position(Gtk.PositionType.TOP)
+        self.speed_popover.set_border_width(12)
+
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+
+        title = Gtk.Label(label="⚡ 재생 속도 조절", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        container.pack_start(title, False, False, 2)
+
+        # 프리셋 속도 버튼 목록
+        presets_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        presets_box.get_style_context().add_class("sub-btn-row")
+        for spd in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]:
+            btn = Gtk.Button(label=f"{spd}x")
+            if abs(self.playback_rate - spd) < 0.01:
+                btn.get_style_context().add_class("primary")
+            btn.connect("clicked", lambda _b, s=spd: (self.set_playback_rate(s), self.speed_popover.popdown()))
+            presets_box.pack_start(btn, True, True, 0)
+        container.pack_start(presets_box, False, False, 2)
+
+        # 미세 조절 바
+        step_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        step_box.get_style_context().add_class("sub-btn-row")
+
+        dec_btn = Gtk.Button(label="˗ 느리게 (-0.25x)")
+        dec_btn.connect("clicked", lambda _b: self.step_playback_rate(-0.25))
+        step_box.pack_start(dec_btn, True, True, 0)
+
+        reset_btn = Gtk.Button(label="1.0x (기본)")
+        reset_btn.connect("clicked", lambda _b: (self.reset_playback_rate(), self.speed_popover.popdown()))
+        step_box.pack_start(reset_btn, True, True, 0)
+
+        inc_btn = Gtk.Button(label="˖ 빠르게 (+0.25x)")
+        inc_btn.connect("clicked", lambda _b: self.step_playback_rate(0.25))
+        step_box.pack_start(inc_btn, True, True, 0)
+
+        container.pack_start(step_box, False, False, 2)
+
+        hint = Gtk.Label(label="단축키: Up/Down 또는 d/a (속도 조절), r (1.0x 복원)", xalign=0)
+        hint.get_style_context().add_class("muted")
+        container.pack_start(hint, False, False, 2)
+
+        container.show_all()
+        self.speed_popover.add(container)
+
+        def on_pop_closed(_pop):
+            self.is_popover_open = False
+        self.speed_popover.connect("closed", on_pop_closed)
+
+    def on_speed_button_clicked(self, widget):
+        self.build_speed_popover(widget)
+        self.is_popover_open = True
+        self.speed_popover.popup()
+
+    def on_scroll_event(self, widget, event):
+        """마우스 휠 스크롤 시 10초 앞/뒤로 seek 이동합니다."""
+        if event.direction == Gdk.ScrollDirection.UP:
+            self.seek_relative(10)
+            return True
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            self.seek_relative(-10)
+            return True
+        elif event.direction == Gdk.ScrollDirection.SMOOTH:
+            if event.delta_y < -0.1:
+                self.seek_relative(10)
+                return True
+            elif event.delta_y > 0.1:
+                self.seek_relative(-10)
+                return True
+        return False
+
+    def build_fs_controls(self):
+        """전체화면(Fullscreen) 모드 전용 플로팅 컨트롤 바 위젯을 생성합니다."""
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        panel.get_style_context().add_class("fs-controls")
+
+        # 타임라인
+        timeline = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.fs_position_label = Gtk.Label(label="00:00")
+        self.fs_position_label.get_style_context().add_class("muted")
+
+        self.fs_progress_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 0.1)
+        self.fs_progress_scale.set_draw_value(False)
+        self.fs_progress_scale.set_hexpand(True)
+        self.fs_progress_scale.connect("button-press-event", self.on_seek_start)
+        self.fs_progress_scale.connect("button-release-event", self.on_fs_seek_end)
+
+        self.fs_duration_label = Gtk.Label(label="00:00")
+        self.fs_duration_label.get_style_context().add_class("muted")
+
+        timeline.pack_start(self.fs_position_label, False, False, 0)
+        timeline.pack_start(self.fs_progress_scale, True, True, 0)
+        timeline.pack_start(self.fs_duration_label, False, False, 0)
+        panel.pack_start(timeline, False, False, 0)
+
+        # 액션 버튼 열
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        prev_btn = Gtk.Button(label="⏮")
+        prev_btn.set_tooltip_text("이전 영상 (P)")
+        prev_btn.connect("clicked", lambda _b: self.play_prev_video())
+
+        rewind_btn = Gtk.Button(label="↶ 10")
+        rewind_btn.set_tooltip_text("10초 뒤로 (←)")
+        rewind_btn.connect("clicked", lambda _b: self.seek_relative(-10))
+
+        self.fs_play_button = Gtk.Button(label="Ⅱ")
+        self.fs_play_button.get_style_context().add_class("primary")
+        self.fs_play_button.set_tooltip_text("재생/일시정지 (Space)")
+        self.fs_play_button.connect("clicked", lambda _b: self.toggle_play_pause())
+
+        forward_btn = Gtk.Button(label="10 ↷")
+        forward_btn.set_tooltip_text("10초 앞으로 (→)")
+        forward_btn.connect("clicked", lambda _b: self.seek_relative(10))
+
+        next_btn = Gtk.Button(label="⏭")
+        next_btn.set_tooltip_text("다음 영상 (N)")
+        next_btn.connect("clicked", lambda _b: self.play_next_video())
+
+        for b in (prev_btn, rewind_btn, self.fs_play_button, forward_btn, next_btn):
+            actions.pack_start(b, False, False, 0)
+
+        # 속도 조절
+        fs_speed_down = Gtk.Button(label="˗")
+        fs_speed_down.set_tooltip_text("재생 속도 감소 (단축키: Down 또는 a)")
+        fs_speed_down.connect("clicked", lambda _b: self.step_playback_rate(-0.25))
+
+        self.fs_speed_button = Gtk.Button(label="1.0x")
+        self.fs_speed_button.get_style_context().add_class("speed-btn")
+        self.fs_speed_button.set_tooltip_text("재생 속도 조절 (단축키: Up/Down 또는 d/a, r: 1.0x)")
+        self.fs_speed_button.connect("clicked", self.on_speed_button_clicked)
+
+        fs_speed_up = Gtk.Button(label="˖")
+        fs_speed_up.set_tooltip_text("재생 속도 증가 (단축키: Up 또는 d)")
+        fs_speed_up.connect("clicked", lambda _b: self.step_playback_rate(0.25))
+
+        actions.pack_start(fs_speed_down, False, False, 0)
+        actions.pack_start(self.fs_speed_button, False, False, 0)
+        actions.pack_start(fs_speed_up, False, False, 0)
+
+        spacer = Gtk.Box()
+        actions.pack_start(spacer, True, True, 0)
+
+        # 볼륨
+        vol_ico = Gtk.Label(label="◖)))")
+        vol_ico.get_style_context().add_class("muted")
+        actions.pack_start(vol_ico, False, False, 4)
+
+        self.fs_volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.fs_volume_scale.set_size_request(90, -1)
+        self.fs_volume_scale.set_draw_value(False)
+        self.fs_volume_scale.set_value(100)
+        self.fs_volume_scale.connect("value-changed", self.on_fs_volume_changed)
+        actions.pack_start(self.fs_volume_scale, False, False, 0)
+
+        # 자막
+        self.fs_sub_button = Gtk.Button(label="💬 자막")
+        self.fs_sub_button.set_tooltip_text("자막 켜기/끄기 (S)")
+        self.fs_sub_button.connect("clicked", self.on_sub_button_clicked)
+        actions.pack_end(self.fs_sub_button, False, False, 4)
+
+        # 창 모드로 복귀
+        fs_toggle_btn = Gtk.Button(label="⧉")
+        fs_toggle_btn.set_tooltip_text("창 모드로 복귀 (F / Esc)")
+        fs_toggle_btn.connect("clicked", lambda _b: self.toggle_fullscreen())
+        actions.pack_end(fs_toggle_btn, False, False, 0)
+
+        panel.pack_start(actions, False, False, 0)
+
+        panel.connect("enter-notify-event", self._on_fs_controls_enter)
+        panel.connect("leave-notify-event", self._on_fs_controls_leave)
+
+        return panel
+
+    def _on_fs_controls_enter(self, widget, event):
+        self.is_mouse_over_fs_controls = True
+        if getattr(self, "cursor_hide_timer_id", None):
+            try:
+                GLib.source_remove(self.cursor_hide_timer_id)
+            except Exception:
+                pass
+            self.cursor_hide_timer_id = None
+        return False
+
+    def _on_fs_controls_leave(self, widget, event):
+        self.is_mouse_over_fs_controls = False
+        if self.is_video_only:
+            if getattr(self, "cursor_hide_timer_id", None):
+                try:
+                    GLib.source_remove(self.cursor_hide_timer_id)
+                except Exception:
+                    pass
+            self.cursor_hide_timer_id = GLib.timeout_add(2500, self._on_hide_timer_tick)
+        return False
+
+    def on_fs_seek_end(self, scale, _event):
+        if self.pipeline and self.duration_ns > 0:
+            target = int(self.duration_ns * scale.get_value() / 100)
+            self.last_known_pos_ns = target
+            self.pipeline.seek(
+                self.playback_rate,
+                Gst.Format.TIME,
+                Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                Gst.SeekType.SET,
+                target,
+                Gst.SeekType.NONE,
+                -1
+            )
+            self.show_osd(f"⏱️ {self.format_time(target)} / {self.format_time(self.duration_ns)}")
+        self.is_seeking = False
+        return False
+
+    def on_fs_volume_changed(self, scale):
+        val = scale.get_value()
+        if hasattr(self, "volume_scale") and abs(self.volume_scale.get_value() - val) > 0.5:
+            self.volume_scale.set_value(val)
+        if self.pipeline:
+            self.pipeline.set_property("volume", val / 100.0)
+
     def build_ui(self):
         """Jetson EGL 출력과 충돌하지 않는 네이티브 GTK 플레이어 UI를 구성합니다."""
         css = b"""
@@ -597,6 +923,43 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         .sub-btn-row button:hover { background: #2a3344; }
         checkbutton { color: #dce2ec; font-size: 12px; }
         checkbutton:hover { color: #ffffff; }
+        .fs-controls { background: rgba(17, 21, 29, 0.92); border: 1px solid #303744; border-radius: 12px; padding: 8px 14px; margin: 12px; }
+        .osd-box { background: rgba(14, 17, 23, 0.88); border: 1px solid #3b4455; border-radius: 9px; padding: 10px 24px; margin-top: 25px; }
+        .osd-text { font-size: 19px; font-weight: 800; color: #e9ff5b; }
+        .speed-btn { font-weight: 700; color: #e9ff5b; min-width: 48px; }
+        .speed-btn:hover { background: #252b36; }
+        treeview {
+            background-color: #0e1117;
+            color: #dce2ec;
+            border: none;
+            font-size: 13px;
+        }
+        treeview:selected {
+            background-color: #242b35;
+            color: #ffffff;
+        }
+        treeview:hover {
+            background-color: #161b24;
+        }
+        treeview.view {
+            background-color: #0e1117;
+            color: #dce2ec;
+        }
+        treeview.view:selected {
+            background-color: #242b35;
+            color: #ffffff;
+        }
+        .tree-tool-btn {
+            background: #1a202c;
+            border-radius: 5px;
+            padding: 3px 8px;
+            font-size: 11px;
+            color: #a0aec0;
+        }
+        .tree-tool-btn:hover {
+            background: #2d3748;
+            color: #ffffff;
+        }
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
@@ -628,7 +991,30 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         root.pack_start(self.topbar, False, False, 0)
 
         content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        content.pack_start(self.video_widget, True, True, 0)
+
+        # 비디오 위젯 및 오버레이(OSD, 전체화면 플로팅 컨트롤) 컨테이너
+        self.video_container = Gtk.Overlay()
+        self.video_container.add(self.video_widget)
+
+        # 1) OSD 라벨 오버레이 (화면 상단 중앙)
+        self.osd_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.osd_box.get_style_context().add_class("osd-box")
+        self.osd_box.set_halign(Gtk.Align.CENTER)
+        self.osd_box.set_valign(Gtk.Align.START)
+        self.osd_label = Gtk.Label()
+        self.osd_label.get_style_context().add_class("osd-text")
+        self.osd_box.add(self.osd_label)
+        self.osd_box.set_no_show_all(True)
+        self.video_container.add_overlay(self.osd_box)
+
+        # 2) 전체화면 플로팅 컨트롤 바 오버레이 (화면 하단)
+        self.fs_controls_box = self.build_fs_controls()
+        self.fs_controls_box.set_halign(Gtk.Align.FILL)
+        self.fs_controls_box.set_valign(Gtk.Align.END)
+        self.fs_controls_box.set_no_show_all(True)
+        self.video_container.add_overlay(self.fs_controls_box)
+
+        content.pack_start(self.video_container, True, True, 0)
         self.sidebar = self.build_playlist_panel()
         content.pack_end(self.sidebar, False, False, 0)
         root.pack_start(content, True, True, 0)
@@ -672,6 +1058,23 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         for button in (prev_button, rewind_button, self.play_button, forward_button, next_button):
             actions.pack_start(button, False, False, 0)
 
+        # 속도 조절 버튼 ([-] 1.0x [+])
+        speed_down_btn = Gtk.Button(label="˗")
+        speed_down_btn.set_tooltip_text("재생 속도 감소 (단축키: Down 또는 a)")
+        speed_down_btn.connect("clicked", lambda _b: self.step_playback_rate(-0.25))
+        actions.pack_start(speed_down_btn, False, False, 0)
+
+        self.speed_button = Gtk.Button(label="1.0x")
+        self.speed_button.get_style_context().add_class("speed-btn")
+        self.speed_button.set_tooltip_text("재생 속도 설정 (단축키: Up/Down 또는 d/a, r: 1.0x)")
+        self.speed_button.connect("clicked", self.on_speed_button_clicked)
+        actions.pack_start(self.speed_button, False, False, 0)
+
+        speed_up_btn = Gtk.Button(label="˖")
+        speed_up_btn.set_tooltip_text("재생 속도 증가 (단축키: Up 또는 d)")
+        speed_up_btn.connect("clicked", lambda _b: self.step_playback_rate(0.25))
+        actions.pack_start(speed_up_btn, False, False, 0)
+
         spacer = Gtk.Box()
         actions.pack_start(spacer, True, True, 0)
         volume_icon = Gtk.Label(label="◖)))")
@@ -701,64 +1104,207 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def build_playlist_panel(self):
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         panel.get_style_context().add_class("sidebar")
-        panel.set_size_request(310, -1)
-        panel.set_border_width(14)
-        heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        panel.set_size_request(320, -1)
+        panel.set_border_width(12)
+
+        heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         title = Gtk.Label(label="재생목록", xalign=0)
         title.get_style_context().add_class("section-title")
         count = Gtk.Label(label=f"{len(self.playlist)}개 영상", xalign=1)
         count.get_style_context().add_class("muted")
         heading.pack_start(title, True, True, 0)
         heading.pack_end(count, False, False, 0)
-        panel.pack_start(heading, False, False, 4)
+        panel.pack_start(heading, False, False, 2)
+
+        if not self.is_single_file_mode:
+            tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            exp_btn = Gtk.Button(label="전체 펼치기")
+            exp_btn.get_style_context().add_class("tree-tool-btn")
+            exp_btn.connect("clicked", lambda _b: self.playlist_treeview.expand_all())
+            col_btn = Gtk.Button(label="전체 접기")
+            col_btn.get_style_context().add_class("tree-tool-btn")
+            col_btn.connect("clicked", lambda _b: self.collapse_playlist_tree())
+            tools.pack_start(exp_btn, True, True, 0)
+            tools.pack_start(col_btn, True, True, 0)
+            panel.pack_start(tools, False, False, 2)
 
         scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.playlist_box = Gtk.ListBox()
-        self.playlist_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.playlist_box.set_activate_on_single_click(True)
-        self.playlist_box.connect("row-activated", self.on_playlist_row_activated)
-        for index, path in enumerate(self.playlist):
-            row = Gtk.ListBoxRow()
-            row.get_style_context().add_class("playlist-row")
-            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            number = Gtk.Label(label=f"{index + 1:02d}")
-            number.get_style_context().add_class("track-number")
-            name = Gtk.Label(label=os.path.basename(path), xalign=0)
-            name.set_ellipsize(3)
-            name.set_tooltip_text(path)
-            name.get_style_context().add_class("track-title")
-            line.pack_start(number, False, False, 0)
-            line.pack_start(name, True, True, 0)
-            row.add(line)
-            self.playlist_box.add(row)
-            self.playlist_rows.append(row)
-        scroll.add(self.playlist_box)
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+
+        self.tree_store = Gtk.TreeStore(str, str, str, int, bool)
+        self.playlist_treeview = Gtk.TreeView(model=self.tree_store)
+        self.playlist_treeview.set_headers_visible(False)
+        self.playlist_treeview.set_activate_on_single_click(True)
+        self.playlist_treeview.connect("row-activated", self.on_tree_row_activated)
+        self.playlist_treeview.connect("row-expanded", self.on_tree_row_expanded)
+        self.playlist_treeview.connect("row-collapsed", self.on_tree_row_collapsed)
+
+        col = Gtk.TreeViewColumn("Track")
+        r_icon = Gtk.CellRendererText()
+        r_icon.set_property("xpad", 4)
+        col.pack_start(r_icon, False)
+        col.add_attribute(r_icon, "text", 0)
+
+        r_text = Gtk.CellRendererText()
+        r_text.set_property("ellipsize", 3)
+        r_text.set_property("ypad", 6)
+        col.pack_start(r_text, True)
+        col.add_attribute(r_text, "markup", 1)
+        self.playlist_treeview.append_column(col)
+
+        self.populate_playlist_tree()
+
+        scroll.add(self.playlist_treeview)
         panel.pack_start(scroll, True, True, 0)
         return panel
+
+    def populate_playlist_tree(self):
+        """재생목록을 디렉토리 계층 구조의 트리로 구축합니다."""
+        if not self.tree_store:
+            return
+        self.tree_store.clear()
+        self.playlist_tree_iters.clear()
+
+        abs_root = os.path.abspath(self.input_path) if os.path.isdir(self.input_path) else None
+
+        if not abs_root:
+            for idx, p in enumerate(self.playlist):
+                fname = os.path.basename(p)
+                safe_name = GLib.markup_escape_text(fname)
+                v_iter = self.tree_store.append(
+                    None,
+                    ["🎬", f"<span>{safe_name}</span>", p, idx, False]
+                )
+                self.playlist_tree_iters[idx] = v_iter
+            return
+
+        # 1. 디렉토리별 하위 영상 파일 수 카운트
+        dir_counts = {}
+        for p in self.playlist:
+            rel_p = os.path.relpath(p, abs_root)
+            parts = rel_p.split(os.sep)[:-1]
+            for i in range(1, len(parts) + 1):
+                d = os.sep.join(parts[:i])
+                dir_counts[d] = dir_counts.get(d, 0) + 1
+
+        # 2. 계층형 폴더 및 비디오 노드 추가
+        dir_iters = {}
+        for idx, p in enumerate(self.playlist):
+            rel_p = os.path.relpath(p, abs_root)
+            parts = rel_p.split(os.sep)
+            fname = parts[-1]
+            dir_parts = parts[:-1]
+
+            cur_p = ""
+            parent_iter = None
+            for d in dir_parts:
+                cur_p = os.path.join(cur_p, d) if cur_p else d
+                if cur_p not in dir_iters:
+                    cnt = dir_counts.get(cur_p, 0)
+                    safe_d = GLib.markup_escape_text(d)
+                    lbl = f"<b>{safe_d}</b> <span color='#70798a' size='smaller'>({cnt})</span>"
+                    d_iter = self.tree_store.append(
+                        parent_iter,
+                        ["📁", lbl, cur_p, -1, True]
+                    )
+                    dir_iters[cur_p] = d_iter
+                    parent_iter = d_iter
+                else:
+                    parent_iter = dir_iters[cur_p]
+
+            safe_name = GLib.markup_escape_text(fname)
+            v_iter = self.tree_store.append(
+                parent_iter,
+                ["🎬", f"<span>{safe_name}</span>", p, idx, False]
+            )
+            self.playlist_tree_iters[idx] = v_iter
 
     def on_playlist_toggle(self, _button):
         self.sidebar.set_visible(not self.sidebar.get_visible())
 
-    def on_playlist_row_activated(self, _listbox, row):
-        index = row.get_index()
-        if index != self.current_index:
-            self.current_index = index
-            self.play_current_video()
+    def on_tree_row_activated(self, treeview, path, _column):
+        """트리 항목 클릭 시: 폴더는 펼치기/접기 토글, 비디오 파일은 즉시 재생"""
+        model = treeview.get_model()
+        tree_iter = model.get_iter(path)
+        is_dir = model.get_value(tree_iter, 4)
+        if is_dir:
+            if treeview.row_expanded(path):
+                treeview.collapse_row(path)
+            else:
+                treeview.expand_row(path, False)
+        else:
+            idx = model.get_value(tree_iter, 3)
+            if idx != self.current_index and 0 <= idx < len(self.playlist):
+                self.current_index = idx
+                self.play_current_video()
+
+    def on_tree_row_expanded(self, _treeview, tree_iter, _path):
+        if self.tree_store and self.tree_store.get_value(tree_iter, 4):
+            self.tree_store.set_value(tree_iter, 0, "📂")
+
+    def on_tree_row_collapsed(self, _treeview, tree_iter, _path):
+        if self.tree_store and self.tree_store.get_value(tree_iter, 4):
+            self.tree_store.set_value(tree_iter, 0, "📁")
+
+    def collapse_playlist_tree(self):
+        """전체 폴더를 접되, 현재 재생 중인 영상의 폴더는 열어둡니다."""
+        if self.playlist_treeview:
+            self.playlist_treeview.collapse_all()
+            if 0 <= self.current_index < len(self.playlist):
+                cur_iter = self.playlist_tree_iters.get(self.current_index)
+                if cur_iter and self.tree_store.iter_is_valid(cur_iter):
+                    path = self.tree_store.get_path(cur_iter)
+                    self.playlist_treeview.expand_to_path(path)
+                    self.playlist_treeview.scroll_to_cell(path, None, True, 0.5, 0.0)
 
     def refresh_playlist_ui(self):
         if not self.playlist:
             return
-        filename = os.path.basename(self.playlist[self.current_index])
+        current_path = self.playlist[self.current_index]
+        abs_root = os.path.abspath(self.input_path) if os.path.isdir(self.input_path) else None
+        if abs_root:
+            display_name = os.path.relpath(current_path, abs_root)
+        else:
+            display_name = os.path.basename(current_path)
+
         self.now_playing_label.set_text(
-            f"재생 중  ·  {filename}   {self.current_index + 1}/{len(self.playlist)}"
+            f"재생 중  ·  {display_name}   {self.current_index + 1}/{len(self.playlist)}"
         )
-        for index, row in enumerate(self.playlist_rows):
-            context = row.get_style_context()
-            if index == self.current_index:
-                context.add_class("playlist-row-active")
+
+        if not self.tree_store or not self.playlist_tree_iters:
+            return
+
+        active_iter = None
+        for idx, tree_iter in self.playlist_tree_iters.items():
+            if not self.tree_store.iter_is_valid(tree_iter):
+                continue
+            path_val = self.tree_store.get_value(tree_iter, 2)
+            fname = os.path.basename(path_val)
+            safe_name = GLib.markup_escape_text(fname)
+
+            if idx == self.current_index:
+                active_iter = tree_iter
+                self.tree_store.set_value(tree_iter, 0, "▶")
+                self.tree_store.set_value(
+                    tree_iter,
+                    1,
+                    f"<span color='#e9ff5b' weight='bold'>{safe_name}</span>"
+                )
             else:
-                context.remove_class("playlist-row-active")
+                self.tree_store.set_value(tree_iter, 0, "🎬")
+                self.tree_store.set_value(
+                    tree_iter,
+                    1,
+                    f"<span color='#dce2ec'>{safe_name}</span>"
+                )
+
+        if active_iter and self.playlist_treeview:
+            tree_path = self.tree_store.get_path(active_iter)
+            if tree_path:
+                self.playlist_treeview.expand_to_path(tree_path)
+                sel = self.playlist_treeview.get_selection()
+                sel.select_iter(active_iter)
+                GLib.idle_add(lambda: self.playlist_treeview.scroll_to_cell(tree_path, None, True, 0.5, 0.0))
 
     @staticmethod
     def format_time(nanoseconds):
@@ -778,8 +1324,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         # 초(second) 단위가 바뀌었을 때만 GTK UI를 갱신하여 X11 Re-draw 부하 제거
         if position_ok and pos_sec != self.last_ui_pos_sec:
             self.last_ui_pos_sec = pos_sec
+            time_str = self.format_time(position)
+
+            # 1) 일반 모드 컨트롤 UI 갱신
             if not self.is_video_only:
-                self.position_label.set_text(self.format_time(position))
+                self.position_label.set_text(time_str)
                 if self.duration_ns == 0:
                     duration_ok, duration = self.pipeline.query_duration(Gst.Format.TIME)
                     if duration_ok and duration > 0:
@@ -787,6 +1336,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                         self.duration_label.set_text(self.format_time(duration))
                 if self.duration_ns > 0 and not self.is_seeking:
                     self.progress_scale.set_value(min(100, position * 100 / self.duration_ns))
+
+            # 2) 전체화면 플로팅 컨트롤 UI 갱신
+            if getattr(self, "fs_position_label", None):
+                self.fs_position_label.set_text(time_str)
+            if getattr(self, "fs_duration_label", None):
+                if self.duration_ns > 0:
+                    self.fs_duration_label.set_text(self.format_time(self.duration_ns))
+            if getattr(self, "fs_progress_scale", None) and self.duration_ns > 0 and not self.is_seeking:
+                self.fs_progress_scale.set_value(min(100, position * 100 / self.duration_ns))
 
         self.stats_ticks += 1
         if self.video_sink and self.stats_ticks % 10 == 0 and self.video_sink.find_property("stats"):
@@ -807,15 +1365,25 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if self.pipeline and self.duration_ns > 0:
             target = int(self.duration_ns * scale.get_value() / 100)
             self.last_known_pos_ns = target
-            self.pipeline.seek_simple(
-                Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE, target
+            self.pipeline.seek(
+                self.playback_rate,
+                Gst.Format.TIME,
+                Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                Gst.SeekType.SET,
+                target,
+                Gst.SeekType.NONE,
+                -1
             )
+            self.show_osd(f"⏱️ {self.format_time(target)} / {self.format_time(self.duration_ns)}")
         self.is_seeking = False
         return False
 
     def on_volume_changed(self, scale):
+        val = scale.get_value()
+        if hasattr(self, "fs_volume_scale") and abs(self.fs_volume_scale.get_value() - val) > 0.5:
+            self.fs_volume_scale.set_value(val)
         if self.pipeline:
-            self.pipeline.set_property("volume", scale.get_value() / 100.0)
+            self.pipeline.set_property("volume", val / 100.0)
 
     def hide_cursor(self):
         """마우스 커서를 투명(숨김) 커서로 설정합니다."""
@@ -848,16 +1416,32 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_cursor_hidden = False
 
     def on_mouse_motion(self, widget, event):
-        """마우스 움직임 감지 시 커서를 표시하고 2.5초 후 자동 숨김 타이머를 재설정합니다."""
+        """마우스 움직임 감지 시 커서를 표시하고 전체화면일 때 컨트롤 바를 띄운 후 2.5초 후 자동 숨김 타이머를 재설정합니다."""
         if self.is_video_only:
             if self.is_cursor_hidden:
                 self.show_cursor()
+            if getattr(self, "fs_controls_box", None) and not self.is_fs_controls_visible:
+                self.fs_controls_box.show_all()
+                self.is_fs_controls_visible = True
+
             if getattr(self, "cursor_hide_timer_id", None):
                 try:
                     GLib.source_remove(self.cursor_hide_timer_id)
                 except Exception:
                     pass
-            self.cursor_hide_timer_id = GLib.timeout_add(2500, self.hide_cursor)
+            self.cursor_hide_timer_id = GLib.timeout_add(2500, self._on_hide_timer_tick)
+        return False
+
+    def _on_hide_timer_tick(self):
+        """2.5초 동안 마우스 조작이 없을 때 전체화면 컨트롤 바와 커서를 숨깁니다."""
+        if self.is_video_only:
+            if getattr(self, "is_mouse_over_fs_controls", False) or getattr(self, "is_popover_open", False):
+                return True
+            if getattr(self, "fs_controls_box", None) and self.is_fs_controls_visible:
+                self.fs_controls_box.hide()
+                self.is_fs_controls_visible = False
+            self.hide_cursor()
+        self.cursor_hide_timer_id = None
         return False
 
     def on_window_button_press(self, widget, event):
@@ -876,6 +1460,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.topbar.hide()
             self.sidebar.hide()
             self.controls.hide()
+            if getattr(self, "fs_controls_box", None):
+                self.fs_controls_box.hide()
+                self.is_fs_controls_visible = False
             self.fullscreen()
             self.set_keep_above(True)
             self.is_fullscreen = True
@@ -883,16 +1470,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.fullscreen_button.set_label("⧉")
             # 전체화면 전환 시 마우스 커서 즉시 숨김
             self.hide_cursor()
-            print("🖥️ 영상 전용 전체화면 (마우스 커서 자동 숨김)")
+            self.show_osd("🖥️ 전체화면 (영상 전용)")
+            print("🖥️ 영상 전용 전체화면 (마우스 조작 시 컨트롤 표시)")
         else:
             self.topbar.show()
             self.controls.show()
             if self.sidebar_was_visible:
                 self.sidebar.show()
+            if getattr(self, "fs_controls_box", None):
+                self.fs_controls_box.hide()
+                self.is_fs_controls_visible = False
             self.is_video_only = False
             self.fullscreen_button.set_label("⛶")
             # 일반 모드 복귀 시 마우스 커서 복원
             self.show_cursor()
+            self.show_osd("🖥️ 창 모드 복귀")
             print("🖥️ 플레이어 UI 표시")
 
     def get_current_subtitle_font_desc(self):
@@ -1136,12 +1728,18 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.is_single_file_mode = False
             video_exts = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
             try:
-                for fname in os.listdir(abs_path):
-                    _stem, ext = os.path.splitext(fname)
-                    if ext.lower() in video_exts:
-                        full_p = os.path.join(abs_path, fname)
-                        if os.path.isfile(full_p):
-                            raw_playlist.append(full_p)
+                for root, dirs, files in os.walk(abs_path, followlinks=True):
+                    # 백업 디렉토리(unsupported_originals) 및 숨김 폴더는 탐색에서 제외
+                    dirs[:] = sorted([d for d in dirs if d != "unsupported_originals" and not d.startswith('.')])
+                    files.sort()
+                    for fname in files:
+                        if fname.startswith('.'):
+                            continue
+                        _stem, ext = os.path.splitext(fname)
+                        if ext.lower() in video_exts:
+                            full_p = os.path.join(root, fname)
+                            if os.path.isfile(full_p):
+                                raw_playlist.append(full_p)
             except Exception as e:
                 print(f"❌ 디렉토리 읽기 실패 ({abs_path}): {e}")
                 sys.exit(1)
@@ -1178,7 +1776,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
         print(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 NVDEC 가속 영상을 재생합니다.")
         for idx, path in enumerate(self.playlist):
-            print(f"   [{idx}] {os.path.basename(path)}")
+            disp = os.path.relpath(path, abs_path) if not self.is_single_file_mode else os.path.basename(path)
+            print(f"   [{idx}] {disp}")
 
     def on_realize(self, widget):
         """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작합니다."""
@@ -1195,14 +1794,23 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def play_current_video(self, start_position_ns=0):
         """[성능 최적화] 영상 전환 및 다중 자막 변경 시 파이프라인 자원을 완전 세척 후 신규 구축합니다."""
         video_path = self.playlist[self.current_index]
+        self.rate_applied_on_preroll = False
         
         if start_position_ns == 0:
-            print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {os.path.basename(video_path)}")
+            abs_root = os.path.abspath(self.input_path) if os.path.isdir(self.input_path) else None
+            disp = os.path.relpath(video_path, abs_root) if abs_root else os.path.basename(video_path)
+            print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {disp}")
             self.refresh_playlist_ui()
             self.duration_ns = 0
             self.progress_scale.set_value(0)
             self.position_label.set_text("00:00")
             self.duration_label.set_text("00:00")
+            if getattr(self, "fs_progress_scale", None):
+                self.fs_progress_scale.set_value(0)
+            if getattr(self, "fs_position_label", None):
+                self.fs_position_label.set_text("00:00")
+            if getattr(self, "fs_duration_label", None):
+                self.fs_duration_label.set_text("00:00")
             self.decoder_names.clear()
             self.last_dropped_frames = 0
             self.last_ui_pos_sec = -1
@@ -1224,9 +1832,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
             self.active_subtitle_indices = set()
             if self.available_subtitles:
-                self.active_subtitle_indices.add(0)
+                # 영상이 새로 재생될 때 모든 언어 자막을 기본으로 모두 불러와서 다중 표출
+                self.active_subtitle_indices = set(range(len(self.available_subtitles)))
                 self.has_subtitles = True
-                print(f"💬 [자막 발견 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
+                self.subtitles_enabled = True
+                print(f"💬 [다중 자막 자동 활성화 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
             else:
                 self.has_subtitles = False
 
@@ -1283,24 +1893,43 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.current_suburi = None
 
         # Totem 공식 네이티브 GTK OpenGL 비디오 싱크 할당 (60Hz V-Sync 완벽 일치 & 4K 1:1 선명도 보장)
+        # 배속 재생 시 지연 프레임으로 인한 파이프라인 정체를 방지하기 위해 qos=True 및 max-lateness=50ms 설정
         if self.video_sink:
             if self.video_sink.find_property("sync"):
                 self.video_sink.set_property("sync", True)
             if self.video_sink.find_property("qos"):
-                self.video_sink.set_property("qos", False)
+                self.video_sink.set_property("qos", True)
             if self.video_sink.find_property("max-lateness"):
-                self.video_sink.set_property("max-lateness", -1)
+                self.video_sink.set_property("max-lateness", 50 * Gst.MSECOND)
             self.pipeline.set_property("video-sink", self.video_sink)
 
-        # autoaudiosink가 실제 사용 가능한 PulseAudio/ALSA 장치를 선택하게 합니다.
-        for sink_name in ["autoaudiosink", "fakesink"]:
-            asink = Gst.ElementFactory.make(sink_name, "asink")
-            if asink:
-                if sink_name != "fakesink":
-                    if asink.find_property("sync"):
-                        asink.set_property("sync", True)
-                self.pipeline.set_property("audio-sink", asink)
-                break
+        # scaletempo가 포함된 커스텀 오디오 싱크 bin 생성 (배속 재생 시 끊김 및 음정 왜곡 없는 완벽한 사운드 보장)
+        audio_bin = Gst.Bin.new("audio_sink_bin")
+        aconv = Gst.ElementFactory.make("audioconvert", "aconv")
+        scaletempo = Gst.ElementFactory.make("scaletempo", "scaletempo")
+        aresample = Gst.ElementFactory.make("audioresample", "aresample")
+        asink = Gst.ElementFactory.make("autoaudiosink", "asink")
+        if not asink:
+            asink = Gst.ElementFactory.make("fakesink", "asink")
+        if asink and asink.find_property("sync"):
+            asink.set_property("sync", True)
+
+        if aconv and scaletempo and aresample and asink:
+            audio_bin.add(aconv)
+            audio_bin.add(scaletempo)
+            audio_bin.add(aresample)
+            audio_bin.add(asink)
+            aconv.link(scaletempo)
+            scaletempo.link(aresample)
+            aresample.link(asink)
+
+            pad = aconv.get_static_pad("sink")
+            ghost_pad = Gst.GhostPad.new("sink", pad)
+            ghost_pad.set_active(True)
+            audio_bin.add_pad(ghost_pad)
+            self.pipeline.set_property("audio-sink", audio_bin)
+        elif asink:
+            self.pipeline.set_property("audio-sink", asink)
 
         # 버스 이벤트 연결
         self.bus = self.pipeline.get_bus()
@@ -1317,6 +1946,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.pipeline.set_property("current-text", -1)
 
         self.update_subtitle_button_ui()
+        self.update_speed_button_ui()
 
         # 재생 중간 위치에서 자막을 재로드할 경우, 비디오/오디오/자막 스트림의 완벽한 Preroll을 위해
         # PAUSED 상태로 진입 후 ASYNC_DONE에서 정밀 Seek를 수행하고 PLAYING으로 전환합니다.
@@ -1327,6 +1957,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             
         self.is_playing = True
         self.play_button.set_label("Ⅱ")
+        if getattr(self, "fs_play_button", None):
+            self.fs_play_button.set_label("Ⅱ")
         
         return False
 
@@ -1385,19 +2017,36 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if getattr(self, "pending_seek_ns", 0) > 0 and self.pipeline:
                 seek_ns = self.pending_seek_ns
                 self.pending_seek_ns = 0
-                # 비디오/오디오/자막 전체 파이프라인에 FLUSH & ACCURATE Seek를 전달하여 
-                # 과거 Preroll 자막을 완전히 날리고 정확한 현재 시점 자막으로 동기화
-                self.pipeline.seek_simple(
+                self.rate_applied_on_preroll = True
+                self.pipeline.seek(
+                    self.playback_rate,
                     Gst.Format.TIME,
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
-                    seek_ns
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                    Gst.SeekType.SET,
+                    seek_ns,
+                    Gst.SeekType.NONE,
+                    -1
                 )
                 self.pipeline.set_state(Gst.State.PLAYING)
+            elif not getattr(self, "rate_applied_on_preroll", False) and getattr(self, "playback_rate", 1.0) != 1.0 and self.pipeline:
+                self.rate_applied_on_preroll = True
+                self.pipeline.seek(
+                    self.playback_rate,
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                    Gst.SeekType.SET,
+                    0,
+                    Gst.SeekType.NONE,
+                    -1
+                )
 
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             _old_state, new_state, _pending = message.parse_state_changed()
             self.is_playing = new_state == Gst.State.PLAYING
-            self.play_button.set_label("Ⅱ" if self.is_playing else "▶")
+            lbl = "Ⅱ" if self.is_playing else "▶"
+            self.play_button.set_label(lbl)
+            if getattr(self, "fs_play_button", None):
+                self.fs_play_button.set_label(lbl)
 
     def seek_relative(self, offset_seconds):
         """현재 재생 위치를 기준으로 지정된 초만큼 앞/뒤로 이동합니다."""
@@ -1412,12 +2061,18 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         target_ns = position + (offset_seconds * Gst.SECOND)
         if target_ns < 0:
             target_ns = 0
+        if self.duration_ns > 0 and target_ns > self.duration_ns:
+            target_ns = self.duration_ns
 
         self.last_known_pos_ns = target_ns
-        res = self.pipeline.seek_simple(
+        res = self.pipeline.seek(
+            self.playback_rate,
             Gst.Format.TIME,
-            Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
-            target_ns
+            Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+            Gst.SeekType.SET,
+            target_ns,
+            Gst.SeekType.NONE,
+            -1
         )
         if not res:
             print("⚠️ 탐색 실패로 파이프라인을 재구축합니다.")
@@ -1426,6 +2081,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         direction = "앞으로" if offset_seconds > 0 else "뒤로"
         print(f"⏩ {direction} {abs(offset_seconds)}초 이동 (현재 위치: {target_ns / Gst.SECOND:.1f}초)")
+        direction_symbol = "⏩ +" if offset_seconds > 0 else "⏪ -"
+        cur_str = self.format_time(target_ns)
+        dur_str = f" / {self.format_time(self.duration_ns)}" if self.duration_ns > 0 else ""
+        self.show_osd(f"{direction_symbol}{abs(offset_seconds)}초 ({cur_str}{dur_str})")
 
     def toggle_play_pause(self):
         """일시 정지 / 재생 상태를 전환합니다."""
@@ -1436,11 +2095,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.pipeline.set_state(Gst.State.PAUSED)
             self.is_playing = False
             self.play_button.set_label("▶")
+            if getattr(self, "fs_play_button", None):
+                self.fs_play_button.set_label("▶")
+            self.show_osd("⏸ 일시 정지")
             print("⏸ 일시 정지")
         else:
             self.pipeline.set_state(Gst.State.PLAYING)
             self.is_playing = True
             self.play_button.set_label("Ⅱ")
+            if getattr(self, "fs_play_button", None):
+                self.fs_play_button.set_label("Ⅱ")
+            self.show_osd("▶ 재생")
             print("▶ 다시 재생")
 
     def play_next_video(self):
@@ -1461,9 +2126,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             print("⏮ 이전 영상으로 넘어갑니다.")
             GLib.timeout_add(50, self.play_current_video)
 
-    def build_subtitle_popover(self):
+    def build_subtitle_popover(self, parent_btn=None):
         """다중 자막 선택, 크기 조절 및 싱크 조절 팝오버(Popover) 창을 구성합니다."""
-        self.sub_popover = Gtk.Popover(relative_to=self.sub_button)
+        target_btn = parent_btn or (self.fs_sub_button if self.is_video_only and getattr(self, "fs_sub_button", None) else self.sub_button)
+        self.sub_popover = Gtk.Popover(relative_to=target_btn)
         self.sub_popover.set_position(Gtk.PositionType.TOP)
         self.sub_popover.set_border_width(12)
         
@@ -1590,6 +2256,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         container.show_all()
         self.sub_popover.add(container)
 
+        def on_sub_pop_closed(_pop):
+            self.is_popover_open = False
+        self.sub_popover.connect("closed", on_sub_pop_closed)
+
     def adjust_subtitle_scale(self, delta):
         """자막 크기를 delta만큼 확대/축소하고 즉시 화면에 반영합니다."""
         new_scale = round(max(0.6, min(1.6, self.subtitle_font_scale + delta)), 2)
@@ -1597,6 +2267,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.subtitle_font_scale = new_scale
             pct = int(self.subtitle_font_scale * 100)
             print(f"🗚 [자막 크기 조절] {pct}%")
+            self.show_osd(f"🗚 자막 크기: {pct}%")
             if getattr(self, "scale_label", None):
                 self.scale_label.set_text(f"{pct}%")
             if getattr(self, "subtitle_overlay_element", None):
@@ -1611,6 +2282,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if self.subtitle_font_scale != 1.0:
             self.subtitle_font_scale = 1.0
             print("🗚 [자막 크기 조절] 100% (기본값)")
+            self.show_osd("🗚 자막 크기: 100%")
             if getattr(self, "scale_label", None):
                 self.scale_label.set_text("100%")
             if getattr(self, "subtitle_overlay_element", None):
@@ -1625,6 +2297,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.subtitle_offset_ms += delta_ms
         sec_str = f"{self.subtitle_offset_ms / 1000:+.1f}s"
         print(f"⏱️ [자막 싱크 조절] {sec_str}")
+        self.show_osd(f"⏱️ 자막 싱크: {sec_str}")
         if getattr(self, "sync_label", None):
             self.sync_label.set_text(sec_str)
         self.reload_and_apply_subtitles()
@@ -1634,11 +2307,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if self.subtitle_offset_ms != 0:
             self.subtitle_offset_ms = 0
             print("⏱️ [자막 싱크 조절] 0.0s (기본값)")
+            self.show_osd("⏱️ 자막 싱크: 0.0s")
             if getattr(self, "sync_label", None):
                 self.sync_label.set_text("0.0s")
             self.reload_and_apply_subtitles()
 
-    def show_subtitle_popover(self):
+    def show_subtitle_popover(self, parent_btn=None):
         """자막 선택 팝오버를 열거나 닫습니다."""
         if not self.available_subtitles:
             print("ℹ️ 현재 영상에 사용 가능한 자막이 없습니다.")
@@ -1646,7 +2320,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if self.sub_popover:
             self.sub_popover.destroy()
             self.sub_popover = None
-        self.build_subtitle_popover()
+        self.build_subtitle_popover(parent_btn=parent_btn)
+        self.is_popover_open = True
         self.sub_popover.show_all()
         self.sub_popover.popup()
 
@@ -1657,7 +2332,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if len(self.available_subtitles) == 1:
             self.toggle_subtitles()
         else:
-            self.show_subtitle_popover()
+            self.show_subtitle_popover(parent_btn=widget)
 
     def on_subtitle_checkbox_toggled(self, chk_button, track_idx):
         """자막 체크박스 토글 시 실시간으로 활성 자막 목록을 갱신하고 화면에 안전하게 반영합니다."""
@@ -1760,26 +2435,30 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.update_subtitle_button_ui()
 
     def update_subtitle_button_ui(self):
-        """자막 버튼 레이블 및 활성화 상태 갱신"""
-        if not hasattr(self, "sub_button"):
+        """자막 버튼 레이블 및 활성화 상태 갱신 (일반 컨트롤 및 전체화면 컨트롤)"""
+        btns = [b for b in [getattr(self, "sub_button", None), getattr(self, "fs_sub_button", None)] if b is not None]
+        if not btns:
             return
+            
         total = len(self.available_subtitles)
         if total == 0:
-            self.sub_button.set_label("💬 자막 없음")
-            self.sub_button.set_sensitive(False)
-            self.sub_button.set_tooltip_text("자막 없음")
+            for b in btns:
+                b.set_label("💬 자막 없음")
+                b.set_sensitive(False)
+                b.set_tooltip_text("자막 없음")
         elif total == 1:
-            if self.subtitles_enabled and self.active_subtitle_indices:
-                self.sub_button.set_label("💬 자막 ON")
-            else:
-                self.sub_button.set_label("💬 자막 OFF")
-            self.sub_button.set_sensitive(True)
-            self.sub_button.set_tooltip_text("자막 켜기/끄기 (S)")
+            lbl = "💬 자막 ON" if (self.subtitles_enabled and self.active_subtitle_indices) else "💬 자막 OFF"
+            for b in btns:
+                b.set_label(lbl)
+                b.set_sensitive(True)
+                b.set_tooltip_text("자막 켜기/끄기 (S)")
         else:
             active_cnt = len(self.active_subtitle_indices) if self.subtitles_enabled else 0
-            self.sub_button.set_label(f"💬 자막 ({active_cnt}/{total})")
-            self.sub_button.set_sensitive(True)
-            self.sub_button.set_tooltip_text(f"다중 자막 선택 메뉴 (S: 토글, C: 설정 창, [/]: 크기, Z/X: 싱크) - {total}개 사용 가능")
+            lbl = f"💬 자막 ({active_cnt}/{total})"
+            for b in btns:
+                b.set_label(lbl)
+                b.set_sensitive(True)
+                b.set_tooltip_text(f"다중 자막 선택 메뉴 (S: 토글, C: 설정 창) - {total}개 사용 가능")
 
     def toggle_subtitles(self):
         """자막 켜기/끄기 상태를 토글합니다."""
@@ -1789,13 +2468,17 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         self.subtitles_enabled = not self.subtitles_enabled
         if self.subtitles_enabled and not self.active_subtitle_indices:
-            self.active_subtitle_indices.add(0)
-            
+            self.active_subtitle_indices = set(range(len(self.available_subtitles)))
+
+        status_str = "ON" if self.subtitles_enabled else "OFF"
+        self.show_osd(f"💬 자막 {status_str}")
         self.reload_and_apply_subtitles()
 
     def on_key_press(self, widget, event):
         """키보드 입력 이벤트 제어"""
         keyname = Gdk.keyval_name(event.keyval)
+        state = event.state
+        is_shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         
         if keyname == "Escape" and self.is_video_only:
             self.toggle_fullscreen()
@@ -1808,10 +2491,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.toggle_play_pause()
             return True
         elif keyname == "Right":
-            self.seek_relative(10)
+            delta = 30 if is_shift else 10
+            self.seek_relative(delta)
             return True
         elif keyname == "Left":
+            delta = -30 if is_shift else -10
+            self.seek_relative(delta)
+            return True
+        elif keyname in ["l", "L"]:
+            self.seek_relative(10)
+            return True
+        elif keyname in ["j", "J"]:
             self.seek_relative(-10)
+            return True
+        # 영상 재생 속도 제어
+        elif keyname in ["Up", "d", "D"] or (is_shift and keyname in ["greater", "period"]):
+            self.step_playback_rate(0.25)
+            return True
+        elif keyname in ["Down", "a", "A"] or (is_shift and keyname in ["less", "comma"]):
+            self.step_playback_rate(-0.25)
+            return True
+        elif keyname in ["r", "R"]:
+            self.reset_playback_rate()
             return True
         elif keyname in ["n", "N"]:
             self.play_next_video()
@@ -1837,10 +2538,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif keyname in ["x", "X"]:
             self.adjust_subtitle_sync(500)
             return True
-        elif keyname in [",", "comma", "less"]:
+        elif not is_shift and keyname in [",", "comma"]:
             self.adjust_subtitle_sync(-100)
             return True
-        elif keyname in [".", "period", "greater"]:
+        elif not is_shift and keyname in [".", "period"]:
             self.adjust_subtitle_sync(100)
             return True
         elif keyname in ["f", "F"]:
@@ -1857,6 +2558,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 pass
             self.cursor_hide_timer_id = None
         self.show_cursor()
+
+        if getattr(self, "osd_timer_id", None):
+            try:
+                GLib.source_remove(self.osd_timer_id)
+            except Exception:
+                pass
+            self.osd_timer_id = None
 
         if getattr(self, "sub_reload_timer_id", None):
             try:

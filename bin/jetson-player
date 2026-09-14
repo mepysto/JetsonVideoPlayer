@@ -22,7 +22,13 @@ else
 fi
 
 # GUI 환경 변수 기본값 설정
-export DISPLAY="${DISPLAY:-:0}"
+if [ -z "$DISPLAY" ]; then
+    if [ -S "/tmp/.X11-unix/X1" ]; then
+        export DISPLAY=":1"
+    else
+        export DISPLAY=":0"
+    fi
+fi
 if [ -z "$XDG_RUNTIME_DIR" ]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 fi
