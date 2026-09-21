@@ -8,6 +8,8 @@ import json
 import re
 import hashlib
 import html
+import time
+import threading
 import gi
 from urllib.request import pathname2url
 
@@ -25,7 +27,8 @@ gi.require_version('Gst', '1.0')
 gi.require_version('GstVideo', '1.0')
 gi.require_version('Gtk', '3.0')
 gi.require_version('GdkX11', '3.0')
-from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11
+gi.require_version('Pango', '1.0')
+from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11, Pango
 
 def enable_x11_compositor_bypass(gdk_window):
     """
@@ -84,6 +87,71 @@ def optimize_gstreamer_ranks():
         print("⚡ [하드웨어 가속 60 FPS 최적화] nvv4l2decoder HW 가속 및 60 FPS 전용 파이프라인 무결 적용 완료.")
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
+
+CACHE_DIR = os.path.expanduser("~/.cache/jetson_video_player")
+CACHE_FILE = os.path.join(CACHE_DIR, "hw_cache.json")
+
+class HWSupportCache:
+    """비디오 파일별 하드웨어 적합성 ffprobe 분석 결과를 디스크에 영구 캐시하여 시작 지연을 방지합니다."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cache = {}
+        self.is_dirty = False
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(CACHE_FILE):
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    self.cache = json.load(f)
+        except Exception as e:
+            self.cache = {}
+
+    def save(self):
+        with self.lock:
+            if not self.is_dirty:
+                return
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                self.is_dirty = False
+            except Exception:
+                pass
+
+    def get(self, file_path):
+        try:
+            st = os.stat(file_path)
+            mtime = st.st_mtime
+            size = st.st_size
+        except Exception:
+            return None
+
+        with self.lock:
+            entry = self.cache.get(file_path)
+            if entry and entry.get("mtime") == mtime and entry.get("size") == size:
+                return entry.get("supported", False), entry.get("reason", "")
+        return None
+
+    def set(self, file_path, supported, reason):
+        try:
+            st = os.stat(file_path)
+            mtime = st.st_mtime
+            size = st.st_size
+        except Exception:
+            mtime = 0
+            size = 0
+
+        with self.lock:
+            self.cache[file_path] = {
+                "mtime": mtime,
+                "size": size,
+                "supported": supported,
+                "reason": reason
+            }
+            self.is_dirty = True
+
+hw_cache = HWSupportCache()
 
 LANGUAGE_COLORS = {
     'ko': '#FFFFFF',  # 🇰🇷 한국어: 화이트 (메인 기본)
@@ -514,6 +582,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_fullscreen = True
         self.is_video_only = False
         self.sidebar_was_visible = True
+        self.main_paned = None
+        self.sidebar_width = 360
+        self.is_adjusting_paned = False
+        self.is_wrap_enabled = False
+        self.r_text = None
+        self.wrap_button = None
+        self.is_destroyed = False
+        self._bg_checker_started = False
         self.is_seeking = False
         self.duration_ns = 0
         self.tree_store = None
@@ -960,6 +1036,23 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             background: #2d3748;
             color: #ffffff;
         }
+        .tree-tool-btn.active {
+            background: #e9ff5b;
+            color: #111318;
+            font-weight: bold;
+        }
+        .tree-tool-btn.active:hover {
+            background: #f2ff91;
+            color: #111318;
+        }
+        paned > separator {
+            background-color: #252b36;
+            min-width: 5px;
+            margin: 0;
+        }
+        paned > separator:hover {
+            background-color: #e9ff5b;
+        }
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
@@ -990,7 +1083,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.topbar.pack_end(close_button, False, False, 0)
         root.pack_start(self.topbar, False, False, 0)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
 
         # 비디오 위젯 및 오버레이(OSD, 전체화면 플로팅 컨트롤) 컨테이너
         self.video_container = Gtk.Overlay()
@@ -1014,10 +1107,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.fs_controls_box.set_no_show_all(True)
         self.video_container.add_overlay(self.fs_controls_box)
 
-        content.pack_start(self.video_container, True, True, 0)
+        self.main_paned.pack1(self.video_container, resize=True, shrink=False)
         self.sidebar = self.build_playlist_panel()
-        content.pack_end(self.sidebar, False, False, 0)
-        root.pack_start(content, True, True, 0)
+        self.main_paned.pack2(self.sidebar, resize=True, shrink=False)
+        self.main_paned.connect("notify::position", self.on_paned_notify_position)
+        self.main_paned.connect("size-allocate", self.on_paned_size_allocate)
+        root.pack_start(self.main_paned, True, True, 0)
 
         self.controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.controls.get_style_context().add_class("controls")
@@ -1104,7 +1199,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def build_playlist_panel(self):
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         panel.get_style_context().add_class("sidebar")
-        panel.set_size_request(320, -1)
+        panel.set_size_request(240, -1)
         panel.set_border_width(12)
 
         heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1116,17 +1211,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         heading.pack_end(count, False, False, 0)
         panel.pack_start(heading, False, False, 2)
 
+        tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         if not self.is_single_file_mode:
-            tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             exp_btn = Gtk.Button(label="전체 펼치기")
             exp_btn.get_style_context().add_class("tree-tool-btn")
+            exp_btn.set_tooltip_text("모든 폴더 펼치기")
             exp_btn.connect("clicked", lambda _b: self.playlist_treeview.expand_all())
             col_btn = Gtk.Button(label="전체 접기")
             col_btn.get_style_context().add_class("tree-tool-btn")
+            col_btn.set_tooltip_text("모든 폴더 접기")
             col_btn.connect("clicked", lambda _b: self.collapse_playlist_tree())
             tools.pack_start(exp_btn, True, True, 0)
             tools.pack_start(col_btn, True, True, 0)
-            panel.pack_start(tools, False, False, 2)
+
+        self.wrap_button = Gtk.Button(label="줄바꿈")
+        self.wrap_button.get_style_context().add_class("tree-tool-btn")
+        self.wrap_button.set_tooltip_text("긴 파일명 자동 줄바꿈 켜기/끄기")
+        self.wrap_button.connect("clicked", self.on_wrap_toggle)
+        if self.is_single_file_mode:
+            tools.pack_start(self.wrap_button, True, True, 0)
+        else:
+            tools.pack_start(self.wrap_button, False, False, 0)
+        panel.pack_start(tools, False, False, 2)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -1135,6 +1241,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.playlist_treeview = Gtk.TreeView(model=self.tree_store)
         self.playlist_treeview.set_headers_visible(False)
         self.playlist_treeview.set_activate_on_single_click(True)
+        self.playlist_treeview.set_has_tooltip(True)
+        self.playlist_treeview.connect("query-tooltip", self.on_tree_query_tooltip)
+        self.playlist_treeview.connect("size-allocate", self.on_tree_size_allocate)
         self.playlist_treeview.connect("row-activated", self.on_tree_row_activated)
         self.playlist_treeview.connect("row-expanded", self.on_tree_row_expanded)
         self.playlist_treeview.connect("row-collapsed", self.on_tree_row_collapsed)
@@ -1145,11 +1254,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         col.pack_start(r_icon, False)
         col.add_attribute(r_icon, "text", 0)
 
-        r_text = Gtk.CellRendererText()
-        r_text.set_property("ellipsize", 3)
-        r_text.set_property("ypad", 6)
-        col.pack_start(r_text, True)
-        col.add_attribute(r_text, "markup", 1)
+        self.r_text = Gtk.CellRendererText()
+        self.r_text.set_property("ellipsize", Pango.EllipsizeMode.END)
+        self.r_text.set_property("ypad", 6)
+        col.pack_start(self.r_text, True)
+        col.add_attribute(self.r_text, "markup", 1)
         self.playlist_treeview.append_column(col)
 
         self.populate_playlist_tree()
@@ -1157,6 +1266,107 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         scroll.add(self.playlist_treeview)
         panel.pack_start(scroll, True, True, 0)
         return panel
+
+    def on_paned_notify_position(self, paned, _gparam):
+        """사용자가 스플리터 핸들을 드래그할 때 사이드바 너비를 기억합니다."""
+        if self.is_adjusting_paned or not self.sidebar or not self.sidebar.get_visible():
+            return
+        pos = paned.get_position()
+        alloc_w = paned.get_allocation().width
+        if alloc_w > 0 and pos > 0:
+            current_s_w = alloc_w - pos
+            if current_s_w >= 200:
+                self.sidebar_width = current_s_w
+
+    def on_paned_size_allocate(self, paned, allocation):
+        """창 크기 조절 시 사이드바의 설정된 너비를 정확히 유지합니다."""
+        if not self.sidebar or not self.sidebar.get_visible():
+            return
+        target_pos = max(200, allocation.width - self.sidebar_width)
+        if abs(paned.get_position() - target_pos) > 2:
+            self.is_adjusting_paned = True
+            paned.set_position(target_pos)
+            self.is_adjusting_paned = False
+
+    def on_wrap_toggle(self, _button):
+        """재생목록 내 긴 파일명의 자동 줄바꿈을 토글합니다."""
+        self.is_wrap_enabled = not self.is_wrap_enabled
+        if not self.r_text:
+            return
+        if self.is_wrap_enabled:
+            if self.wrap_button:
+                self.wrap_button.get_style_context().add_class("active")
+            self.r_text.set_property("wrap-mode", Pango.WrapMode.WORD_CHAR)
+            self.r_text.set_property("ellipsize", Pango.EllipsizeMode.NONE)
+            self.update_tree_wrap_width()
+        else:
+            if self.wrap_button:
+                self.wrap_button.get_style_context().remove_class("active")
+            self.r_text.set_property("ellipsize", Pango.EllipsizeMode.END)
+            self.r_text.set_property("wrap-width", -1)
+        if self.playlist_treeview:
+            self.playlist_treeview.queue_resize()
+
+    def update_tree_wrap_width(self):
+        """트리뷰 너비에 맞춰 셀 렌더러의 wrap-width를 자동 계산합니다."""
+        if not self.is_wrap_enabled or not self.playlist_treeview or not self.r_text:
+            return
+        alloc = self.playlist_treeview.get_allocation()
+        if alloc.width > 50:
+            target_w = max(120, alloc.width - 65)
+            if self.r_text.get_property("wrap-width") != target_w:
+                self.r_text.set_property("wrap-width", target_w)
+
+    def on_tree_size_allocate(self, _widget, allocation):
+        """트리뷰 크기 변경 시 줄바꿈 너비를 실시간 동기화합니다."""
+        if self.is_wrap_enabled and self.r_text:
+            target_w = max(120, allocation.width - 65)
+            if self.r_text.get_property("wrap-width") != target_w:
+                self.r_text.set_property("wrap-width", target_w)
+
+    def on_tree_query_tooltip(self, widget, x, y, keyboard_mode, tooltip):
+        """재생목록 항목에 마우스 호버 시 전체 파일명 및 경로를 툴팁으로 표시합니다."""
+        res = widget.get_tooltip_context(x, y, keyboard_mode)
+        if not res:
+            return False
+        bool_val, bx, by, model, path, tree_iter = res
+        if not bool_val or tree_iter is None:
+            return False
+
+        try:
+            is_dir = model.get_value(tree_iter, 4)
+            full_path = model.get_value(tree_iter, 2)
+            idx = model.get_value(tree_iter, 3)
+
+            if is_dir:
+                dir_name = os.path.basename(full_path)
+                safe_name = GLib.markup_escape_text(dir_name)
+                safe_path = GLib.markup_escape_text(full_path)
+                tooltip.set_markup(
+                    f"📁 <b>{safe_name}</b>\n"
+                    f"<span color='#8f98a8' size='smaller'>{safe_path}</span>"
+                )
+            else:
+                file_name = os.path.basename(full_path)
+                safe_name = GLib.markup_escape_text(file_name)
+                safe_path = GLib.markup_escape_text(full_path)
+                num_badge = f"<span color='#e9ff5b' weight='bold'>#{idx + 1}</span> " if idx >= 0 else ""
+                tooltip.set_markup(
+                    f"🎬 {num_badge}<b>{safe_name}</b>\n"
+                    f"<span color='#8f98a8' size='smaller'>{safe_path}</span>"
+                )
+            widget.set_tooltip_row(tooltip, path)
+            return True
+        except Exception:
+            return False
+
+    def on_playlist_toggle(self, _button):
+        is_vis = not self.sidebar.get_visible()
+        self.sidebar.set_visible(is_vis)
+        if is_vis and self.main_paned:
+            alloc_w = self.main_paned.get_allocation().width
+            if alloc_w > 0:
+                self.main_paned.set_position(max(200, alloc_w - self.sidebar_width))
 
     def populate_playlist_tree(self):
         """재생목록을 디렉토리 계층 구조의 트리로 구축합니다."""
@@ -1270,6 +1480,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.now_playing_label.set_text(
             f"재생 중  ·  {display_name}   {self.current_index + 1}/{len(self.playlist)}"
         )
+        self.now_playing_label.set_tooltip_text(f"{display_name}\n({current_path})")
 
         if not self.tree_store or not self.playlist_tree_iters:
             return
@@ -1477,6 +1688,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.controls.show()
             if self.sidebar_was_visible:
                 self.sidebar.show()
+                if self.main_paned:
+                    alloc_w = self.main_paned.get_allocation().width
+                    if alloc_w > 0:
+                        self.main_paned.set_position(max(200, alloc_w - self.sidebar_width))
             if getattr(self, "fs_controls_box", None):
                 self.fs_controls_box.hide()
                 self.is_fs_controls_visible = False
@@ -1592,7 +1807,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         100% 안정적으로 가속 지원하는 포맷(H.265/HEVC 및 H.264 8-bit)인지 판정합니다.
         JetPack 드라이버 상 DPB/버퍼 결함이 발생하는 AV1, VP9 등의 코덱이나
         H.264 10-bit 영상은 미지원으로 분류하여 H.265로 자동 변환하도록 유도합니다.
+        영구 캐시(hw_cache)를 우선 조회하여 불필요한 ffprobe 중복 실행을 차단합니다.
         """
+        cached = hw_cache.get(file_path)
+        if cached is not None:
+            return cached
+
         try:
             cmd = [
                 "ffprobe", "-v", "error",
@@ -1604,7 +1824,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             ]
             data = json.loads(subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True))
             if not data.get("streams"):
-                return False, "비디오 스트림 없음"
+                res = (False, "비디오 스트림 없음")
+                hw_cache.set(file_path, res[0], res[1])
+                return res
             stream = data["streams"][0]
             codec = stream.get("codec_name", "").lower()
             pix_fmt = stream.get("pix_fmt", "").lower()
@@ -1613,18 +1835,26 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             # 1. H.265 / HEVC -> 8-bit 및 10-bit 모두 Jetson NVDEC 하드웨어 가속 100% 완벽 지원
             if codec in ["hevc", "h265"]:
                 bit_depth = "10-bit" if "10" in pix_fmt or "p10" in pix_fmt else "8-bit"
-                return True, f"HEVC ({codec.upper()}) {bit_depth} NVDEC 지원"
+                res = (True, f"HEVC ({codec.upper()}) {bit_depth} NVDEC 지원")
+                hw_cache.set(file_path, res[0], res[1])
+                return res
 
             # 2. H.264 / AVC -> 8-bit만 지원 (High 10 / yuv420p10le 등 10-bit는 NVDEC 미지원)
             if codec in ["h264", "avc"]:
                 if "10" in pix_fmt or "10" in profile or "p10" in pix_fmt:
-                    return False, f"H.264 10-bit NVDEC 미지원 ({pix_fmt}/{profile})"
-                return True, "H.264 8-bit NVDEC 지원"
+                    res = (False, f"H.264 10-bit NVDEC 미지원 ({pix_fmt}/{profile})")
+                else:
+                    res = (True, "H.264 8-bit NVDEC 지원")
+                hw_cache.set(file_path, res[0], res[1])
+                return res
 
             # 3. 그 외 (AV1, VP9, VP8 등) -> JetPack nvv4l2decoder DPB 결함 및 SW 디코딩 병목 방지를 위해 H.265 변환 대상
-            return False, f"NVDEC 미지원/불안정 코덱 ({codec.upper()})"
+            res = (False, f"NVDEC 미지원/불안정 코덱 ({codec.upper()})")
+            hw_cache.set(file_path, res[0], res[1])
+            return res
         except Exception as e:
-            return False, f"코덱 분석 실패 ({e})"
+            res = (False, f"코덱 분석 실패 ({e})")
+            return res
 
     def probe_video(self, file_path):
         """변환 품질 결정을 위해 이름 순서에 의존하지 않는 ffprobe 정보를 반환합니다."""
@@ -1659,6 +1889,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             supported, _reason = self.check_video_hw_support(target_mp4_path)
             if supported:
                 print(f"ℹ️ 기존 H.265 변환본을 사용합니다: {target_mp4_path}")
+                hw_cache.set(file_path, True, "기존 H.265 변환본")
+                hw_cache.save()
                 return target_mp4_path
 
         # 3. 비트 심도 검사 (10-bit 소스는 H.265 10-bit 유지)
@@ -1700,6 +1932,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         try:
             subprocess.run(ffmpeg_cmd, check=True)
             os.replace(temp_output, target_mp4_path)
+            hw_cache.set(target_mp4_path, True, f"HEVC 변환 완료 ({pix_fmt})")
+            hw_cache.set(file_path, True, "H.265 변환 완료")
+            hw_cache.save()
             print(f"✅ [H.265 변환 완료] {os.path.basename(target_mp4_path)}")
 
             if os.path.exists(file_path) and file_path != target_mp4_path:
@@ -1756,31 +1991,41 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             print(f"❌ 에러: [{self.input_path}] 존재하지 않는 파일이거나 올바르지 않은 경로입니다.")
             sys.exit(1)
 
-        # 중복 제거 및 하드웨어 미지원 영상 자동 H.265 변환 / 백업 검사
+        # [초고속 시작 최적화] 시작 시 모든 파일에 대한 무거운 ffprobe 검사를 건너뛰고,
+        # 기존 H.265 변환본이 있는 경우에만 빠르게 우선 매핑하여 0.05초 만에 재생목록을 완성합니다.
+        # 하드웨어 재생 적합성 검사는 현재 재생할 영상에 대해 On-Demand로 즉시 수행되고,
+        # 나머지 영상들은 재생 중 백그라운드 스레드에서 점진적으로 검사/캐싱됩니다.
+        self.playlist = []
         processed_set = set()
+        raw_set = set(raw_playlist)
         for path in raw_playlist:
             if not os.path.exists(path) or path in processed_set:
                 continue
 
-            is_supported, _reason = self.check_video_hw_support(path)
-            if not is_supported:
-                # 하드웨어 미지원 코덱 발견시 H.265 변환 및 원본 백업 수행
-                final_path = self.auto_convert_to_h265(path)
-            else:
-                final_path = path
+            dir_name = os.path.dirname(path)
+            base_name = os.path.basename(path)
+            name_no_ext, _ext = os.path.splitext(base_name)
+
+            final_path = path
+            # 동일 폴더에 이미 _h265.mp4 변환본이 존재하는 경우 변환본을 채택
+            if not name_no_ext.endswith("_h265"):
+                target_h265 = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
+                if target_h265 in raw_set or os.path.exists(target_h265):
+                    final_path = target_h265
+                    processed_set.add(path)
 
             if final_path not in self.playlist:
                 self.playlist.append(final_path)
                 processed_set.add(final_path)
 
         mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
-        print(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 NVDEC 가속 영상을 재생합니다.")
+        print(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 영상을 로드했습니다.")
         for idx, path in enumerate(self.playlist):
             disp = os.path.relpath(path, abs_path) if not self.is_single_file_mode else os.path.basename(path)
             print(f"   [{idx}] {disp}")
 
     def on_realize(self, widget):
-        """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작합니다."""
+        """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작하고 백그라운드 검사기를 가동합니다."""
         if self.pipeline is not None:
             return
         print("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
@@ -1790,11 +2035,78 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             enable_x11_compositor_bypass(top_window)
 
         self.play_current_video()
+        self.start_background_hw_checker()
+
+    def start_background_hw_checker(self):
+        """백그라운드에서 재생목록 파일들의 하드웨어 가속 적합성을 점진적으로 검사하고 캐싱합니다."""
+        if getattr(self, "_bg_checker_started", False):
+            return
+        self._bg_checker_started = True
+        t = threading.Thread(target=self._background_hw_worker, daemon=True)
+        t.start()
+
+    def _background_hw_worker(self):
+        # 첫 영상이 시작되고 UI가 완전히 렌더링될 때까지 1.5초 대기
+        time.sleep(1.5)
+        for idx in range(len(self.playlist)):
+            if getattr(self, "is_destroyed", False):
+                break
+            if idx >= len(self.playlist):
+                break
+            path = self.playlist[idx]
+            if not os.path.exists(path):
+                continue
+
+            # 캐시가 이미 존재하면 스킵 (불필요한 작업 방지)
+            cached = hw_cache.get(path)
+            if cached is None:
+                is_supported, _reason = self.check_video_hw_support(path)
+                # 동일 폴더에 이미 _h265.mp4가 존재하는 경우 메인 스레드에 경로 교체 요청
+                if not is_supported:
+                    dir_name = os.path.dirname(path)
+                    name_no_ext, _ext = os.path.splitext(os.path.basename(path))
+                    target_h265 = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
+                    if os.path.exists(target_h265):
+                        GLib.idle_add(self._apply_background_h265_path, idx, target_h265)
+                # 현재 영상 재생 성능에 영향을 주지 않도록 파일 간 0.05초 대기
+                time.sleep(0.05)
+
+        hw_cache.save()
+
+    def _apply_background_h265_path(self, idx, new_path):
+        if 0 <= idx < len(self.playlist) and os.path.exists(new_path):
+            self.playlist[idx] = new_path
+            self.update_playlist_item_ui(idx, new_path)
+
+    def update_playlist_item_ui(self, idx, new_path):
+        """재생목록 항목 경로가 변경(H.265 변환 등)되었을 때 트리뷰 UI를 동기화합니다."""
+        if not self.tree_store or idx not in self.playlist_tree_iters:
+            return
+        tree_iter = self.playlist_tree_iters[idx]
+        if self.tree_store.iter_is_valid(tree_iter):
+            fname = os.path.basename(new_path)
+            safe_name = GLib.markup_escape_text(fname)
+            self.tree_store.set_value(tree_iter, 1, f"<span>{safe_name}</span>")
+            self.tree_store.set_value(tree_iter, 2, new_path)
 
     def play_current_video(self, start_position_ns=0):
         """[성능 최적화] 영상 전환 및 다중 자막 변경 시 파이프라인 자원을 완전 세척 후 신규 구축합니다."""
+        if not self.playlist or self.current_index < 0 or self.current_index >= len(self.playlist):
+            return
+
         video_path = self.playlist[self.current_index]
         self.rate_applied_on_preroll = False
+
+        # [On-Demand 하드웨어 적합성 검사 및 안전 변환]
+        if os.path.exists(video_path):
+            is_supported, reason = self.check_video_hw_support(video_path)
+            if not is_supported:
+                print(f"⚠️ [하드웨어 미지원 코덱 감지] {os.path.basename(video_path)}: {reason}")
+                converted_path = self.auto_convert_to_h265(video_path)
+                if converted_path != video_path and os.path.exists(converted_path):
+                    self.playlist[self.current_index] = converted_path
+                    video_path = converted_path
+                    self.update_playlist_item_ui(self.current_index, converted_path)
         
         if start_position_ns == 0:
             abs_root = os.path.abspath(self.input_path) if os.path.isdir(self.input_path) else None
@@ -2551,6 +2863,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         return False
 
     def on_destroy(self, widget):
+        self.is_destroyed = True
+        try:
+            hw_cache.save()
+        except Exception:
+            pass
+
         if getattr(self, "cursor_hide_timer_id", None):
             try:
                 GLib.source_remove(self.cursor_hide_timer_id)
