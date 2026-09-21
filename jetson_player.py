@@ -561,13 +561,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.set_keep_above(True)
         self.set_default_size(1280, 720)
         
-        # 이벤트 연결 (종료, 키보드, 마우스 및 스크롤 감지)
+        # 이벤트 연결 (종료, 키보드 및 마우스 감지)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
-        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
         self.connect("motion-notify-event", self.on_mouse_motion)
         self.connect("button-press-event", self.on_window_button_press)
-        self.connect("scroll-event", self.on_scroll_event)
 
         # 2. 입력 경로 타입(폴더 vs 파일)을 분석하여 재생 목록 구성
         self.input_path = input_path
@@ -803,23 +802,6 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.build_speed_popover(widget)
         self.is_popover_open = True
         self.speed_popover.popup()
-
-    def on_scroll_event(self, widget, event):
-        """마우스 휠 스크롤 시 10초 앞/뒤로 seek 이동합니다."""
-        if event.direction == Gdk.ScrollDirection.UP:
-            self.seek_relative(10)
-            return True
-        elif event.direction == Gdk.ScrollDirection.DOWN:
-            self.seek_relative(-10)
-            return True
-        elif event.direction == Gdk.ScrollDirection.SMOOTH:
-            if event.delta_y < -0.1:
-                self.seek_relative(10)
-                return True
-            elif event.delta_y > 0.1:
-                self.seek_relative(-10)
-                return True
-        return False
 
     def build_fs_controls(self):
         """전체화면(Fullscreen) 모드 전용 플로팅 컨트롤 바 위젯을 생성합니다."""
