@@ -53,14 +53,39 @@ def extract_youtube_url(text):
     t = text.strip()
     m = re.search(r'https?://[^\s<>"]*(?:youtube\.com|youtu\.be)[^\s<>"]*', t)
     candidate = m.group(0) if m else t
-    if is_youtube_url(candidate):
-        if not (candidate.startswith("http://") or candidate.startswith("https://")):
-            candidate = "https://" + candidate
-        return candidate
-    m2 = re.search(r'(?:v=|\/shorts\/|\/embed\/|\/live\/|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[&?]|$)', t)
-    if m2 and ("youtube" in t.lower() or "youtu.be" in t.lower()):
-        return f"https://www.youtube.com/watch?v={m2.group(1)}"
-    return None
+    if not is_youtube_url(candidate):
+        m2 = re.search(r'(?:v=|\/shorts\/|\/embed\/|\/live\/|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[&?]|$)', t)
+        if m2 and ("youtube" in t.lower() or "youtu.be" in t.lower()):
+            return f"https://www.youtube.com/watch?v={m2.group(1)}"
+        return None
+
+    if not (candidate.startswith("http://") or candidate.startswith("https://")):
+        candidate = "https://" + candidate
+
+    # 믹스(Mix, list=RD...)나 재생목록 파라미터가 섞여 있어도 단일 비디오(v=...)인 경우 깔끔하게 정규화
+    try:
+        parsed = urllib.parse.urlparse(candidate)
+        # 1. watch?v=... 형태인 경우 부가 쿼리(list, start_radio, index 등)를 제거하고 순수 v 파라미터만 추출
+        if "youtube.com" in parsed.netloc and parsed.path.startswith("/watch"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            if "v" in qs and qs["v"]:
+                vid = qs["v"][0]
+                return f"https://www.youtube.com/watch?v={vid}"
+        # 2. youtu.be/VID 형태
+        if "youtu.be" in parsed.netloc:
+            vid = parsed.path.strip("/").split("?")[0].split("&")[0]
+            if vid:
+                return f"https://www.youtube.com/watch?v={vid}"
+        # 3. shorts, embed, live 형태
+        for prefix in ("/shorts/", "/embed/", "/live/"):
+            if parsed.path.startswith(prefix):
+                vid = parsed.path[len(prefix):].split("/")[0].split("?")[0].split("&")[0]
+                if vid:
+                    return f"https://www.youtube.com/watch?v={vid}"
+    except Exception:
+        pass
+
+    return candidate
 
 class YouTubeManager:
     """YouTube 영상 다운로드 및 스트리밍 메타데이터를 비동기로 관리하는 매니저 클래스"""
@@ -139,13 +164,13 @@ class YouTubeManager:
 
             # Jetson nvv4l2decoder HW 가속 최적화를 위해 H.264(avc1) + AAC(m4a) 최우선 선택
             if quality == "1080p":
-                fmt = "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+                fmt = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
             elif quality == "720p":
-                fmt = "bestvideo[height<=720][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]"
+                fmt = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
             elif quality == "audio":
                 fmt = "bestaudio[ext=m4a]/bestaudio"
             else: # "best" (최고 화질: 4K / 1080p)
-                fmt = "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
+                fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
 
             out_tmpl = os.path.join(self.download_dir, "%(title)s [%(id)s].%(ext)s")
             ydl_opts = {
@@ -155,6 +180,8 @@ class YouTubeManager:
                 'quiet': True,
                 'no_warnings': True,
                 'merge_output_format': 'mp4',
+                'noplaylist': True,
+                'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'android']}},
             }
 
             node_path = "/home/btree/.nvm/versions/node/v24.18.1/bin/node"
