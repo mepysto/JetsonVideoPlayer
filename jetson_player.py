@@ -9,10 +9,14 @@ import re
 import hashlib
 import html
 import time
+import datetime
 import threading
-import gi
+import socket
+import urllib.parse
+import http.server
 from urllib.request import pathname2url
 from urllib.parse import unquote
+import gi
 
 # 환경 변수 자동 설정 (cannot open display 에러 방지)
 if "DISPLAY" not in os.environ:
@@ -29,7 +33,8 @@ gi.require_version('GstVideo', '1.0')
 gi.require_version('Gtk', '3.0')
 gi.require_version('GdkX11', '3.0')
 gi.require_version('Pango', '1.0')
-from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11, Pango
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11, Pango, GdkPixbuf
 
 def enable_x11_compositor_bypass(gdk_window):
     """
@@ -218,6 +223,416 @@ class ResumeCache:
                 self.is_dirty = True
 
 resume_cache = ResumeCache()
+
+BOOKMARKS_FILE = os.path.join(CACHE_DIR, "bookmarks.json")
+
+class BookmarkCache:
+    """비디오 파일별 북마크 타임스탬프를 관리하고 영구 저장합니다."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cache = {}
+        self.is_dirty = False
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(BOOKMARKS_FILE):
+                with open(BOOKMARKS_FILE, "r", encoding="utf-8") as f:
+                    self.cache = json.load(f)
+        except Exception:
+            self.cache = {}
+
+    def save(self):
+        with self.lock:
+            if not self.is_dirty:
+                return
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(BOOKMARKS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                self.is_dirty = False
+            except Exception:
+                pass
+
+    def get(self, file_path):
+        with self.lock:
+            return list(self.cache.get(file_path, []))
+
+    def add(self, file_path, position_ns, label=None):
+        if not file_path:
+            return False, "재생 중인 영상이 없습니다."
+        sec = int(position_ns / Gst.SECOND)
+        if not label:
+            m, s = divmod(sec, 60)
+            h, m = divmod(m, 60)
+            label = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+        with self.lock:
+            entries = self.cache.setdefault(file_path, [])
+            for item in entries:
+                if abs(item.get("position_ns", 0) - position_ns) < Gst.SECOND:
+                    return False, "이미 등록된 북마크 지점입니다."
+            entries.append({
+                "position_ns": position_ns,
+                "label": label,
+                "created_at": time.time()
+            })
+            entries.sort(key=lambda x: x.get("position_ns", 0))
+            self.is_dirty = True
+        return True, label
+
+    def remove(self, file_path, index):
+        with self.lock:
+            entries = self.cache.get(file_path, [])
+            if 0 <= index < len(entries):
+                entries.pop(index)
+                self.is_dirty = True
+                return True
+        return False
+
+bookmark_cache = BookmarkCache()
+
+HISTORY_FILE = os.path.join(CACHE_DIR, "history.json")
+
+class HistoryCache:
+    """최근 재생한 파일 및 디렉토리 목록을 관리합니다."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.history = []
+        self.is_dirty = False
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    self.history = json.load(f)
+        except Exception:
+            self.history = []
+
+    def save(self):
+        with self.lock:
+            if not self.is_dirty:
+                return
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self.history, f, ensure_ascii=False, indent=2)
+                self.is_dirty = False
+            except Exception:
+                pass
+
+    def add(self, path):
+        if not path or not os.path.exists(path):
+            return
+        abs_path = os.path.abspath(path)
+        is_dir = os.path.isdir(abs_path)
+        title = os.path.basename(abs_path) or abs_path
+        with self.lock:
+            self.history = [h for h in self.history if h.get("path") != abs_path]
+            self.history.insert(0, {
+                "path": abs_path,
+                "title": title,
+                "is_dir": is_dir,
+                "timestamp": time.time()
+            })
+            self.history = self.history[:15]
+            self.is_dirty = True
+
+    def get_all(self):
+        with self.lock:
+            return list(self.history)
+
+history_cache = HistoryCache()
+
+def get_jetson_hw_stats():
+    """Jetson 하드웨어(SoC 온도, GPU 로드, RAM 사용량) 상태를 안전하게 파싱합니다."""
+    stats = {}
+    try:
+        cpu_temps = []
+        gpu_temps = []
+        for tz in glob.glob("/sys/devices/virtual/thermal/thermal_zone*"):
+            type_file = os.path.join(tz, "type")
+            temp_file = os.path.join(tz, "temp")
+            if os.path.exists(type_file) and os.path.exists(temp_file):
+                try:
+                    with open(type_file, "r") as f:
+                        ztype = f.read().strip().lower()
+                    with open(temp_file, "r") as f:
+                        temp_val = float(f.read().strip()) / 1000.0
+                    if "cpu" in ztype:
+                        cpu_temps.append(temp_val)
+                    elif "gpu" in ztype:
+                        gpu_temps.append(temp_val)
+                except Exception:
+                    continue
+        if cpu_temps:
+            stats["cpu_temp"] = sum(cpu_temps) / len(cpu_temps)
+        if gpu_temps:
+            stats["gpu_temp"] = sum(gpu_temps) / len(gpu_temps)
+    except Exception:
+        pass
+
+    gpu_load_paths = [
+        "/sys/devices/platform/gpu.0/load",
+        "/sys/devices/gpu.0/load",
+        "/sys/devices/platform/17000000.ga10b/load",
+        "/sys/devices/platform/17000000.gv11b/load"
+    ]
+    for p in gpu_load_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r") as f:
+                    raw = float(f.read().strip())
+                    stats["gpu_load"] = raw / 10.0 if raw > 100 else raw
+                break
+            except Exception:
+                continue
+
+    try:
+        mem_total = 0
+        mem_avail = 0
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    mem_total = int(line.split()[1]) * 1024
+                elif line.startswith("MemAvailable:"):
+                    mem_avail = int(line.split()[1]) * 1024
+        if mem_total > 0:
+            mem_used = mem_total - mem_avail
+            stats["ram_used_gb"] = mem_used / (1024 ** 3)
+            stats["ram_total_gb"] = mem_total / (1024 ** 3)
+            stats["ram_percent"] = (mem_used / mem_total) * 100.0
+    except Exception:
+        pass
+
+    return stats
+
+def get_local_ip():
+    """스마트폰 접속을 위한 현재 머신의 로컬 네트워크 IPv4 주소를 감지합니다."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+REMOTE_HTML = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Jetson Player Remote</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 16px; }
+  .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 16px; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px; }
+  .title { font-size: 16px; font-weight: 800; color: #e9ff5b; letter-spacing: 1px; }
+  .badge { background: #1f2937; color: #9ca3af; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .badge.online { background: #064e3b; color: #34d399; }
+  .card { background: #141a24; border: 1px solid #232c3d; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+  .now-playing-title { font-size: 15px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .time-row { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; font-family: monospace; }
+  input[type=range] { width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; background: #2a3447; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #e9ff5b; cursor: pointer; }
+  .btn-row { display: flex; justify-content: space-around; align-items: center; gap: 8px; }
+  button { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; border-radius: 12px; padding: 12px 16px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.1s, transform 0.1s; display: flex; align-items: center; justify-content: center; }
+  button:active { background: #2d3748; transform: scale(0.96); }
+  button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 64px; height: 64px; border-radius: 32px; font-size: 26px; }
+  button.primary:active { background: #f2ff91; }
+  .vol-row { display: flex; align-items: center; gap: 12px; }
+  .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 44px; text-align: right; }
+  .grid-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .grid-actions button { font-size: 13px; padding: 10px; }
+  .playlist-card { max-height: 240px; overflow-y: auto; }
+  .playlist-item { padding: 10px; border-radius: 8px; font-size: 13px; color: #cbd5e1; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #1c2433; }
+  .playlist-item:active { background: #232c3d; }
+  .playlist-item.active { background: #242b35; color: #e9ff5b; font-weight: bold; border-left: 3px solid #e9ff5b; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="title">⚡ JETSON REMOTE</div>
+    <div id="statusBadge" class="badge">연결 중...</div>
+  </div>
+
+  <div class="card">
+    <div id="trackTitle" class="now-playing-title">재생 중인 영상 없음</div>
+    <div class="time-row">
+      <span id="curTime">00:00</span>
+      <span id="durTime">00:00</span>
+    </div>
+    <input type="range" id="progressBar" min="0" max="100" value="0" step="0.1">
+    
+    <div class="btn-row">
+      <button onclick="cmd('prev')">⏮</button>
+      <button onclick="cmd('seek', {delta: -10})">⏪ 10s</button>
+      <button id="playBtn" class="primary" onclick="cmd('play_pause')">▶</button>
+      <button onclick="cmd('seek', {delta: 10})">10s ⏩</button>
+      <button onclick="cmd('next')">⏭</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="vol-row">
+      <button onclick="cmd('mute')" id="muteBtn" style="padding: 8px 12px; font-size: 18px;">🔊</button>
+      <input type="range" id="volBar" min="0" max="200" value="100" step="1">
+      <span id="volVal" class="vol-label">100%</span>
+    </div>
+    <div class="grid-actions">
+      <button onclick="cmd('fullscreen')">📺 전체화면 토글</button>
+      <button onclick="cmd('subtitles')">💬 자막 토글</button>
+      <button onclick="cmd('repeat')">🔁 <span id="repeatModeText">반복 모드</span></button>
+      <button onclick="cmd('screenshot')">📸 스크린샷 캡처</button>
+    </div>
+  </div>
+
+  <div class="card playlist-card">
+    <div style="font-size: 13px; font-weight: 700; color: #9ca3af; margin-bottom: 4px;">📂 재생목록</div>
+    <div id="playlistContainer"></div>
+  </div>
+</div>
+
+<script>
+let isSeeking = false;
+let isVolDragging = false;
+const progress = document.getElementById('progressBar');
+const volBar = document.getElementById('volBar');
+
+progress.addEventListener('input', () => { isSeeking = true; });
+progress.addEventListener('change', () => {
+  cmd('seek_to', { percent: progress.value });
+  isSeeking = false;
+});
+
+volBar.addEventListener('input', () => {
+  isVolDragging = true;
+  document.getElementById('volVal').innerText = volBar.value + '%';
+});
+volBar.addEventListener('change', () => {
+  cmd('volume', { val: volBar.value });
+  isVolDragging = false;
+});
+
+function cmd(action, params={}) {
+  if (navigator.vibrate) navigator.vibrate(15);
+  let q = new URLSearchParams({ action, ...params });
+  fetch('/api/cmd?' + q.toString()).catch(() => {});
+}
+
+function fmtTime(sec) {
+  sec = Math.floor(sec || 0);
+  let m = Math.floor(sec / 60);
+  let s = sec % 60;
+  let h = Math.floor(m / 60);
+  m = m % 60;
+  if (h > 0) return `${h}:${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
+  return `${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
+}
+
+function updateStatus() {
+  fetch('/api/status')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('statusBadge').innerText = '연결됨';
+      document.getElementById('statusBadge').className = 'badge online';
+      document.getElementById('trackTitle').innerText = data.title || '대기 화면';
+      document.getElementById('curTime').innerText = fmtTime(data.position_sec);
+      document.getElementById('durTime').innerText = fmtTime(data.duration_sec);
+      document.getElementById('playBtn').innerText = data.is_playing ? 'Ⅱ' : '▶';
+      document.getElementById('muteBtn').innerText = data.is_muted ? '🔇' : '🔊';
+
+      if (!isSeeking && data.duration_sec > 0) {
+        progress.value = (data.position_sec / data.duration_sec) * 100;
+      }
+      if (!isVolDragging) {
+        volBar.value = data.volume;
+        document.getElementById('volVal').innerText = data.volume + '%';
+      }
+
+      let repeatLabel = '전체반복';
+      if (data.repeat_mode === 'repeat_one') repeatLabel = '한곡반복';
+      else if (data.repeat_mode === 'stop_after_finish') repeatLabel = '순차정지';
+      else if (data.repeat_mode === 'shuffle') repeatLabel = '무작위';
+      document.getElementById('repeatModeText').innerText = repeatLabel;
+
+      if (data.playlist && data.playlist.length > 0) {
+        let box = document.getElementById('playlistContainer');
+        if (box.children.length !== data.playlist.length) {
+          box.innerHTML = '';
+          data.playlist.forEach(item => {
+            let d = document.createElement('div');
+            d.className = 'playlist-item' + (item.active ? ' active' : '');
+            d.innerText = `${item.index + 1}. ${item.name}`;
+            d.onclick = () => cmd('play_index', { index: item.index });
+            box.appendChild(d);
+          });
+        } else {
+          data.playlist.forEach((item, idx) => {
+            let el = box.children[idx];
+            if (el) el.className = 'playlist-item' + (item.active ? ' active' : '');
+          });
+        }
+      }
+    })
+    .catch(() => {
+      document.getElementById('statusBadge').innerText = '오프라인';
+      document.getElementById('statusBadge').className = 'badge';
+    });
+}
+setInterval(updateStatus, 1000);
+updateStatus();
+</script>
+</body>
+</html>
+"""
+
+class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
+    player = None
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+
+        if path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(REMOTE_HTML.encode("utf-8"))
+        elif path == "/api/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            status = self.player.get_remote_status() if self.player else {}
+            self.wfile.write(json.dumps(status).encode("utf-8"))
+        elif path == "/api/cmd":
+            action = query.get("action", [""])[0]
+            val = query.get("val", [None])[0]
+            index = query.get("index", [None])[0]
+            delta = query.get("delta", [None])[0]
+            percent = query.get("percent", [None])[0]
+
+            if self.player:
+                self.player.handle_remote_command(action, val=val, index=index, delta=delta, percent=percent)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
 
 LANGUAGE_COLORS = {
     'ko': '#FFFFFF',  # 🇰🇷 한국어: 화이트 (메인 기본)
@@ -708,6 +1123,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_hud_visible = False
         self.placeholder_box = None
 
+        # A-B 구간 반복 상태
+        self.ab_repeat_a = None
+        self.ab_repeat_b = None
+        self.is_ab_repeat_active = False
+
+        # 오디오/비디오(AV) 싱크 미세 조절 상태
+        self.av_sync_offset_ms = 0
+        self.current_asink = None
+
+        # 스마트폰 웹 리모컨 서버 상태
+        self.web_server = None
+        self.web_server_thread = None
+        self.web_port = 8888
+        self.remote_url = ""
+
         # 검색 필터 텍스트
         self.search_text = ""
         self.search_entry = None
@@ -769,6 +1199,425 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         # 재생 위치와 UI 상태 갱신 (250ms 주기로 매끄러운 진행바 보장)
         self.position_timer_id = GLib.timeout_add(250, self.update_playback_ui)
+
+        # 스마트폰 웹 리모컨 서버 자동 기동
+        self.start_web_remote_server()
+
+    def start_web_remote_server(self):
+        """스마트폰 접속용 웹 리모컨 백그라운드 HTTP 서버를 구동합니다."""
+        JetsonWebRemoteHandler.player = self
+        local_ip = get_local_ip()
+        for port in [8888, 8889, 8890, 8080]:
+            try:
+                server = http.server.ThreadingHTTPServer(("0.0.0.0", port), JetsonWebRemoteHandler)
+                self.web_server = server
+                self.web_port = port
+                self.remote_url = f"http://{local_ip}:{port}"
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                self.web_server_thread = thread
+                print(f"📱 [웹 리모컨 서버 활성화] 스마트폰 접속 주소: {self.remote_url}")
+                break
+            except Exception:
+                continue
+
+    def stop_web_remote_server(self):
+        """웹 리모컨 서버를 안전하게 종료합니다."""
+        if self.web_server:
+            try:
+                self.web_server.shutdown()
+                self.web_server.server_close()
+            except Exception:
+                pass
+            self.web_server = None
+
+    def get_remote_status(self):
+        """웹 리모컨 클라이언트에게 현재 재생 상태를 반환합니다."""
+        pos_sec = 0
+        dur_sec = 0
+        if self.pipeline:
+            try:
+                succ, p = self.pipeline.query_position(Gst.Format.TIME)
+                if succ and p > 0:
+                    pos_sec = p / Gst.SECOND
+                succ, d = self.pipeline.query_duration(Gst.Format.TIME)
+                if succ and d > 0:
+                    dur_sec = d / Gst.SECOND
+            except Exception:
+                pass
+
+        cur_title = ""
+        if self.playlist and 0 <= self.current_index < len(self.playlist):
+            cur_title = os.path.basename(self.playlist[self.current_index])
+
+        playlist_items = []
+        for idx, fpath in enumerate(self.playlist[:50]):
+            playlist_items.append({
+                "index": idx,
+                "name": os.path.basename(fpath),
+                "active": idx == self.current_index
+            })
+
+        vol = int(self.volume_scale.get_value()) if getattr(self, "volume_scale", None) else 100
+
+        return {
+            "title": cur_title,
+            "is_playing": self.is_playing,
+            "position_sec": pos_sec,
+            "duration_sec": dur_sec,
+            "volume": vol,
+            "is_muted": self.is_muted,
+            "speed": self.playback_rate,
+            "subtitles_enabled": self.subtitles_enabled,
+            "is_fullscreen": self.is_fullscreen,
+            "repeat_mode": self.repeat_mode,
+            "playlist": playlist_items
+        }
+
+    def handle_remote_command(self, action, val=None, index=None, delta=None, percent=None):
+        """웹 리모컨에서 수신한 명령을 GTK 메인 스레드에 위임하여 안전하게 실행합니다."""
+        if action == "play_pause":
+            GLib.idle_add(self.toggle_play_pause)
+        elif action == "next":
+            GLib.idle_add(self.play_next_video)
+        elif action == "prev":
+            GLib.idle_add(self.play_prev_video)
+        elif action == "mute":
+            GLib.idle_add(self.toggle_mute)
+        elif action == "fullscreen":
+            GLib.idle_add(self.toggle_fullscreen)
+        elif action == "subtitles":
+            GLib.idle_add(self.toggle_subtitles)
+        elif action == "repeat":
+            GLib.idle_add(self.cycle_repeat_mode)
+        elif action == "screenshot":
+            GLib.idle_add(self.capture_screenshot)
+        elif action == "seek" and delta is not None:
+            try:
+                d = float(delta) * Gst.SECOND
+                GLib.idle_add(lambda: self.seek_relative(d))
+            except Exception:
+                pass
+        elif action == "seek_to" and percent is not None:
+            try:
+                pct = float(percent)
+                GLib.idle_add(lambda: self.seek_to_percent(pct))
+            except Exception:
+                pass
+        elif action == "volume" and val is not None:
+            try:
+                v = float(val)
+                GLib.idle_add(lambda: self.set_volume(v))
+            except Exception:
+                pass
+        elif action == "play_index" and index is not None:
+            try:
+                idx = int(index)
+                GLib.idle_add(lambda: self.play_index_direct(idx))
+            except Exception:
+                pass
+
+    def seek_to_percent(self, pct):
+        if not self.pipeline:
+            return
+        success, duration = self.pipeline.query_duration(Gst.Format.TIME)
+        if success and duration > 0:
+            target = int(duration * (pct / 100.0))
+            self.last_known_pos_ns = target
+            self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target)
+
+    def play_index_direct(self, idx):
+        if self.playlist and 0 <= idx < len(self.playlist):
+            self.current_index = idx
+            self.play_current_video()
+
+    def set_volume(self, val):
+        val = max(0, min(200, val))
+        if getattr(self, "volume_scale", None):
+            self.volume_scale.set_value(val)
+        if getattr(self, "fs_volume_scale", None):
+            self.fs_volume_scale.set_value(val)
+        if self.pipeline:
+            self.pipeline.set_property("volume", val / 100.0)
+        boost_str = " (부스트)" if val > 100 else ""
+        self.show_osd(f"🔊 볼륨: {int(val)}%{boost_str}")
+
+    def show_remote_popover(self, parent_btn):
+        """스마트폰 접속을 위한 웹 리모컨 안내 팝오버를 표시합니다."""
+        pop = Gtk.Popover(relative_to=parent_btn)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+        pop.set_border_width(12)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        title = Gtk.Label(label="📱 스마트폰 웹 리모컨", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        box.pack_start(title, False, False, 0)
+
+        desc = Gtk.Label(label="같은 Wi-Fi에 연결된 스마트폰 브라우저에서\n아래 주소로 접속하면 바로 조작할 수 있습니다:", xalign=0)
+        desc.get_style_context().add_class("muted")
+        box.pack_start(desc, False, False, 2)
+
+        url_entry = Gtk.Entry()
+        url_entry.set_text(self.remote_url or "http://127.0.0.1:8888")
+        url_entry.set_editable(False)
+        box.pack_start(url_entry, False, False, 4)
+
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        copy_btn = Gtk.Button(label="📋 주소 복사")
+        copy_btn.get_style_context().add_class("primary")
+        def on_copy(_b):
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(self.remote_url, -1)
+            self.show_osd("📋 리모컨 주소가 복사되었습니다!")
+            pop.popdown()
+        copy_btn.connect("clicked", on_copy)
+        btn_row.pack_start(copy_btn, True, True, 0)
+
+        box.pack_start(btn_row, False, False, 4)
+
+        box.show_all()
+        pop.add(box)
+        pop.popup()
+
+    def set_ab_repeat_a(self):
+        """현재 재생 위치를 A-B 구간 반복의 시작점(A)으로 설정합니다."""
+        if not self.pipeline:
+            return
+        success, pos = self.pipeline.query_position(Gst.Format.TIME)
+        if success and pos >= 0:
+            self.ab_repeat_a = pos
+            self.is_ab_repeat_active = False
+            t_str = self.format_time(pos)
+            self.show_osd(f"🔁 구간 반복 [A] 설정: {t_str}")
+            print(f"🔁 [구간 반복] A 지점 설정: {t_str}")
+
+    def set_ab_repeat_b(self):
+        """현재 재생 위치를 A-B 구간 반복의 종료점(B)으로 설정하고 루프를 활성화합니다."""
+        if not self.pipeline:
+            return
+        success, pos = self.pipeline.query_position(Gst.Format.TIME)
+        if not success or pos < 0:
+            return
+
+        if self.ab_repeat_a is None:
+            self.ab_repeat_a = 0
+
+        if pos <= self.ab_repeat_a:
+            self.show_osd("⚠️ B 지점은 A 지점보다 뒤여야 합니다.")
+            return
+
+        self.ab_repeat_b = pos
+        self.is_ab_repeat_active = True
+        a_str = self.format_time(self.ab_repeat_a)
+        b_str = self.format_time(self.ab_repeat_b)
+        self.show_osd(f"🔁 [A-B] 구간 반복 활성화: {a_str} ~ {b_str}")
+        print(f"🔁 [구간 반복] 활성화: {a_str} ~ {b_str}")
+
+    def clear_ab_repeat(self):
+        """A-B 구간 반복을 해제합니다."""
+        if self.ab_repeat_a is not None or self.ab_repeat_b is not None or self.is_ab_repeat_active:
+            self.ab_repeat_a = None
+            self.ab_repeat_b = None
+            self.is_ab_repeat_active = False
+            self.show_osd("🔁 A-B 구간 반복 해제")
+            print("🔁 [구간 반복] 해제")
+
+    def add_bookmark(self):
+        """현재 재생 위치를 북마크에 추가합니다."""
+        if not self.pipeline or not self.playlist or not (0 <= self.current_index < len(self.playlist)):
+            return
+        success, pos = self.pipeline.query_position(Gst.Format.TIME)
+        if not success or pos < 0:
+            return
+        cur_path = self.playlist[self.current_index]
+        ok, res = bookmark_cache.add(cur_path, pos)
+        if ok:
+            self.show_osd(f"🔖 북마크 추가: {res}")
+            print(f"🔖 [북마크 추가] {os.path.basename(cur_path)} @ {res}")
+        else:
+            self.show_osd(f"🔖 {res}")
+
+    def show_bookmarks_popover(self, parent_widget=None):
+        """현재 영상의 북마크 목록을 표시하고 클릭 시 즉시 점프하는 팝오버를 표시합니다."""
+        if not self.playlist or not (0 <= self.current_index < len(self.playlist)):
+            self.show_osd("재생 중인 영상이 없습니다.")
+            return
+
+        parent = parent_widget or getattr(self, "topbar", None) or self.play_button
+        cur_path = self.playlist[self.current_index]
+        bookmarks = bookmark_cache.get(cur_path)
+
+        pop = Gtk.Popover(relative_to=parent)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+        pop.set_border_width(10)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        title = Gtk.Label(label="🔖 북마크 목록", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        box.pack_start(title, False, False, 2)
+
+        if not bookmarks:
+            empty = Gtk.Label(label="등록된 북마크가 없습니다. (단축키 'B'로 추가)", xalign=0)
+            empty.get_style_context().add_class("muted")
+            box.pack_start(empty, False, False, 6)
+        else:
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_min_content_height(140)
+            scroll.set_min_content_width(220)
+            list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            for idx, bm in enumerate(bookmarks):
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                b_jump = Gtk.Button(label=f"▶ {bm['label']}")
+                b_jump.get_style_context().add_class("tree-tool-btn")
+                b_jump.connect("clicked", lambda _b, p=bm['position_ns']: (self.seek_direct(p), pop.popdown()))
+                row.pack_start(b_jump, True, True, 0)
+
+                b_del = Gtk.Button(label="✕")
+                b_del.get_style_context().add_class("tree-tool-btn")
+                b_del.connect("clicked", lambda _b, i=idx: (bookmark_cache.remove(cur_path, i), pop.popdown(), self.show_bookmarks_popover(parent)))
+                row.pack_start(b_del, False, False, 0)
+
+                list_box.pack_start(row, False, False, 0)
+            scroll.add(list_box)
+            box.pack_start(scroll, True, True, 0)
+
+        b_add = Gtk.Button(label="➕ 현재 위치 북마크 추가 (B)")
+        b_add.get_style_context().add_class("primary")
+        b_add.connect("clicked", lambda _b: (self.add_bookmark(), pop.popdown()))
+        box.pack_start(b_add, False, False, 4)
+
+        box.show_all()
+        pop.add(box)
+        pop.popup()
+
+    def show_history_popover(self, parent_widget=None):
+        """최근 재생한 파일 및 폴더 목록을 표시하는 팝오버를 표시합니다."""
+        parent = parent_widget or getattr(self, "topbar", None)
+        history = history_cache.get_all()
+
+        pop = Gtk.Popover(relative_to=parent)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+        pop.set_border_width(10)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        title = Gtk.Label(label="🕒 최근 재생 항목", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        box.pack_start(title, False, False, 2)
+
+        if not history:
+            empty = Gtk.Label(label="최근 재생 기록이 없습니다.", xalign=0)
+            empty.get_style_context().add_class("muted")
+            box.pack_start(empty, False, False, 6)
+        else:
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_min_content_height(160)
+            scroll.set_min_content_width(280)
+            list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            for item in history:
+                icon = "📁 " if item.get("is_dir") else "🎬 "
+                btn = Gtk.Button(label=f"{icon}{item['title']}")
+                btn.set_tooltip_text(item['path'])
+                btn.get_style_context().add_class("tree-tool-btn")
+                btn.connect("clicked", lambda _b, p=item['path']: (pop.popdown(), self.load_target_path(p)))
+                list_box.pack_start(btn, False, False, 0)
+            scroll.add(list_box)
+            box.pack_start(scroll, True, True, 0)
+
+        box.show_all()
+        pop.add(box)
+        pop.popup()
+
+    def capture_screenshot(self):
+        """현재 재생 중인 프레임을 무손실 PNG 이미지로 캡처하여 저장합니다."""
+        if not self.pipeline:
+            self.show_osd("캡처할 재생 영상이 없습니다.")
+            return
+
+        pic_dir = os.path.expanduser("~/Pictures/JetsonVideoPlayer")
+        os.makedirs(pic_dir, exist_ok=True)
+        now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"Screenshot_{now_str}.png"
+        filepath = os.path.join(pic_dir, filename)
+
+        saved = False
+        try:
+            caps = Gst.Caps.from_string("image/png")
+            sample = self.pipeline.emit("convert-sample", caps)
+            if sample:
+                buf = sample.get_buffer()
+                succ, map_info = buf.map(Gst.MapFlags.READ)
+                if succ:
+                    with open(filepath, "wb") as f:
+                        f.write(map_info.data)
+                    buf.unmap(map_info)
+                    saved = True
+        except Exception:
+            pass
+
+        if not saved:
+            try:
+                win = self.video_widget.get_window()
+                if win:
+                    w = self.video_widget.get_allocated_width()
+                    h = self.video_widget.get_allocated_height()
+                    pixbuf = Gdk.pixbuf_get_from_window(win, 0, 0, w, h)
+                    if pixbuf:
+                        pixbuf.savev(filepath, "png", [], [])
+                        saved = True
+            except Exception:
+                pass
+
+        if saved:
+            self.show_osd(f"📸 스크린샷 저장 완료: {filename}", timeout_ms=2000)
+            print(f"📸 [스크린샷 캡처] 저장 완료: {filepath}")
+        else:
+            self.show_osd("⚠️ 스크린샷 캡처 실패")
+
+    def adjust_av_sync(self, delta_ms):
+        """오디오와 비디오 간의 싱크 오프셋을 미세 조절합니다 (단위: ms)."""
+        self.av_sync_offset_ms += delta_ms
+        offset_ns = self.av_sync_offset_ms * 1_000_000
+
+        if getattr(self, "current_asink", None) and self.current_asink.find_property("ts-offset"):
+            self.current_asink.set_property("ts-offset", offset_ns)
+
+        sign = "+" if self.av_sync_offset_ms > 0 else ""
+        self.show_osd(f"🔊 AV 싱크: {sign}{self.av_sync_offset_ms}ms")
+        print(f"🔊 [AV 싱크] 오프셋: {sign}{self.av_sync_offset_ms}ms")
+
+    def reset_av_sync(self):
+        """오디오 싱크 오프셋을 0ms(기본값)으로 복원합니다."""
+        self.av_sync_offset_ms = 0
+        if getattr(self, "current_asink", None) and self.current_asink.find_property("ts-offset"):
+            self.current_asink.set_property("ts-offset", 0)
+        self.show_osd("🔊 AV 싱크 초기화: 0ms")
+        print("🔊 [AV 싱크] 0ms 초기화 완료")
+
+    def seek_direct(self, target_ns):
+        """지정된 나노초 위치로 즉각 Seek합니다."""
+        if self.pipeline and target_ns >= 0:
+            self.last_known_pos_ns = target_ns
+            self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target_ns)
+
+    def load_target_path(self, path):
+        """파일 또는 폴더 경로를 로드하여 즉시 재생합니다."""
+        if not path or not os.path.exists(path):
+            self.show_osd("경로가 존재하지 않습니다.")
+            return
+        if os.path.isfile(path):
+            self.playlist = [os.path.abspath(path)]
+            self.current_index = 0
+            self.populate_playlist_tree()
+            self.play_current_video()
+        elif os.path.isdir(path):
+            files = self.find_video_files(path)
+            if files:
+                self.playlist = files
+                self.current_index = 0
+                self.populate_playlist_tree()
+                self.play_current_video()
+            else:
+                self.show_osd("폴더 내에 동영상이 없습니다.")
 
     def show_osd(self, text, timeout_ms=1200):
         """화면 상단 중앙에 설정 변경 상태(속도, 탐색 등)를 알려주는 OSD 박스를 표시합니다."""
@@ -1029,6 +1878,59 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         mode_menu_item.set_submenu(mode_sub)
         menu.append(mode_menu_item)
 
+        # A-B 구간 반복 서브메뉴
+        ab_status = " (활성)" if self.is_ab_repeat_active else ""
+        ab_menu_item = Gtk.MenuItem(label=f"🔁 구간 반복 (A-B){ab_status}")
+        ab_sub = Gtk.Menu()
+        ab_a = Gtk.MenuItem(label="A 지점 설정 (Shift+[)")
+        ab_a.connect("activate", lambda _w: self.set_ab_repeat_a())
+        ab_sub.append(ab_a)
+        ab_b = Gtk.MenuItem(label="B 지점 설정 (Shift+])")
+        ab_b.connect("activate", lambda _w: self.set_ab_repeat_b())
+        ab_sub.append(ab_b)
+        ab_clear = Gtk.MenuItem(label="구간 반복 해제 (\\)")
+        ab_clear.connect("activate", lambda _w: self.clear_ab_repeat())
+        ab_sub.append(ab_clear)
+        ab_menu_item.set_submenu(ab_sub)
+        menu.append(ab_menu_item)
+
+        # 오디오/비디오 (AV) 싱크 서브메뉴
+        av_sign = "+" if self.av_sync_offset_ms > 0 else ""
+        av_menu_item = Gtk.MenuItem(label=f"🔊 AV 싱크 ({av_sign}{self.av_sync_offset_ms}ms)")
+        av_sub = Gtk.Menu()
+        av_m50 = Gtk.MenuItem(label="오디오 50ms 앞당김 (Shift+Z)")
+        av_m50.connect("activate", lambda _w: self.adjust_av_sync(-50))
+        av_sub.append(av_m50)
+        av_p50 = Gtk.MenuItem(label="오디오 50ms 늦춤 (Shift+X)")
+        av_p50.connect("activate", lambda _w: self.adjust_av_sync(50))
+        av_sub.append(av_p50)
+        av_rst = Gtk.MenuItem(label="AV 싱크 초기화 (Shift+C)")
+        av_rst.connect("activate", lambda _w: self.reset_av_sync())
+        av_sub.append(av_rst)
+        av_menu_item.set_submenu(av_sub)
+        menu.append(av_menu_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        # 스크린샷 캡처
+        item_snap = Gtk.MenuItem(label="📸 스크린샷 캡처 (Ctrl+S)")
+        item_snap.connect("activate", lambda _w: self.capture_screenshot())
+        menu.append(item_snap)
+
+        # 북마크
+        item_bm_add = Gtk.MenuItem(label="🔖 북마크 추가 (B)")
+        item_bm_add.connect("activate", lambda _w: self.add_bookmark())
+        menu.append(item_bm_add)
+
+        item_bm_list = Gtk.MenuItem(label="📑 북마크 목록 (Ctrl+B)")
+        item_bm_list.connect("activate", lambda _w: self.show_bookmarks_popover())
+        menu.append(item_bm_list)
+
+        # 스마트폰 웹 리모컨
+        item_remote = Gtk.MenuItem(label="📱 스마트폰 웹 리모컨 안내...")
+        item_remote.connect("activate", lambda _w: self.show_remote_popover(self.topbar))
+        menu.append(item_remote)
+
         menu.append(Gtk.SeparatorMenuItem())
 
         # 항상 위 토글
@@ -1159,14 +2061,27 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         sub_info = f"{len(self.active_subtitle_indices)}/{len(self.available_subtitles)}개 활성" if self.available_subtitles else "없음"
         
         text = (
-            f"<b>[Jetson 미디어 모니터링]</b>\n"
+            f"<b>[Jetson 미디어 및 시스템 모니터링]</b>\n"
             f"📁 <b>파일:</b> {GLib.markup_escape_text(fname)}\n"
             f"🚀 <b>디코더:</b> {GLib.markup_escape_text(decoders)} ({hw_str})\n"
             f"⏱️ <b>재생:</b> {pos_str} / {dur_str} (속도: {self.playback_rate:.2f}x)\n"
             f"📊 <b>드롭 프레임:</b> {dropped}\n"
             f"💬 <b>자막:</b> {sub_info}\n"
-            f"🎵 <b>오디오 트랙:</b> {self.current_audio_track + 1}/{max(1, self.n_audio_tracks)}"
+            f"🎵 <b>오디오:</b> 트랙 {self.current_audio_track + 1}/{max(1, self.n_audio_tracks)}"
         )
+
+        hw = get_jetson_hw_stats()
+        if "cpu_temp" in hw or "gpu_temp" in hw:
+            c_str = f"CPU {hw['cpu_temp']:.1f}°C" if "cpu_temp" in hw else ""
+            g_str = f"GPU {hw['gpu_temp']:.1f}°C" if "gpu_temp" in hw else ""
+            text += f"\n🌡️ <b>SoC 온도:</b> {c_str}  {g_str}".rstrip()
+        if "gpu_load" in hw:
+            text += f"\n⚡ <b>GPU 로드:</b> {hw['gpu_load']:.1f}%"
+        if "ram_used_gb" in hw:
+            text += f"\n💾 <b>시스템 RAM:</b> {hw['ram_used_gb']:.1f}GB / {hw['ram_total_gb']:.1f}GB ({hw['ram_percent']:.0f}%)"
+        if self.remote_url:
+            text += f"\n📱 <b>웹 리모컨:</b> {self.remote_url}"
+
         self.hud_label.set_markup(text)
 
     def toggle_keep_above(self):
@@ -1362,6 +2277,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             ("Z / X", "자막 싱크 앞당김 / 늦춤 (-0.5s / +0.5s)"),
             (", / .", "자막 싱크 미세 조절 (-0.1s / +0.1s)"),
             ("Shift+A", "오디오 트랙 변경 (다중 음성 지원 영상)"),
+            ("Shift+Z / Shift+X", "오디오(AV) 싱크 50ms 앞당김 / 늦춤"),
+            ("Shift+C", "오디오(AV) 싱크 0ms 초기화"),
+            ("Shift+[ / Shift+]", "A-B 구간 반복 시작점(A) / 끝점(B) 설정"),
+            ("\\ (백슬래시)", "A-B 구간 반복 해제"),
+            ("Ctrl+S", "현재 프레임 무손실 스크린샷 캡처"),
+            ("B / Ctrl+B", "현재 위치 북마크 추가 / 북마크 목록 보기"),
             ("Shift+R", "재생 모드 순환 (전체반복/1곡반복/정지/셔플)"),
             ("I", "미디어 정보 및 실시간 하드웨어 통계 HUD"),
             ("Ctrl+O / Ctrl+Shift+O", "파일 열기 / 폴더 열기"),
@@ -1472,7 +2393,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.fs_mute_btn.connect("clicked", lambda _b: self.toggle_mute())
         actions.pack_start(self.fs_mute_btn, False, False, 2)
 
-        self.fs_volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.fs_volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 200, 1)
         self.fs_volume_scale.set_size_request(90, -1)
         self.fs_volume_scale.set_draw_value(False)
         self.fs_volume_scale.set_value(100)
@@ -1548,7 +2469,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.volume_scale.set_value(val)
         if self.pipeline:
             self.pipeline.set_property("volume", val / 100.0)
-        self.show_osd(f"🔊 볼륨: {int(val)}%")
+        boost_str = " (부스트)" if val > 100 else ""
+        self.show_osd(f"🔊 볼륨: {int(val)}%{boost_str}")
 
     def build_ui(self):
         """Jetson EGL 출력과 충돌하지 않는 네이티브 GTK 플레이어 UI를 구성합니다."""
@@ -1648,7 +2570,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.add(root)
 
-        self.topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.topbar.get_style_context().add_class("topbar")
         self.topbar.set_border_width(8)
         
@@ -1656,7 +2578,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         brand.get_style_context().add_class("brand")
         self.topbar.pack_start(brand, False, False, 4)
 
-        # 상단 빠른 조작 툴바: 파일 열기, 폴더 열기, 재생 모드, 미디어 정보, 단축키 도움말
+        # 상단 빠른 조작 툴바: 파일 열기, 폴더 열기, 최근 열기, 북마크, 캡처, 리모컨 등
         open_file_btn = Gtk.Button(label="📂 파일")
         open_file_btn.set_tooltip_text("동영상 파일 열기 (Ctrl+O)")
         open_file_btn.connect("clicked", lambda _b: self.open_file_dialog())
@@ -1666,6 +2588,26 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         open_dir_btn.set_tooltip_text("동영상 폴더 열기 (Ctrl+Shift+O)")
         open_dir_btn.connect("clicked", lambda _b: self.open_folder_dialog())
         self.topbar.pack_start(open_dir_btn, False, False, 0)
+
+        recent_btn = Gtk.Button(label="🕒 최근")
+        recent_btn.set_tooltip_text("최근 재생한 영상/폴더 열기")
+        recent_btn.connect("clicked", lambda _b: self.show_history_popover(recent_btn))
+        self.topbar.pack_start(recent_btn, False, False, 0)
+
+        bookmark_btn = Gtk.Button(label="🔖 북마크")
+        bookmark_btn.set_tooltip_text("현재 영상 북마크 목록 보기 (Ctrl+B) / 추가 (B)")
+        bookmark_btn.connect("clicked", lambda _b: self.show_bookmarks_popover(bookmark_btn))
+        self.topbar.pack_start(bookmark_btn, False, False, 0)
+
+        screenshot_btn = Gtk.Button(label="📸 캡처")
+        screenshot_btn.set_tooltip_text("현재 프레임 무손실 스크린샷 저장 (Ctrl+S)")
+        screenshot_btn.connect("clicked", lambda _b: self.capture_screenshot())
+        self.topbar.pack_start(screenshot_btn, False, False, 0)
+
+        remote_btn = Gtk.Button(label="📱 리모컨")
+        remote_btn.set_tooltip_text("스마트폰 웹 리모컨 접속 안내")
+        remote_btn.connect("clicked", lambda _b: self.show_remote_popover(remote_btn))
+        self.topbar.pack_start(remote_btn, False, False, 0)
 
         self.repeat_btn = Gtk.Button(label="🔁")
         self.repeat_btn.set_tooltip_text("재생 모드 (전체반복/1곡반복/정지/셔플) (Shift+R)")
@@ -1684,6 +2626,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         self.now_playing_label = Gtk.Label(xalign=0)
         self.now_playing_label.set_ellipsize(3)
+        self.now_playing_label.get_style_context().add_class("now-playing")
         self.now_playing_label.get_style_context().add_class("now-playing")
         self.topbar.pack_start(self.now_playing_label, True, True, 8)
 
@@ -1836,7 +2779,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.mute_btn.connect("clicked", lambda _b: self.toggle_mute())
         actions.pack_start(self.mute_btn, False, False, 2)
 
-        self.volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.volume_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 200, 1)
         self.volume_scale.set_size_request(110, -1)
         self.volume_scale.set_draw_value(False)
         self.volume_scale.set_value(100)
@@ -2216,6 +3159,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         position_ok, position = self.pipeline.query_position(Gst.Format.TIME)
         if position_ok and position > 0:
             self.last_known_pos_ns = position
+
+            # A-B 구간 반복 루프 검사
+            if getattr(self, "is_ab_repeat_active", False) and self.ab_repeat_a is not None and self.ab_repeat_b is not None:
+                if position >= self.ab_repeat_b:
+                    self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, self.ab_repeat_a)
+                    return True
+
             # 5초 이상 재생 시 이어보기 캐시 갱신
             if self.playlist and 0 <= self.current_index < len(self.playlist):
                 resume_cache.set(self.playlist[self.current_index], position, self.duration_ns)
@@ -2812,6 +3762,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         video_path = self.playlist[self.current_index]
         self.rate_applied_on_preroll = False
 
+        # 최근 재생 기록에 추가
+        history_cache.add(video_path)
+
+        # 새 영상 시작 시 A-B 구간 반복 리셋
+        if start_position_ns == 0:
+            self.ab_repeat_a = None
+            self.ab_repeat_b = None
+            self.is_ab_repeat_active = False
+
         # [하드웨어 적합성 검사 (SW Fallback 우선)]
         if os.path.exists(video_path):
             is_supported, reason = self.check_video_hw_support(video_path)
@@ -2951,6 +3910,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             asink = Gst.ElementFactory.make("fakesink", "asink")
         if asink and asink.find_property("sync"):
             asink.set_property("sync", True)
+        self.current_asink = asink
+        if asink and asink.find_property("ts-offset") and self.av_sync_offset_ms != 0:
+            asink.set_property("ts-offset", self.av_sync_offset_ms * 1_000_000)
 
         if aconv and scaletempo and aresample and asink:
             audio_bin.add(aconv)
@@ -3555,12 +4517,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         is_shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 
-        # 1. 파일 및 폴더 열기 (Ctrl+O / Ctrl+Shift+O)
-        if is_ctrl and keyname in ["o", "O"]:
+        # 1. 파일 및 폴더 열기 / 스크린샷 캡처
+        if is_ctrl and keyname in ["s", "S"]:
+            self.capture_screenshot()
+            return True
+        elif is_ctrl and keyname in ["o", "O"]:
             if is_shift:
                 self.open_folder_dialog()
             else:
                 self.open_file_dialog()
+            return True
+        elif is_ctrl and keyname in ["b", "B"]:
+            self.show_bookmarks_popover()
+            return True
+        elif not is_ctrl and not is_shift and keyname in ["b", "B"]:
+            self.add_bookmark()
             return True
 
         # 2. 종료 및 전체화면 해제
@@ -3596,13 +4567,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.seek_relative(-10)
             return True
 
-        # 4. 볼륨 조절 및 음소거
+        # 4. 볼륨 조절 및 음소거 (최대 200% 부스트 지원)
         elif keyname in ["m", "M"]:
             self.toggle_mute()
             return True
         elif keyname in ["0", "parenright"]:
             cur_vol = self.volume_scale.get_value()
-            self.volume_scale.set_value(min(100, cur_vol + 5))
+            self.volume_scale.set_value(min(200, cur_vol + 5))
             return True
         elif keyname in ["9", "parenleft"]:
             cur_vol = self.volume_scale.get_value()
@@ -3631,28 +4602,48 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.play_prev_video()
             return True
 
-        # 7. 오디오 트랙 전환 (Shift+A)
+        # 7. 오디오 트랙 및 AV 싱크 제어
         elif is_shift and keyname in ["A", "a"]:
             self.cycle_audio_track()
             return True
+        elif is_shift and keyname in ["z", "Z"]:
+            self.adjust_av_sync(-50)
+            return True
+        elif is_shift and keyname in ["x", "X"]:
+            self.adjust_av_sync(50)
+            return True
+        elif is_shift and keyname in ["c", "C"]:
+            self.reset_av_sync()
+            return True
 
-        # 8. 자막 제어
-        elif keyname in ["s", "S"]:
+        # 8. 구간 반복 (A-B Repeat)
+        elif is_shift and keyname in ["[", "braceleft"]:
+            self.set_ab_repeat_a()
+            return True
+        elif is_shift and keyname in ["]", "braceright"]:
+            self.set_ab_repeat_b()
+            return True
+        elif keyname in ["backslash", "bar"] or (is_shift and keyname in ["backslash", "bar"]):
+            self.clear_ab_repeat()
+            return True
+
+        # 9. 자막 제어 (자막 크기 및 자막 싱크)
+        elif not is_shift and not is_ctrl and keyname in ["s", "S"]:
             self.toggle_subtitles()
             return True
-        elif keyname in ["c", "C"]:
+        elif not is_shift and not is_ctrl and keyname in ["c", "C"]:
             self.show_subtitle_popover()
             return True
-        elif keyname in ["[", "bracketleft"]:
+        elif not is_shift and keyname in ["[", "bracketleft"]:
             self.adjust_subtitle_scale(-0.1)
             return True
-        elif keyname in ["]", "bracketright"]:
+        elif not is_shift and keyname in ["]", "bracketright"]:
             self.adjust_subtitle_scale(0.1)
             return True
-        elif keyname in ["z", "Z"]:
+        elif not is_shift and keyname in ["z", "Z"]:
             self.adjust_subtitle_sync(-500)
             return True
-        elif keyname in ["x", "X"]:
+        elif not is_shift and keyname in ["x", "X"]:
             self.adjust_subtitle_sync(500)
             return True
         elif not is_shift and keyname in [",", "comma"]:
@@ -3662,7 +4653,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.adjust_subtitle_sync(100)
             return True
 
-        # 9. 화면 및 HUD 모드
+        # 10. 화면 및 HUD 모드
         elif keyname in ["f", "F"]:
             self.toggle_fullscreen()
             return True
@@ -3681,8 +4672,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def on_destroy(self, widget):
         self.is_destroyed = True
         try:
+            self.stop_web_remote_server()
             hw_cache.save()
             resume_cache.save()
+            bookmark_cache.save()
+            history_cache.save()
+        except Exception:
+            pass
         except Exception:
             pass
 
