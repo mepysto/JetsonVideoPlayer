@@ -208,15 +208,39 @@ class YouTubeManager:
                         self.current_download["percent"] = 100.0
                         self.current_download["filepath"] = filename
 
-            # 최고 화질(4K / 1080p 등) 및 고음질 오디오 스트림 결합 (mp4 출력)
+            # 최고 화질(1080p Full HD / 720p 등) 및 고음질 오디오 스트림 결합 (mp4 출력)
+            # Jetson NVDEC(nvv4l2decoder) 하드웨어 가속을 100% 보장하고 화면 미출력(AV1 DPB 결함)을 원천 차단하기 위해
+            # H.264(avc1)를 최우선으로 선택하며, AV1(av01)은 엄격히 배제합니다.
             if quality == "1080p":
-                fmt = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+                fmt = (
+                    "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/"
+                    "bestvideo[height<=1080][vcodec^=avc1]+bestaudio/"
+                    "bestvideo[height<=1080][vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
+                    "best[height<=1080][vcodec^=avc1]/"
+                    "best[height<=1080][vcodec!*='av01']/"
+                    "best[height<=1080]"
+                )
             elif quality == "720p":
-                fmt = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+                fmt = (
+                    "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/"
+                    "bestvideo[height<=720][vcodec^=avc1]+bestaudio/"
+                    "bestvideo[height<=720][vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
+                    "best[height<=720][vcodec^=avc1]/"
+                    "best[height<=720][vcodec!*='av01']/"
+                    "best[height<=720]"
+                )
             elif quality == "audio":
                 fmt = "bestaudio[ext=m4a]/bestaudio"
-            else: # "best" (최고 화질: 4K UHD / 1440p / 1080p)
-                fmt = "bestvideo+bestaudio/best"
+            else: # "best" (최고 화질: 1080p H.264 Full HD 최우선, 또는 AV1 제외 최고화질)
+                fmt = (
+                    "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/"
+                    "bestvideo[vcodec^=avc1]+bestaudio/"
+                    "bestvideo[vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
+                    "bestvideo[vcodec!*='av01'][vcodec!*='av1']+bestaudio/"
+                    "best[vcodec^=avc1]/"
+                    "best[vcodec!*='av01']/"
+                    "best"
+                )
 
             out_tmpl = os.path.join(self.download_dir, "%(title)s [%(id)s].%(ext)s")
             ydl_opts = {
@@ -228,6 +252,7 @@ class YouTubeManager:
                 'merge_output_format': 'mp4',
                 'noplaylist': True,
                 'overwrites': True,
+                'remote_components': ['ejs:github'],
             }
 
             deno_bin = "/home/btree/.deno/bin/deno"
@@ -265,19 +290,29 @@ class YouTubeManager:
         threading.Thread(target=_worker, daemon=True).start()
 
     def extract_stream_async(self, url, on_success=None, on_error=None):
-        """즉시 스트리밍을 위한 비디오 URL 및 메타데이터 추출"""
+        """즉시 스트리밍을 위한 비디오 URL 및 메타데이터 추출 (H.264 최우선)"""
         if not HAS_YT_DLP:
             if on_error:
                 GLib.idle_add(lambda: on_error("yt-dlp 모듈이 설치되어 있지 않습니다."))
             return
 
         def _worker():
+            fmt = "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/best[vcodec^=avc1]/best[ext=mp4]/best"
             ydl_opts = {
-                'format': 'best[ext=mp4]/best',
+                'format': fmt,
                 'quiet': True,
                 'no_warnings': True,
                 'skip_download': True,
+                'noplaylist': True,
+                'remote_components': ['ejs:github'],
             }
+            deno_bin = "/home/btree/.deno/bin/deno"
+            node_bin = "/home/btree/.nvm/versions/node/v24.18.1/bin/node"
+            if os.path.exists(deno_bin):
+                ydl_opts['js_runtimes'] = {'deno': {'path': deno_bin}}
+            elif os.path.exists(node_bin):
+                ydl_opts['js_runtimes'] = {'node': {'path': node_bin}}
+
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
@@ -844,6 +879,15 @@ REMOTE_HTML = """<!DOCTYPE html>
     <div style="display: flex; gap: 6px; margin-bottom: 8px;">
       <input type="url" id="ytUrlInput" class="search-input" style="margin-bottom:0; flex:1;" placeholder="유튜브 링크 붙여넣기 (Ctrl+V)...">
     </div>
+    <div style="display: flex; gap: 6px; margin-bottom: 8px; align-items: center;">
+      <span style="font-size: 12px; color: #94a3b8; min-width: 36px;">화질:</span>
+      <select id="ytQualitySelect" style="flex: 1; background: #161c28; color: #f0f4fc; border: 1px solid #2a3447; border-radius: 8px; padding: 7px 10px; font-size: 12px; outline: none;">
+        <option value="best" selected>최고 화질 (1080p Full HD / HW 가속)</option>
+        <option value="1080p">1080p Full HD (H.264)</option>
+        <option value="720p">720p HD (초고속)</option>
+        <option value="audio">오디오만 (M4A)</option>
+      </select>
+    </div>
     <div style="display: flex; gap: 6px;">
       <button onclick="submitYt('download')" class="primary" style="flex:1.2; font-size:12px; padding:10px 6px; font-weight:bold; border-radius:8px; width:auto; height:auto;">⬇️ 다운로드 & 재생</button>
       <button onclick="submitYt('stream')" style="flex:1; font-size:12px; padding:10px 6px; border-radius:8px;">🎬 바로 보기</button>
@@ -935,17 +979,19 @@ function submitYt(mode) {
     alert('유튜브 링크를 입력하세요.');
     return;
   }
+  const qSelect = document.getElementById('ytQualitySelect');
+  const q = qSelect ? qSelect.value : 'best';
   const pBox = document.getElementById('ytProgressBox');
   if (pBox) {
     pBox.style.display = 'block';
     pBox.removeAttribute('data-keep');
   }
   if (mode === 'download') {
-    cmd('yt_download', { url: url });
-    document.getElementById('ytProgTitle').innerText = '⬇️ 다운로드 준비 중...';
+    cmd('yt_download', { url: url, quality: q });
+    document.getElementById('ytProgTitle').innerText = '⬇️ 최고 화질 다운로드 준비 중...';
   } else {
-    cmd('yt_stream', { url: url });
-    document.getElementById('ytProgTitle').innerText = '⚡ 빠른 재생 버퍼링 중...';
+    cmd('yt_stream', { url: url, quality: q });
+    document.getElementById('ytProgTitle').innerText = '⚡ 최고 화질 빠른 재생 버퍼링 중...';
   }
   inp.value = '';
 }
@@ -1912,7 +1958,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif action == "yt_download" and url:
             GLib.idle_add(lambda: self.start_youtube_download(url, quality or "best"))
         elif action == "yt_stream" and url:
-            GLib.idle_add(lambda: self.start_youtube_stream(url))
+            GLib.idle_add(lambda: self.start_youtube_stream(url, quality=quality or "best"))
         elif action == "open_location":
             idx = int(index) if index is not None else None
             GLib.idle_add(lambda: self.open_selected_or_current_location_by_index(idx))
@@ -2034,15 +2080,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             on_error=_on_error
         )
 
-    def start_youtube_stream(self, url):
-        """유튜브 영상을 초고속 버퍼링 다운로드 후 Jetson HW 가속으로 끊김 없이 즉시 재생합니다."""
+    def start_youtube_stream(self, url, quality="best"):
+        """유튜브 영상을 초고속 버퍼링 다운로드 후 Jetson HW 가속으로 끊김 없이 즉시 최고 화질로 재생합니다."""
         norm_url = extract_youtube_url(url)
         if not norm_url:
             self.show_osd("⚠️ 올바른 유튜브 링크가 아닙니다.", duration_sec=2.0)
             return
 
-        self.show_osd("⚡ [유튜브] 빠른 버퍼링 다운로드 후 즉시 재생합니다...", duration_sec=2.5)
-        print(f"🎬 [YouTube 빠른 재생 버퍼링 시작] {norm_url}")
+        q_desc = "최고 화질" if quality == "best" else quality
+        self.show_osd(f"⚡ [유튜브] {q_desc} 빠른 버퍼링 후 즉시 재생합니다...", duration_sec=2.5)
+        print(f"🎬 [YouTube 빠른 재생 버퍼링 시작] {norm_url} (품질: {quality})")
         if getattr(self, "yt_btn", None):
             self.yt_btn.set_label("⏳ 버퍼링...")
 
@@ -2080,10 +2127,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 GLib.timeout_add(3000, lambda: self.yt_btn.set_label("▶️ 유튜브") if getattr(self, "yt_btn", None) else False)
             self.show_osd(f"❌ 빠른 재생 실패: {err[:40]}", duration_sec=4.0)
 
-        # YouTube 직접 스트리밍 시 HTTP 403 차단 오류를 완벽 방지하기 위해 1080p 고화질 버퍼링 다운로드 후 자동 재생 연결
+        # YouTube 직접 스트리밍 시 HTTP 403 차단 및 저화질 문제를 완벽 방지하기 위해 선택된 최고 화질로 고속 버퍼링 후 자동 재생 연결
         youtube_mgr.download_async(
             norm_url,
-            quality="1080p",
+            quality=quality,
             on_progress=_on_progress,
             on_finish=_on_finish,
             on_error=_on_error
@@ -2123,8 +2170,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         q_lbl = Gtk.Label(label="품질:")
         q_lbl.get_style_context().add_class("muted")
         q_combo = Gtk.ComboBoxText()
-        q_combo.append("best", "최고 화질 (4K / 1080p H.264 HW 가속)")
-        q_combo.append("1080p", "1080p Full HD")
+        q_combo.append("best", "최고 화질 (1080p Full HD / H.264 HW 가속)")
+        q_combo.append("1080p", "1080p Full HD (H.264 NVDEC)")
         q_combo.append("720p", "720p HD (초고속)")
         q_combo.append("audio", "오디오만 (M4A)")
         q_combo.set_active_id("best")
@@ -2152,15 +2199,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         btn_box.pack_start(dl_btn, True, True, 0)
 
         stream_btn = Gtk.Button(label="⚡ 바로 재생")
-        stream_btn.set_tooltip_text("초고속 버퍼링 후 즉시 HW 가속으로 끊김 없이 재생")
+        stream_btn.set_tooltip_text("최고 화질 초고속 버퍼링 후 즉시 HW 가속으로 끊김 없이 재생")
 
         def on_stream_clicked(_b):
             target_url = url_entry.get_text().strip()
             if not target_url:
                 self.show_osd("⚠️ 유튜브 링크를 입력하세요.", duration_sec=2.0)
                 return
+            q = q_combo.get_active_id() or "best"
             pop.popdown()
-            self.start_youtube_stream(target_url)
+            self.start_youtube_stream(target_url, quality=q)
 
         stream_btn.connect("clicked", on_stream_clicked)
         btn_box.pack_start(stream_btn, True, True, 0)
@@ -4774,6 +4822,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             is_supported, reason = self.check_video_hw_support(video_path)
             if not is_supported:
                 print(f"ℹ️ [코덱 상태] {os.path.basename(video_path)}: {reason} (소프트웨어 디코딩으로 즉시 재생합니다)")
+                if "AV1" in reason.upper():
+                    self.show_osd("⚠️ AV1 코덱: Jetson NVDEC 미지원 (H.264/H.265 포맷 권장)", duration_sec=4.0)
         
         if getattr(self, "placeholder_box", None):
             self.placeholder_box.hide()
