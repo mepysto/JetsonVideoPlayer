@@ -18,8 +18,10 @@ from urllib.request import pathname2url
 from urllib.parse import unquote
 import gi
 
-# Node.js 런타임 경로 환경변수 자동 보정 (yt-dlp의 고화질 디사이퍼링 지원)
+# Deno 및 Node.js 런타임 경로 환경변수 자동 보정 (yt-dlp의 4K/1080p 고화질 디사이퍼링 완벽 지원)
 NODE_PATHS = [
+    "/home/btree/.deno/bin",
+    "/home/btree/.local/bin",
     "/home/btree/.nvm/versions/node/v24.18.1/bin",
     "/usr/bin",
     "/usr/local/bin",
@@ -27,6 +29,50 @@ NODE_PATHS = [
 for p in NODE_PATHS:
     if os.path.isdir(p) and p not in os.environ.get("PATH", ""):
         os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
+
+def open_file_location(filepath):
+    """지정된 파일이 위치한 폴더를 리눅스 기본 파일 관리자(Nautilus 등)로 열고 포커스합니다."""
+    if not filepath:
+        return False
+    target = os.path.abspath(filepath)
+    if not os.path.exists(target):
+        folder = os.path.dirname(target)
+        if not os.path.exists(folder):
+            return False
+        target = folder
+    else:
+        folder = target if os.path.isdir(target) else os.path.dirname(target)
+
+    # 1. dbus FileManager1 ShowItems 시도 (파일 선택 포커스)
+    if os.path.isfile(target):
+        try:
+            res = subprocess.run(
+                ["dbus-send", "--session", "--dest=org.freedesktop.FileManager1",
+                 "--type=method_call", "/org/freedesktop/FileManager1",
+                 "org.freedesktop.FileManager1.ShowItems",
+                 f"array:string:file://{pathname2url(target)}", "string:"],
+                capture_output=True, timeout=2
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    # 2. xdg-open 폴더 열기
+    try:
+        subprocess.Popen(["xdg-open", folder])
+        return True
+    except Exception:
+        pass
+
+    # 3. gio open 폴더 열기
+    try:
+        subprocess.Popen(["gio", "open", folder])
+        return True
+    except Exception:
+        pass
+
+    return False
 
 try:
     import yt_dlp
@@ -162,15 +208,15 @@ class YouTubeManager:
                         self.current_download["percent"] = 100.0
                         self.current_download["filepath"] = filename
 
-            # Jetson nvv4l2decoder HW 가속 최적화를 위해 H.264(avc1) + AAC(m4a) 최우선 선택
+            # 최고 화질(4K / 1080p 등) 및 고음질 오디오 스트림 결합 (mp4 출력)
             if quality == "1080p":
-                fmt = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+                fmt = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
             elif quality == "720p":
-                fmt = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+                fmt = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
             elif quality == "audio":
                 fmt = "bestaudio[ext=m4a]/bestaudio"
-            else: # "best" (최고 화질: 4K / 1080p)
-                fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
+            else: # "best" (최고 화질: 4K UHD / 1440p / 1080p)
+                fmt = "bestvideo+bestaudio/best"
 
             out_tmpl = os.path.join(self.download_dir, "%(title)s [%(id)s].%(ext)s")
             ydl_opts = {
@@ -181,15 +227,15 @@ class YouTubeManager:
                 'no_warnings': True,
                 'merge_output_format': 'mp4',
                 'noplaylist': True,
-                'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'android']}},
+                'overwrites': True,
             }
 
-            node_path = "/home/btree/.nvm/versions/node/v24.18.1/bin/node"
-            if not os.path.exists(node_path):
-                import shutil
-                node_path = shutil.which("node") or shutil.which("nodejs")
-            if node_path and os.path.exists(node_path):
-                ydl_opts['js_runtimes'] = {'node': {'path': node_path}}
+            deno_bin = "/home/btree/.deno/bin/deno"
+            node_bin = "/home/btree/.nvm/versions/node/v24.18.1/bin/node"
+            if os.path.exists(deno_bin):
+                ydl_opts['js_runtimes'] = {'deno': {'path': deno_bin}}
+            elif os.path.exists(node_bin):
+                ydl_opts['js_runtimes'] = {'node': {'path': node_bin}}
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -786,6 +832,7 @@ REMOTE_HTML = """<!DOCTYPE html>
     <div class="grid-actions">
       <button onclick="cmd('bookmark_add')">🔖 북마크 추가</button>
       <button onclick="cmd('audio_cycle')">🎵 오디오 트랙 전환</button>
+      <button onclick="cmd('open_location')" style="grid-column: span 2;">📂 파일 위치 열기 (파일 브라우저)</button>
     </div>
   </div>
 
@@ -1866,6 +1913,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             GLib.idle_add(lambda: self.start_youtube_download(url, quality or "best"))
         elif action == "yt_stream" and url:
             GLib.idle_add(lambda: self.start_youtube_stream(url))
+        elif action == "open_location":
+            idx = int(index) if index is not None else None
+            GLib.idle_add(lambda: self.open_selected_or_current_location_by_index(idx))
 
     def seek_to_percent(self, pct):
         if not self.pipeline:
@@ -2030,10 +2080,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 GLib.timeout_add(3000, lambda: self.yt_btn.set_label("▶️ 유튜브") if getattr(self, "yt_btn", None) else False)
             self.show_osd(f"❌ 빠른 재생 실패: {err[:40]}", duration_sec=4.0)
 
-        # YouTube 직접 스트리밍 시 HTTP 403 차단 오류를 완벽 방지하기 위해 720p 초고속 캐시 다운로드 후 자동 재생 연결
+        # YouTube 직접 스트리밍 시 HTTP 403 차단 오류를 완벽 방지하기 위해 1080p 고화질 버퍼링 다운로드 후 자동 재생 연결
         youtube_mgr.download_async(
             norm_url,
-            quality="720p",
+            quality="1080p",
             on_progress=_on_progress,
             on_finish=_on_finish,
             on_error=_on_error
@@ -3668,10 +3718,18 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.wrap_button.get_style_context().add_class("tree-tool-btn")
         self.wrap_button.set_tooltip_text("긴 파일명 자동 줄바꿈 켜기/끄기")
         self.wrap_button.connect("clicked", self.on_wrap_toggle)
+
+        open_loc_btn = Gtk.Button(label="📂 위치")
+        open_loc_btn.get_style_context().add_class("tree-tool-btn")
+        open_loc_btn.set_tooltip_text("선택 또는 현재 재생 중인 영상의 폴더 위치를 파일 브라우저로 열기")
+        open_loc_btn.connect("clicked", lambda _b: self.open_selected_or_current_location())
+
         if self.is_single_file_mode:
             tools.pack_start(self.wrap_button, True, True, 0)
+            tools.pack_start(open_loc_btn, True, True, 0)
         else:
             tools.pack_start(self.wrap_button, False, False, 0)
+            tools.pack_start(open_loc_btn, False, False, 0)
         panel.pack_start(tools, False, False, 2)
 
         scroll = Gtk.ScrolledWindow()
@@ -3687,6 +3745,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.playlist_treeview.connect("row-activated", self.on_tree_row_activated)
         self.playlist_treeview.connect("row-expanded", self.on_tree_row_expanded)
         self.playlist_treeview.connect("row-collapsed", self.on_tree_row_collapsed)
+        self.playlist_treeview.connect("button-press-event", self.on_tree_button_press)
 
         col = Gtk.TreeViewColumn("Track")
         r_icon = Gtk.CellRendererText()
@@ -3706,6 +3765,89 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         scroll.add(self.playlist_treeview)
         panel.pack_start(scroll, True, True, 0)
         return panel
+
+    def open_selected_or_current_location(self, target_path=None):
+        """선택된 재생목록 항목 또는 현재 재생 중인 영상의 폴더 위치를 파일 브라우저로 엽니다."""
+        path_to_open = target_path
+        if not path_to_open and self.playlist_treeview:
+            sel = self.playlist_treeview.get_selection()
+            model, tree_iter = sel.get_selected()
+            if tree_iter:
+                path_to_open = model.get_value(tree_iter, 2)
+
+        if not path_to_open and self.playlist and 0 <= self.current_index < len(self.playlist):
+            path_to_open = self.playlist[self.current_index]
+
+        if not path_to_open:
+            yt_dir = os.path.expanduser("~/Videos/YouTube")
+            if os.path.exists(yt_dir):
+                path_to_open = yt_dir
+            else:
+                self.show_osd("⚠️ 열 위치가 지정되지 않았습니다.")
+                return
+
+        success = open_file_location(path_to_open)
+        if success:
+            dir_name = path_to_open if os.path.isdir(path_to_open) else os.path.dirname(path_to_open)
+            self.show_osd(f"📂 폴더 열기: {os.path.basename(dir_name) or dir_name}", duration_sec=2.0)
+            print(f"📂 [파일 위치 열기] {path_to_open}")
+        else:
+            self.show_osd("⚠️ 파일 브라우저를 열지 못했습니다.")
+
+    def open_selected_or_current_location_by_index(self, idx=None):
+        target = None
+        if idx is not None and 0 <= idx < len(self.playlist):
+            target = self.playlist[idx]
+        self.open_selected_or_current_location(target)
+
+    def on_tree_button_press(self, treeview, event):
+        """재생목록 항목 우클릭 시 컨텍스트 메뉴(파일 위치 열기, 재생, 경로 복사 등)를 표시합니다."""
+        if event.button == 3:  # 마우스 우클릭
+            path_info = treeview.get_path_at_pos(int(event.x), int(event.y))
+            if path_info:
+                tree_path, _col, _cell_x, _cell_y = path_info
+                tree_iter = self.tree_store.get_iter(tree_path)
+                file_path = self.tree_store.get_value(tree_iter, 2)
+                item_idx = self.tree_store.get_value(tree_iter, 3)
+                is_dir = self.tree_store.get_value(tree_iter, 4)
+
+                menu = Gtk.Menu()
+
+                # 1. 파일 위치 열기
+                loc_item = Gtk.MenuItem(label="📂 파일 위치 열기 (파일 브라우저)")
+                loc_item.connect("activate", lambda _m: self.open_selected_or_current_location(file_path))
+                menu.append(loc_item)
+
+                if not is_dir and item_idx >= 0:
+                    # 2. 지금 재생
+                    play_item = Gtk.MenuItem(label="▶️ 지금 재생")
+                    play_item.connect("activate", lambda _m: self.play_index_direct(item_idx))
+                    menu.append(play_item)
+
+                menu.append(Gtk.SeparatorMenuItem())
+
+                # 3. 전체 경로 복사
+                copy_path_item = Gtk.MenuItem(label="📋 전체 경로 복사")
+                def on_copy_path(_m):
+                    cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                    cb.set_text(file_path, -1)
+                    self.show_osd("📋 파일 경로가 복사되었습니다!", duration_sec=1.5)
+                copy_path_item.connect("activate", on_copy_path)
+                menu.append(copy_path_item)
+
+                # 4. 파일 이름 복사
+                copy_name_item = Gtk.MenuItem(label="📋 파일 이름 복사")
+                def on_copy_name(_m):
+                    cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                    cb.set_text(os.path.basename(file_path), -1)
+                    self.show_osd("📋 파일 이름이 복사되었습니다!", duration_sec=1.5)
+                copy_name_item.connect("activate", on_copy_name)
+                menu.append(copy_name_item)
+
+                menu.show_all()
+                menu.popup_at_pointer(event)
+                return True
+        return False
 
     def on_search_changed(self, entry):
         self.search_text = entry.get_text().strip().lower()
