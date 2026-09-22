@@ -424,11 +424,14 @@ REMOTE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0c1017">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Jetson Player Remote</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
-  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 16px; }
-  .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 14px; }
+  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 14px; }
+  .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 12px; }
   .header { display: flex; justify-content: space-between; align-items: center; padding: 4px 2px; }
   .title { font-size: 16px; font-weight: 800; color: #e9ff5b; letter-spacing: 1px; }
   .badge { background: #1f2937; color: #9ca3af; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
@@ -446,7 +449,7 @@ REMOTE_HTML = """<!DOCTYPE html>
   button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 60px; height: 60px; border-radius: 30px; font-size: 24px; }
   button.primary:active { background: #f2ff91; }
   .vol-row { display: flex; align-items: center; gap: 12px; }
-  .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 44px; text-align: right; }
+  .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 60px; text-align: right; }
   
   /* 속도 조절 UI */
   .speed-badge { background: #232d3f; color: #e9ff5b; padding: 3px 8px; border-radius: 6px; font-size: 13px; font-weight: 800; font-family: monospace; }
@@ -460,7 +463,9 @@ REMOTE_HTML = """<!DOCTYPE html>
   .grid-actions button { font-size: 13px; padding: 10px; border-radius: 10px; }
   
   /* 폴더 아코디언 재생목록 */
-  .playlist-card { max-height: 360px; overflow-y: auto; padding: 12px; }
+  .playlist-card { max-height: 380px; overflow-y: auto; padding: 14px; }
+  .search-input { width: 100%; background: #161c28; color: #f0f4fc; border: 1px solid #2a3447; border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; margin-bottom: 10px; }
+  .search-input:focus { border-color: #e9ff5b; }
   .folder-group { margin-bottom: 8px; border: 1px solid #232c3d; border-radius: 10px; overflow: hidden; background: #0f141d; }
   .folder-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #19202c; cursor: pointer; font-size: 13px; font-weight: 700; color: #cbd5e1; }
   .folder-header:active { background: #222c3e; }
@@ -518,7 +523,7 @@ REMOTE_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 볼륨 및 기타 액션 카드 -->
+  <!-- 볼륨 및 기본 액션 카드 -->
   <div class="card">
     <div class="vol-row">
       <button onclick="cmd('mute')" id="muteBtn" style="padding: 8px 12px; font-size: 18px;">🔊</button>
@@ -533,12 +538,29 @@ REMOTE_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 폴더별 정리된 재생목록 카드 -->
+  <!-- 고급 조작 카드 (A-B 구간반복 / 북마크 / 오디오 트랙) -->
+  <div class="card">
+    <div class="card-title-row">
+      <span class="card-title">🎛️ 구간반복 & 북마크 & 오디오</span>
+    </div>
+    <div style="display: flex; gap: 6px;">
+      <button onclick="cmd('ab_a')" style="flex:1; font-size:12px; padding:9px 4px;">🔁 [A] 시작</button>
+      <button onclick="cmd('ab_b')" style="flex:1; font-size:12px; padding:9px 4px;">🔁 [B] 끝</button>
+      <button onclick="cmd('ab_clear')" style="flex:0.8; font-size:12px; padding:9px 4px;">반복 해제</button>
+    </div>
+    <div class="grid-actions">
+      <button onclick="cmd('bookmark_add')">🔖 북마크 추가</button>
+      <button onclick="cmd('audio_cycle')">🎵 오디오 트랙 전환</button>
+    </div>
+  </div>
+
+  <!-- 폴더별 정리된 재생목록 카드 (검색창 포함) -->
   <div class="card playlist-card">
-    <div class="card-title-row" style="margin-bottom: 8px;">
+    <div class="card-title-row" style="margin-bottom: 6px;">
       <span class="card-title">📂 폴더별 재생목록</span>
       <span id="playlistTotalCount" style="font-size: 12px; color: #94a3b8;"></span>
     </div>
+    <input type="search" id="playlistSearch" class="search-input" placeholder="🔍 영상 제목 검색..." oninput="onSearch(this.value)">
     <div id="playlistContainer"></div>
   </div>
 </div>
@@ -551,6 +573,8 @@ const volBar = document.getElementById('volBar');
 let openFolders = new Set();
 let autoOpenedActiveFolder = false;
 let currentPlaylistGroups = [];
+let lastPlaylistDataHash = "";
+let searchQuery = "";
 
 progress.addEventListener('input', () => { isSeeking = true; });
 progress.addEventListener('change', () => {
@@ -560,12 +584,24 @@ progress.addEventListener('change', () => {
 
 volBar.addEventListener('input', () => {
   isVolDragging = true;
-  document.getElementById('volVal').innerText = volBar.value + '%';
+  updateVolLabel(volBar.value);
 });
 volBar.addEventListener('change', () => {
   cmd('volume', { val: volBar.value });
   isVolDragging = false;
 });
+
+function updateVolLabel(val) {
+  const lbl = document.getElementById('volVal');
+  if (!lbl) return;
+  if (val > 100) {
+    lbl.innerText = val + '% (부스트)';
+    lbl.style.color = '#ff9800';
+  } else {
+    lbl.innerText = val + '%';
+    lbl.style.color = '#e9ff5b';
+  }
+}
 
 function cmd(action, params={}) {
   if (navigator.vibrate) navigator.vibrate(15);
@@ -587,13 +623,20 @@ function escapeHtml(str) {
   return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function toggleFolder(encFolder) {
-  const folder = decodeURIComponent(encFolder);
-  if (openFolders.has(folder)) {
-    openFolders.delete(folder);
-  } else {
-    openFolders.add(folder);
+function toggleFolderById(idx) {
+  const itemsEl = document.getElementById('fitems_' + idx);
+  const arrowEl = document.getElementById('farrow_' + idx);
+  if (itemsEl) {
+    const isOpen = itemsEl.classList.toggle('open');
+    if (arrowEl) arrowEl.innerText = isOpen ? '▼' : '▶';
+    const folder = itemsEl.getAttribute('data-folder');
+    if (isOpen) openFolders.add(folder);
+    else openFolders.delete(folder);
   }
+}
+
+function onSearch(query) {
+  searchQuery = (query || "").trim().toLowerCase();
   renderPlaylistGroups(currentPlaylistGroups);
 }
 
@@ -605,7 +648,7 @@ function renderPlaylistGroups(groups) {
     return;
   }
 
-  // 활성 항목이 있는 폴더 자동 최초 오픈
+  // 활성 항목이 있는 폴더 최초 자동 열기
   if (!autoOpenedActiveFolder) {
     groups.forEach(g => {
       if (g.has_active) {
@@ -616,20 +659,30 @@ function renderPlaylistGroups(groups) {
   }
 
   let html = '';
+  let matchCount = 0;
+
   groups.forEach((g, idx) => {
-    const isOpen = openFolders.has(g.folder);
+    // 검색어 필터링
+    let visibleItems = g.items;
+    if (searchQuery) {
+      visibleItems = g.items.filter(it => it.name.toLowerCase().includes(searchQuery));
+    }
+    if (visibleItems.length === 0) return;
+
+    matchCount += visibleItems.length;
+    // 검색 중일 때는 검색 결과가 있는 폴더 자동 펼침
+    const isOpen = searchQuery ? true : openFolders.has(g.folder);
     const arrow = isOpen ? '▼' : '▶';
     const activeCls = g.has_active ? ' has-active' : '';
     const openCls = isOpen ? ' open' : '';
-    const enc = encodeURIComponent(g.folder);
 
     html += '<div class="folder-group">';
-    html += `  <div class="folder-header${activeCls}" onclick="toggleFolder('${enc}')">`;
-    html += `    <span>${escapeHtml(g.folder)} <small style="opacity:0.75; font-size:11px;">(${g.count}개)</small></span>`;
-    html += `    <span style="font-size: 11px; opacity:0.8;">${arrow}</span>`;
+    html += `  <div class="folder-header${activeCls}" onclick="toggleFolderById(${idx})">`;
+    html += `    <span>${escapeHtml(g.folder)} <small style="opacity:0.75; font-size:11px;">(${visibleItems.length}개)</small></span>`;
+    html += `    <span id="farrow_${idx}" style="font-size: 11px; opacity:0.8;">${arrow}</span>`;
     html += '  </div>';
-    html += `  <div class="folder-items${openCls}">`;
-    g.items.forEach(it => {
+    html += `  <div class="folder-items${openCls}" id="fitems_${idx}" data-folder="${escapeHtml(g.folder)}">`;
+    visibleItems.forEach(it => {
       const itActive = it.active ? ' active' : '';
       html += `    <div class="playlist-item${itActive}" onclick="cmd('play_index', {index: ${it.index}})">`;
       html += `      ${it.index + 1}. ${escapeHtml(it.name)}`;
@@ -638,6 +691,10 @@ function renderPlaylistGroups(groups) {
     html += '  </div>';
     html += '</div>';
   });
+
+  if (searchQuery && matchCount === 0) {
+    html = '<div style="font-size:12px; color:#64748b; padding:12px; text-align:center;">검색 결과가 없습니다.</div>';
+  }
 
   container.innerHTML = html;
 }
@@ -659,7 +716,7 @@ function updateStatus() {
       }
       if (!isVolDragging) {
         volBar.value = data.volume;
-        document.getElementById('volVal').innerText = data.volume + '%';
+        updateVolLabel(data.volume);
       }
 
       // 속도 UI 갱신
@@ -686,15 +743,18 @@ function updateStatus() {
         document.getElementById('playlistTotalCount').innerText = `총 ${data.total_videos}개`;
       }
 
-      // 폴더 그룹 렌더링
+      // 폴더 그룹 데이터 변경 감지 (DOM 리렌더링 최적화: 변경 시에만 업데이트하여 터치 튐 방지)
       if (data.playlist_groups) {
-        // 활성 항목 변경 감지 시 활성 폴더 열기
-        data.playlist_groups.forEach(g => {
-          if (g.has_active && !openFolders.has(g.folder)) {
-            openFolders.add(g.folder);
-          }
-        });
-        renderPlaylistGroups(data.playlist_groups);
+        const dataHash = JSON.stringify(data.playlist_groups);
+        if (dataHash !== lastPlaylistDataHash) {
+          lastPlaylistDataHash = dataHash;
+          data.playlist_groups.forEach(g => {
+            if (g.has_active && !openFolders.has(g.folder)) {
+              openFolders.add(g.folder);
+            }
+          });
+          renderPlaylistGroups(data.playlist_groups);
+        }
       }
     })
     .catch(() => {
@@ -1245,6 +1305,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.ab_repeat_a = None
         self.ab_repeat_b = None
         self.is_ab_repeat_active = False
+        self.ab_badge = None
 
         # 오디오/비디오(AV) 싱크 미세 조절 상태
         self.av_sync_offset_ms = 0
@@ -1471,6 +1532,16 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 GLib.idle_add(lambda: self.play_index_direct(idx))
             except Exception:
                 pass
+        elif action == "ab_a":
+            GLib.idle_add(self.set_ab_repeat_a)
+        elif action == "ab_b":
+            GLib.idle_add(self.set_ab_repeat_b)
+        elif action == "ab_clear":
+            GLib.idle_add(self.clear_ab_repeat)
+        elif action == "bookmark_add":
+            GLib.idle_add(self.add_bookmark)
+        elif action == "audio_cycle":
+            GLib.idle_add(self.cycle_audio_track)
 
     def seek_to_percent(self, pct):
         if not self.pipeline:
@@ -1542,6 +1613,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if success and pos >= 0:
             self.ab_repeat_a = pos
             self.is_ab_repeat_active = False
+            if getattr(self, "ab_badge", None):
+                self.ab_badge.hide()
             t_str = self.format_time(pos)
             self.show_osd(f"🔁 구간 반복 [A] 설정: {t_str}")
             print(f"🔁 [구간 반복] A 지점 설정: {t_str}")
@@ -1565,6 +1638,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_ab_repeat_active = True
         a_str = self.format_time(self.ab_repeat_a)
         b_str = self.format_time(self.ab_repeat_b)
+        if getattr(self, "ab_badge", None):
+            self.ab_badge.set_label(f"🔁 {a_str} ~ {b_str} ✕")
+            self.ab_badge.show()
         self.show_osd(f"🔁 [A-B] 구간 반복 활성화: {a_str} ~ {b_str}")
         print(f"🔁 [구간 반복] 활성화: {a_str} ~ {b_str}")
 
@@ -1574,6 +1650,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.ab_repeat_a = None
             self.ab_repeat_b = None
             self.is_ab_repeat_active = False
+            if getattr(self, "ab_badge", None):
+                self.ab_badge.hide()
             self.show_osd("🔁 A-B 구간 반복 해제")
             print("🔁 [구간 반복] 해제")
 
@@ -2555,17 +2633,29 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.fs_volume_scale.connect("value-changed", self.on_fs_volume_changed)
         actions.pack_start(self.fs_volume_scale, False, False, 0)
 
-        # 자막
-        self.fs_sub_button = Gtk.Button(label="💬 자막")
-        self.fs_sub_button.set_tooltip_text("자막 켜기/끄기 (S)")
-        self.fs_sub_button.connect("clicked", self.on_sub_button_clicked)
-        actions.pack_end(self.fs_sub_button, False, False, 4)
-
         # 창 모드로 복귀
         fs_toggle_btn = Gtk.Button(label="⧉")
         fs_toggle_btn.set_tooltip_text("창 모드로 복귀 (F / Esc)")
         fs_toggle_btn.connect("clicked", lambda _b: self.toggle_fullscreen())
         actions.pack_end(fs_toggle_btn, False, False, 0)
+
+        # 자막
+        self.fs_sub_button = Gtk.Button(label="💬 자막")
+        self.fs_sub_button.set_tooltip_text("자막 켜기/끄기 (S)")
+        self.fs_sub_button.connect("clicked", self.on_sub_button_clicked)
+        actions.pack_end(self.fs_sub_button, False, False, 2)
+
+        # 북마크
+        fs_bm_btn = Gtk.Button(label="🔖 북마크")
+        fs_bm_btn.set_tooltip_text("북마크 목록 보기 / 추가 (B)")
+        fs_bm_btn.connect("clicked", lambda b: self.show_bookmarks_popover(b))
+        actions.pack_end(fs_bm_btn, False, False, 2)
+
+        # 무손실 스크린샷 캡처
+        fs_cap_btn = Gtk.Button(label="📸 캡처")
+        fs_cap_btn.set_tooltip_text("현재 프레임 무손실 스크린샷 저장 (Ctrl+S / C)")
+        fs_cap_btn.connect("clicked", lambda _b: self.capture_screenshot())
+        actions.pack_end(fs_cap_btn, False, False, 2)
 
         panel.pack_start(actions, False, False, 0)
 
@@ -2633,14 +2723,22 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         window { background: #090b10; color: #f4f6fb; }
         .topbar, .controls { background: #11151d; }
         .topbar { border-bottom: 1px solid #252b36; }
+        .topbar button { padding: 4px 8px; font-size: 12px; }
+        separator.topbar-sep { background-color: #252b36; min-width: 1px; margin: 4px 3px; }
         .controls { border-top: 1px solid #252b36; }
-        .brand { font-size: 16px; font-weight: 800; color: #ffffff; letter-spacing: 1px; }
+        .brand { font-size: 15px; font-weight: 800; color: #ffffff; letter-spacing: 1px; }
         .muted { color: #8f98a8; font-size: 12px; }
         .now-playing { color: #dce2ec; font-size: 13px; font-weight: 500; }
         button { background: transparent; color: #dce2ec; border: 0; border-radius: 7px; padding: 6px 10px; font-size: 13px; }
         button:hover { background: #252b36; color: #ffffff; }
         .primary { background: #e9ff5b; color: #111318; border-radius: 20px; min-width: 28px; min-height: 28px; }
         .primary:hover { background: #f2ff91; color: #111318; }
+        .ab-badge { background: #2e1065; color: #e9ff5b; border: 1px solid #7c3aed; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold; }
+        .ab-badge:hover { background: #4c1d95; color: #ffffff; }
+        .ph-btn-primary { background: #e9ff5b; color: #111318; font-size: 13px; font-weight: 700; padding: 9px 18px; border-radius: 8px; }
+        .ph-btn-primary:hover { background: #f2ff91; }
+        .ph-btn-sub { background: #1c222e; color: #f0f4fc; font-size: 13px; font-weight: 600; padding: 9px 18px; border-radius: 8px; border: 1px solid #333d4e; }
+        .ph-btn-sub:hover { background: #283244; color: #ffffff; }
         .sidebar { background: #0e1117; border-left: 1px solid #252b36; }
         .section-title { font-size: 15px; font-weight: 700; color: #ffffff; }
         .playlist-row { border-radius: 8px; padding: 7px; }
@@ -2725,15 +2823,21 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.add(root)
 
-        self.topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        def make_topbar_sep():
+            sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+            sep.get_style_context().add_class("topbar-sep")
+            return sep
+
+        self.topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         self.topbar.get_style_context().add_class("topbar")
-        self.topbar.set_border_width(8)
+        self.topbar.set_border_width(6)
         
         brand = Gtk.Label(label="JETSON VIDEO PLAYER")
         brand.get_style_context().add_class("brand")
         self.topbar.pack_start(brand, False, False, 4)
+        self.topbar.pack_start(make_topbar_sep(), False, False, 2)
 
-        # 상단 빠른 조작 툴바: 파일 열기, 폴더 열기, 최근 열기, 북마크, 캡처, 리모컨 등
+        # 상단 빠른 조작 툴바 - 그룹 1: 파일 / 폴더 / 최근 열기
         open_file_btn = Gtk.Button(label="📂 파일")
         open_file_btn.set_tooltip_text("동영상 파일 열기 (Ctrl+O)")
         open_file_btn.connect("clicked", lambda _b: self.open_file_dialog())
@@ -2749,6 +2853,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         recent_btn.connect("clicked", lambda _b: self.show_history_popover(recent_btn))
         self.topbar.pack_start(recent_btn, False, False, 0)
 
+        self.topbar.pack_start(make_topbar_sep(), False, False, 2)
+
+        # 그룹 2: 북마크 / 무손실 캡처 / 스마트폰 리모컨
         bookmark_btn = Gtk.Button(label="🔖 북마크")
         bookmark_btn.set_tooltip_text("현재 영상 북마크 목록 보기 (Ctrl+B) / 추가 (B)")
         bookmark_btn.connect("clicked", lambda _b: self.show_bookmarks_popover(bookmark_btn))
@@ -2764,6 +2871,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         remote_btn.connect("clicked", lambda _b: self.show_remote_popover(remote_btn))
         self.topbar.pack_start(remote_btn, False, False, 0)
 
+        self.topbar.pack_start(make_topbar_sep(), False, False, 2)
+
+        # 그룹 3: 재생 모드 / 미디어 HUD / 도움말
         self.repeat_btn = Gtk.Button(label="🔁")
         self.repeat_btn.set_tooltip_text("재생 모드 (전체반복/1곡반복/정지/셔플) (Shift+R)")
         self.repeat_btn.connect("clicked", lambda _b: self.cycle_repeat_mode())
@@ -2779,9 +2889,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         help_btn.connect("clicked", lambda _b: self.show_help_dialog())
         self.topbar.pack_start(help_btn, False, False, 0)
 
+        self.topbar.pack_start(make_topbar_sep(), False, False, 2)
+
         self.now_playing_label = Gtk.Label(xalign=0)
         self.now_playing_label.set_ellipsize(3)
-        self.now_playing_label.get_style_context().add_class("now-playing")
         self.now_playing_label.get_style_context().add_class("now-playing")
         self.topbar.pack_start(self.now_playing_label, True, True, 8)
 
@@ -2822,11 +2933,27 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         ph_icon.set_markup("<span font='54'>🎬</span>")
         ph_title = Gtk.Label()
         ph_title.set_markup("<span font='16' weight='bold' color='#dce2ec'>재생할 동영상 또는 폴더를 드래그 앤 드롭하세요</span>")
-        ph_sub = Gtk.Label(label="상단의 [📂 파일] 또는 [📁 폴더] 버튼으로 선택할 수도 있습니다 (단축키: Ctrl+O)")
+        ph_sub = Gtk.Label(label="상단의 빠른 조작 바 또는 아래 버튼으로 즉시 선택할 수 있습니다 (단축키: Ctrl+O)")
         ph_sub.get_style_context().add_class("muted")
+
+        ph_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        ph_btn_box.set_halign(Gtk.Align.CENTER)
+
+        ph_open_file = Gtk.Button(label="📂 동영상 파일 열기")
+        ph_open_file.get_style_context().add_class("ph-btn-primary")
+        ph_open_file.connect("clicked", lambda _b: self.open_file_dialog())
+
+        ph_open_dir = Gtk.Button(label="📁 폴더 열기")
+        ph_open_dir.get_style_context().add_class("ph-btn-sub")
+        ph_open_dir.connect("clicked", lambda _b: self.open_folder_dialog())
+
+        ph_btn_box.pack_start(ph_open_file, False, False, 0)
+        ph_btn_box.pack_start(ph_open_dir, False, False, 0)
+
         self.placeholder_box.pack_start(ph_icon, False, False, 0)
         self.placeholder_box.pack_start(ph_title, False, False, 0)
         self.placeholder_box.pack_start(ph_sub, False, False, 0)
+        self.placeholder_box.pack_start(ph_btn_box, False, False, 4)
         self.placeholder_box.set_no_show_all(True)
         self.video_container.add_overlay(self.placeholder_box)
 
@@ -2872,7 +2999,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.controls.get_style_context().add_class("controls")
         self.controls.set_border_width(10)
 
-        timeline = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        timeline = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.position_label = Gtk.Label(label="00:00")
         self.position_label.get_style_context().add_class("muted")
         self.progress_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 0.1)
@@ -2881,10 +3008,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.progress_scale.connect("button-press-event", self.on_seek_start)
         self.progress_scale.connect("button-release-event", self.on_seek_end)
         self.progress_scale.connect("change-value", self.on_scale_change_value)
+
+        # A-B 구간 반복 상시 시각 배지
+        self.ab_badge = Gtk.Button(label="")
+        self.ab_badge.get_style_context().add_class("ab-badge")
+        self.ab_badge.set_tooltip_text("A-B 구간 반복 활성화 중 (클릭 시 즉시 해제)")
+        self.ab_badge.connect("clicked", lambda _b: self.clear_ab_repeat())
+        self.ab_badge.set_no_show_all(True)
+        self.ab_badge.hide()
+
         self.duration_label = Gtk.Label(label="00:00")
         self.duration_label.get_style_context().add_class("muted")
         timeline.pack_start(self.position_label, False, False, 0)
         timeline.pack_start(self.progress_scale, True, True, 0)
+        timeline.pack_start(self.ab_badge, False, False, 4)
         timeline.pack_start(self.duration_label, False, False, 0)
         self.controls.pack_start(timeline, False, False, 0)
 
@@ -3925,6 +4062,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.ab_repeat_a = None
             self.ab_repeat_b = None
             self.is_ab_repeat_active = False
+            if getattr(self, "ab_badge", None):
+                self.ab_badge.hide()
 
         # [하드웨어 적합성 검사 (SW Fallback 우선)]
         if os.path.exists(video_path):
