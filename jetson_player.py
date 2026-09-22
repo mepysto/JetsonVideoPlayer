@@ -18,6 +18,191 @@ from urllib.request import pathname2url
 from urllib.parse import unquote
 import gi
 
+# Node.js 런타임 경로 환경변수 자동 보정 (yt-dlp의 고화질 디사이퍼링 지원)
+NODE_PATHS = [
+    "/home/btree/.nvm/versions/node/v24.18.1/bin",
+    "/usr/bin",
+    "/usr/local/bin",
+]
+for p in NODE_PATHS:
+    if os.path.isdir(p) and p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
+
+try:
+    import yt_dlp
+    HAS_YT_DLP = True
+except ImportError:
+    HAS_YT_DLP = False
+
+YOUTUBE_URL_REGEX = re.compile(
+    r'(https?://)?(www\.|m\.)?(youtube\.com/(watch\?v=|shorts/|embed/|live/)|youtu\.be/)([a-zA-Z0-9_-]{11})'
+)
+
+def is_youtube_url(url):
+    if not url or not isinstance(url, str):
+        return False
+    return bool(YOUTUBE_URL_REGEX.search(url.strip()))
+
+def extract_youtube_url(text):
+    if not text or not isinstance(text, str):
+        return None
+    m = YOUTUBE_URL_REGEX.search(text.strip())
+    if m:
+        return m.group(0)
+    return None
+
+class YouTubeManager:
+    """YouTube 영상 다운로드 및 스트리밍 메타데이터를 비동기로 관리하는 매니저 클래스"""
+    def __init__(self, download_dir=None):
+        self.download_dir = download_dir or os.path.expanduser("~/Videos/YouTube")
+        try:
+            os.makedirs(self.download_dir, exist_ok=True)
+        except Exception:
+            pass
+        self.current_download = {
+            "active": False,
+            "title": "",
+            "percent": 0.0,
+            "speed": "",
+            "eta": "",
+            "filepath": None,
+            "error": None
+        }
+        self.lock = threading.Lock()
+
+    def get_status(self):
+        with self.lock:
+            return dict(self.current_download)
+
+    def download_async(self, url, quality="best", on_progress=None, on_finish=None, on_error=None):
+        """백그라운드 스레드에서 유튜브 영상을 다운로드하고 진행률을 콜백합니다."""
+        if not HAS_YT_DLP:
+            if on_error:
+                GLib.idle_add(lambda: on_error("yt-dlp 모듈이 설치되어 있지 않습니다."))
+            return
+
+        def _worker():
+            with self.lock:
+                self.current_download["active"] = True
+                self.current_download["title"] = "정보 확인 중..."
+                self.current_download["percent"] = 0.0
+                self.current_download["speed"] = ""
+                self.current_download["eta"] = ""
+                self.current_download["filepath"] = None
+                self.current_download["error"] = None
+
+            def _hook(d):
+                if d['status'] == 'downloading':
+                    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                    downloaded = d.get('downloaded_bytes') or 0
+                    pct = (downloaded / total * 100.0) if total > 0 else 0.0
+                    
+                    speed = d.get('speed') or 0
+                    if speed > 1024 * 1024:
+                        speed_str = f"{speed / (1024 * 1024):.1f} MB/s"
+                    elif speed > 1024:
+                        speed_str = f"{speed / 1024:.0f} KB/s"
+                    else:
+                        speed_str = f"{speed:.0f} B/s"
+
+                    eta = d.get('eta') or 0
+                    eta_str = f"{eta}초" if eta < 60 else f"{eta // 60}분 {eta % 60}초"
+
+                    title = d.get('info_dict', {}).get('title', 'YouTube Video')
+                    with self.lock:
+                        self.current_download["title"] = title
+                        self.current_download["percent"] = pct
+                        self.current_download["speed"] = speed_str
+                        self.current_download["eta"] = eta_str
+
+                    if on_progress:
+                        GLib.idle_add(lambda: on_progress(pct, speed_str, eta_str, title))
+
+                elif d['status'] == 'finished':
+                    filename = d.get('filename', '')
+                    with self.lock:
+                        self.current_download["percent"] = 100.0
+                        self.current_download["filepath"] = filename
+
+            # Jetson nvv4l2decoder HW 가속 최적화를 위해 H.264(avc1) + AAC(m4a) 최우선 선택
+            if quality == "1080p":
+                fmt = "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+            elif quality == "720p":
+                fmt = "bestvideo[height<=720][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]"
+            elif quality == "audio":
+                fmt = "bestaudio[ext=m4a]/bestaudio"
+            else: # "best" (최고 화질: 4K / 1080p)
+                fmt = "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best"
+
+            out_tmpl = os.path.join(self.download_dir, "%(title)s [%(id)s].%(ext)s")
+            ydl_opts = {
+                'format': fmt,
+                'outtmpl': out_tmpl,
+                'progress_hooks': [_hook],
+                'quiet': True,
+                'no_warnings': True,
+                'merge_output_format': 'mp4',
+            }
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    final_filename = ydl.prepare_filename(info)
+                    base, _ = os.path.splitext(final_filename)
+                    if os.path.exists(f"{base}.mp4"):
+                        final_filename = f"{base}.mp4"
+                    title = info.get('title', 'YouTube Video')
+
+                with self.lock:
+                    self.current_download["active"] = False
+                    self.current_download["filepath"] = final_filename
+
+                if on_finish:
+                    GLib.idle_add(lambda: on_finish(final_filename, title))
+            except Exception as e:
+                err_msg = str(e)
+                with self.lock:
+                    self.current_download["active"] = False
+                    self.current_download["error"] = err_msg
+                if on_error:
+                    GLib.idle_add(lambda: on_error(err_msg))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def extract_stream_async(self, url, on_success=None, on_error=None):
+        """즉시 스트리밍을 위한 비디오 URL 및 메타데이터 추출"""
+        if not HAS_YT_DLP:
+            if on_error:
+                GLib.idle_add(lambda: on_error("yt-dlp 모듈이 설치되어 있지 않습니다."))
+            return
+
+        def _worker():
+            ydl_opts = {
+                'format': 'best[ext=mp4]/best',
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+            }
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    stream_url = info.get('url')
+                    title = info.get('title', 'YouTube Stream')
+                    duration = info.get('duration', 0)
+                if stream_url:
+                    if on_success:
+                        GLib.idle_add(lambda: on_success(stream_url, title, duration))
+                else:
+                    if on_error:
+                        GLib.idle_add(lambda: on_error("스트림 URL을 추출할 수 없습니다."))
+            except Exception as e:
+                if on_error:
+                    GLib.idle_add(lambda: on_error(str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+youtube_mgr = YouTubeManager()
+
 # 환경 변수 자동 설정 (cannot open display 에러 방지)
 if "DISPLAY" not in os.environ:
     if os.path.exists("/tmp/.X11-unix/X1"):
@@ -30,11 +215,12 @@ if "XDG_RUNTIME_DIR" not in os.environ:
 # 필요한 GStreamer 및 GTK 컴포넌트 로드
 gi.require_version('Gst', '1.0')
 gi.require_version('GstVideo', '1.0')
+gi.require_version('GstPbutils', '1.0')
 gi.require_version('Gtk', '3.0')
 gi.require_version('GdkX11', '3.0')
 gi.require_version('Pango', '1.0')
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import Gst, Gtk, Gdk, GstVideo, GLib, GdkX11, Pango, GdkPixbuf
+from gi.repository import Gst, Gtk, Gdk, GstVideo, GstPbutils, GLib, GdkX11, Pango, GdkPixbuf
 
 def enable_x11_compositor_bypass(gdk_window):
     """
@@ -554,6 +740,33 @@ REMOTE_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- 유튜브 영상 재생 및 다운로드 카드 -->
+  <div class="card">
+    <div class="card-title-row">
+      <span class="card-title">📺 유튜브 (YouTube) 무선 전송</span>
+    </div>
+    <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+      <input type="url" id="ytUrlInput" class="search-input" style="margin-bottom:0; flex:1;" placeholder="유튜브 링크 붙여넣기 (Ctrl+V)...">
+    </div>
+    <div style="display: flex; gap: 6px;">
+      <button onclick="submitYt('download')" class="primary" style="flex:1.2; font-size:12px; padding:10px 6px; font-weight:bold; border-radius:8px; width:auto; height:auto;">⬇️ 다운로드 & 재생</button>
+      <button onclick="submitYt('stream')" style="flex:1; font-size:12px; padding:10px 6px; border-radius:8px;">🎬 바로 보기</button>
+    </div>
+    <div id="ytProgressBox" style="display:none; margin-top:10px; background:#141a24; padding:8px 10px; border-radius:8px; border:1px solid #293548;">
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:#e9ff5b; font-weight:700; margin-bottom:4px;">
+        <span id="ytProgTitle" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px;">다운로드 중...</span>
+        <span id="ytProgPct">0%</span>
+      </div>
+      <div style="width:100%; height:6px; background:#222c3d; border-radius:3px; overflow:hidden;">
+        <div id="ytProgBar" style="width:0%; height:100%; background:#e9ff5b; transition:width 0.2s;"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; margin-top:4px;">
+        <span id="ytProgSpeed">-- MB/s</span>
+        <span id="ytProgEta">남은 시간 --</span>
+      </div>
+    </div>
+  </div>
+
   <!-- 폴더별 정리된 재생목록 카드 (검색창 포함) -->
   <div class="card playlist-card">
     <div class="card-title-row" style="margin-bottom: 6px;">
@@ -617,6 +830,23 @@ function fmtTime(sec) {
   m = m % 60;
   if (h > 0) return `${h}:${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
   return `${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
+}
+
+function submitYt(mode) {
+  const inp = document.getElementById('ytUrlInput');
+  const url = (inp ? inp.value : '').trim();
+  if (!url) {
+    alert('유튜브 링크를 입력하세요.');
+    return;
+  }
+  if (mode === 'download') {
+    cmd('yt_download', { url: url });
+    document.getElementById('ytProgressBox').style.display = 'block';
+    document.getElementById('ytProgTitle').innerText = '다운로드 준비 중...';
+  } else {
+    cmd('yt_stream', { url: url });
+  }
+  inp.value = '';
 }
 
 function escapeHtml(str) {
@@ -743,6 +973,21 @@ function updateStatus() {
         document.getElementById('playlistTotalCount').innerText = `총 ${data.total_videos}개`;
       }
 
+      // 유튜브 다운로드 상태 실시간 갱신
+      if (data.yt_download && data.yt_download.active) {
+        document.getElementById('ytProgressBox').style.display = 'block';
+        document.getElementById('ytProgTitle').innerText = data.yt_download.title || '다운로드 중...';
+        document.getElementById('ytProgPct').innerText = (data.yt_download.percent || 0).toFixed(1) + '%';
+        document.getElementById('ytProgBar').style.width = (data.yt_download.percent || 0) + '%';
+        document.getElementById('ytProgSpeed').innerText = data.yt_download.speed || '';
+        document.getElementById('ytProgEta').innerText = data.yt_download.eta ? '남은 시간: ' + data.yt_download.eta : '';
+      } else {
+        const pBox = document.getElementById('ytProgressBox');
+        if (pBox && !pBox.getAttribute('data-keep')) {
+          pBox.style.display = 'none';
+        }
+      }
+
       // 폴더 그룹 데이터 변경 감지 (DOM 리렌더링 최적화: 변경 시에만 업데이트하여 터치 튐 방지)
       if (data.playlist_groups) {
         const dataHash = JSON.stringify(data.playlist_groups);
@@ -798,9 +1043,11 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
             index = query.get("index", [None])[0]
             delta = query.get("delta", [None])[0]
             percent = query.get("percent", [None])[0]
+            url = query.get("url", [None])[0]
+            quality = query.get("quality", ["best"])[0]
 
             if self.player:
-                self.player.handle_remote_command(action, val=val, index=index, delta=delta, percent=percent)
+                self.player.handle_remote_command(action, val=val, index=index, delta=delta, percent=percent, url=url, quality=quality)
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1238,7 +1485,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.is_single_file_mode = False
         self.xid = None
         if self.input_path:
-            self.build_playlist()
+            if is_youtube_url(self.input_path):
+                yt_arg = self.input_path
+                self.input_path = None
+                GLib.idle_add(lambda: self.start_youtube_download(yt_arg, quality="best"))
+            else:
+                self.build_playlist()
 
         # UI/재생 상태
         self.is_playing = False
@@ -1473,10 +1725,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             "is_fullscreen": self.is_fullscreen,
             "repeat_mode": self.repeat_mode,
             "playlist_groups": playlist_groups,
-            "total_videos": len(self.playlist)
+            "total_videos": len(self.playlist),
+            "yt_download": youtube_mgr.get_status()
         }
 
-    def handle_remote_command(self, action, val=None, index=None, delta=None, percent=None):
+    def handle_remote_command(self, action, val=None, index=None, delta=None, percent=None, url=None, quality=None):
         """웹 리모컨에서 수신한 명령을 GTK 메인 스레드에 위임하여 안전하게 실행합니다."""
         if action == "play_pause":
             GLib.idle_add(self.toggle_play_pause)
@@ -1542,6 +1795,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             GLib.idle_add(self.add_bookmark)
         elif action == "audio_cycle":
             GLib.idle_add(self.cycle_audio_track)
+        elif action == "yt_download" and url:
+            GLib.idle_add(lambda: self.start_youtube_download(url, quality or "best"))
+        elif action == "yt_stream" and url:
+            GLib.idle_add(lambda: self.start_youtube_stream(url))
 
     def seek_to_percent(self, pct):
         if not self.pipeline:
@@ -1600,6 +1857,162 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         btn_row.pack_start(copy_btn, True, True, 0)
 
         box.pack_start(btn_row, False, False, 4)
+
+        box.show_all()
+        pop.add(box)
+        pop.popup()
+
+    def start_youtube_download(self, url, quality="best"):
+        """유튜브 영상을 비동기로 다운로드하고 진행률을 표시하며, 완료 시 재생목록에 추가 및 자동 재생합니다."""
+        norm_url = extract_youtube_url(url)
+        if not norm_url:
+            self.show_osd("⚠️ 올바른 유튜브 링크가 아닙니다.")
+            return
+
+        self.show_osd("⬇️ [유튜브] 다운로드 준비 중...")
+        print(f"⬇️ [YouTube 다운로드 시작] {norm_url} (품질: {quality})")
+
+        last_osd_time = [0]
+
+        def _on_progress(pct, speed_str, eta_str, title):
+            now = time.time()
+            if now - last_osd_time[0] >= 0.8 or pct >= 99.0:
+                last_osd_time[0] = now
+                self.show_osd(f"⬇️ {pct:.0f}% ({speed_str}, 남은시간 {eta_str})", duration_sec=1.2)
+
+        def _on_finish(final_filepath, title):
+            print(f"🎉 [YouTube 다운로드 완료] {final_filepath}")
+            self.show_osd(f"🎉 다운로드 완료: {title}", duration_sec=3.0)
+            
+            # 재생목록에 추가하고 즉시 재생
+            if final_filepath not in self.playlist:
+                self.playlist.append(final_filepath)
+                self.refresh_playlist_ui()
+                new_idx = len(self.playlist) - 1
+                self.play_index_direct(new_idx)
+            else:
+                idx = self.playlist.index(final_filepath)
+                self.play_index_direct(idx)
+
+        def _on_error(err):
+            print(f"❌ [YouTube 다운로드 실패] {err}")
+            self.show_osd(f"❌ 다운로드 실패: {err[:40]}", duration_sec=4.0)
+
+        youtube_mgr.download_async(
+            norm_url,
+            quality=quality,
+            on_progress=_on_progress,
+            on_finish=_on_finish,
+            on_error=_on_error
+        )
+
+    def start_youtube_stream(self, url):
+        """유튜브 스트림 URL을 비동기로 추출하여 즉시 재생합니다."""
+        norm_url = extract_youtube_url(url)
+        if not norm_url:
+            self.show_osd("⚠️ 올바른 유튜브 링크가 아닙니다.")
+            return
+
+        self.show_osd("🎬 [유튜브] 스트림 추출 중...")
+        print(f"🎬 [YouTube 스트림 연결] {norm_url}")
+
+        def _on_success(stream_url, title, duration):
+            print(f"▶️ [YouTube 스트리밍 시작] {title}")
+            self.show_osd(f"▶️ 스트리밍 재생: {title}", duration_sec=2.5)
+            self.playlist.append(stream_url)
+            self.refresh_playlist_ui()
+            new_idx = len(self.playlist) - 1
+            self.play_index_direct(new_idx)
+
+        def _on_error(err):
+            print(f"❌ [YouTube 스트림 실패] {err}")
+            self.show_osd("❌ 스트리밍 실패 (다운로드를 이용해보세요)", duration_sec=3.5)
+
+        youtube_mgr.extract_stream_async(
+            norm_url,
+            on_success=_on_success,
+            on_error=_on_error
+        )
+
+    def show_youtube_popover(self, parent_widget=None):
+        """유튜브 URL 입력, 화질 선택, 다운로드 및 스트리밍을 위한 팝오버 창을 표시합니다."""
+        parent = parent_widget or getattr(self, "topbar", None) or self.play_button
+        pop = Gtk.Popover(relative_to=parent)
+        pop.set_position(Gtk.PositionType.BOTTOM)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(12)
+        box.set_size_request(350, -1)
+
+        title = Gtk.Label(label="▶️ 유튜브 영상 재생 & 다운로드", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        box.pack_start(title, False, False, 0)
+
+        # URL 입력창
+        url_entry = Gtk.Entry()
+        url_entry.set_placeholder_text("https://www.youtube.com/watch?v=...")
+        url_entry.set_width_chars(32)
+
+        # 클립보드에 유튜브 주소가 있으면 자동 채움
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clip_text = clipboard.wait_for_text()
+        if clip_text:
+            yt_url = extract_youtube_url(clip_text)
+            if yt_url:
+                url_entry.set_text(yt_url)
+
+        box.pack_start(url_entry, False, False, 2)
+
+        # 화질 선택
+        q_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        q_lbl = Gtk.Label(label="품질:")
+        q_lbl.get_style_context().add_class("muted")
+        q_combo = Gtk.ComboBoxText()
+        q_combo.append("best", "최고 화질 (4K / 1080p H.264 HW 가속)")
+        q_combo.append("1080p", "1080p Full HD")
+        q_combo.append("720p", "720p HD")
+        q_combo.append("audio", "오디오만 (M4A)")
+        q_combo.set_active_id("best")
+        q_row.pack_start(q_lbl, False, False, 0)
+        q_row.pack_start(q_combo, True, True, 0)
+        box.pack_start(q_row, False, False, 2)
+
+        # 액션 버튼 열
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        dl_btn = Gtk.Button(label="⬇️ 다운로드 & 재생")
+        dl_btn.get_style_context().add_class("primary")
+        dl_btn.set_tooltip_text("최고 화질로 다운로드하여 Jetson nvv4l2decoder HW 가속으로 완벽 재생 (오프라인 보관)")
+
+        def on_dl_clicked(_b):
+            target_url = url_entry.get_text().strip()
+            if not target_url:
+                self.show_osd("⚠️ 유튜브 링크를 입력하세요.")
+                return
+            q = q_combo.get_active_id() or "best"
+            pop.popdown()
+            self.start_youtube_download(target_url, quality=q)
+
+        dl_btn.connect("clicked", on_dl_clicked)
+        btn_box.pack_start(dl_btn, True, True, 0)
+
+        stream_btn = Gtk.Button(label="🎬 바로 재생")
+        stream_btn.set_tooltip_text("다운로드 없이 즉시 스트리밍으로 재생")
+
+        def on_stream_clicked(_b):
+            target_url = url_entry.get_text().strip()
+            if not target_url:
+                self.show_osd("⚠️ 유튜브 링크를 입력하세요.")
+                return
+            pop.popdown()
+            self.start_youtube_stream(target_url)
+
+        stream_btn.connect("clicked", on_stream_clicked)
+        btn_box.pack_start(stream_btn, True, True, 0)
+
+        url_entry.connect("activate", on_dl_clicked)
+
+        box.pack_start(btn_box, False, False, 4)
 
         box.show_all()
         pop.add(box)
@@ -2853,6 +3266,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         recent_btn.connect("clicked", lambda _b: self.show_history_popover(recent_btn))
         self.topbar.pack_start(recent_btn, False, False, 0)
 
+        yt_btn = Gtk.Button(label="▶️ 유튜브")
+        yt_btn.set_tooltip_text("유튜브 영상 다운로드 / 바로 재생")
+        yt_btn.connect("clicked", lambda _b: self.show_youtube_popover(yt_btn))
+        self.topbar.pack_start(yt_btn, False, False, 0)
+
         self.topbar.pack_start(make_topbar_sep(), False, False, 2)
 
         # 그룹 2: 북마크 / 무손실 캡처 / 스마트폰 리모컨
@@ -2947,8 +3365,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         ph_open_dir.get_style_context().add_class("ph-btn-sub")
         ph_open_dir.connect("clicked", lambda _b: self.open_folder_dialog())
 
+        ph_open_yt = Gtk.Button(label="▶️ 유튜브 영상 재생")
+        ph_open_yt.get_style_context().add_class("ph-btn-sub")
+        ph_open_yt.connect("clicked", lambda _b: self.show_youtube_popover(ph_open_yt))
+
         ph_btn_box.pack_start(ph_open_file, False, False, 0)
         ph_btn_box.pack_start(ph_open_dir, False, False, 0)
+        ph_btn_box.pack_start(ph_open_yt, False, False, 0)
 
         self.placeholder_box.pack_start(ph_icon, False, False, 0)
         self.placeholder_box.pack_start(ph_title, False, False, 0)
@@ -3680,6 +4103,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         font_stack = "Noto Sans CJK TC, Noto Sans CJK KR, Noto Sans CJK SC, Noto Sans CJK JP, Sans"
         return f"{font_stack} Bold {final_pt}"
 
+    def on_source_setup(self, playbin, source):
+        """네트워크 스트리밍(HTTP/HTTPS) 소스에 User-Agent 및 SSL 설정을 주입합니다."""
+        if source.find_property("user-agent"):
+            source.set_property("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        if source.find_property("ssl-strict"):
+            source.set_property("ssl-strict", False)
+
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
         GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder) 및 비디오 싱크(nveglglessink)를 감지하여 
@@ -3779,7 +4209,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 "-of", "json",
                 file_path
             ]
-            data = json.loads(subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True))
+            data = json.loads(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True))
             if not data.get("streams"):
                 res = (False, "비디오 스트림 없음")
                 hw_cache.set(file_path, res[0], res[1])
@@ -3810,6 +4240,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             hw_cache.set(file_path, res[0], res[1])
             return res
         except Exception as e:
+            # ffprobe 실패 시 GStreamer Discoverer로 안전하게 2차 분석 (cuvid 드라이버 누락 등 방지)
+            try:
+                uri = f"file://{pathname2url(os.path.abspath(file_path))}"
+                disc = GstPbutils.Discoverer.new(3 * Gst.SECOND)
+                info = disc.discover_uri(uri)
+                v_streams = info.get_video_streams()
+                if v_streams:
+                    caps_str = v_streams[0].get_caps().to_string().lower()
+                    if "video/x-h265" in caps_str or "video/x-hevc" in caps_str:
+                        res = (True, "HEVC (H.265) NVDEC 지원")
+                    elif "video/x-h264" in caps_str:
+                        if "10-bit" in caps_str or "bit-depth-luma=(uint)10" in caps_str:
+                            res = (False, "H.264 10-bit NVDEC 미지원")
+                        else:
+                            res = (True, "H.264 8-bit NVDEC 지원")
+                    else:
+                        cname = caps_str.split(',')[0].replace('video/x-', '')
+                        res = (False, f"NVDEC 미지원 코덱 ({cname.upper()})")
+                    hw_cache.set(file_path, res[0], res[1])
+                    return res
+            except Exception:
+                pass
             res = (False, f"코덱 분석 실패 ({e})")
             return res
 
@@ -3821,7 +4273,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             "stream=codec_name,pix_fmt,profile,color_space,color_transfer,color_primaries",
             "-of", "json", file_path,
         ]
-        data = json.loads(subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True))
+        data = json.loads(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True))
         if not data.get("streams"):
             raise ValueError("비디오 스트림이 없습니다")
         return data["streams"][0]
@@ -4083,7 +4535,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 print(f"⏱️ [이어보기] {self.format_time(saved_pos_ns)} 지점부터 재생합니다.")
 
             abs_root = os.path.abspath(self.input_path) if (self.input_path and os.path.isdir(self.input_path)) else None
-            disp = os.path.relpath(video_path, abs_root) if abs_root else os.path.basename(video_path)
+            is_net_stream = video_path.startswith("http://") or video_path.startswith("https://")
+            if is_net_stream:
+                disp = "▶ YouTube / 온라인 스트림"
+            else:
+                disp = os.path.relpath(video_path, abs_root) if abs_root else os.path.basename(video_path)
             print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {disp}")
             self.refresh_playlist_ui()
             self.duration_ns = 0
@@ -4132,7 +4588,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 self.has_subtitles = False
 
         self.pending_seek_ns = start_position_ns
-        video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
+        is_net_stream = video_path.startswith("http://") or video_path.startswith("https://")
+        if is_net_stream:
+            video_uri = video_path
+        else:
+            video_uri = f"file://{pathname2url(os.path.abspath(video_path))}"
         
         # [핵심] 기존 파이프라인 및 버스 시그널 감시 완전 해제 후 NULL 처리 (EGL Surface/VIC 락 세척)
         if self.bus is not None:
@@ -4151,6 +4611,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
+        self.pipeline.connect("source-setup", self.on_source_setup)
 
         # 0x01 (video) + 0x02 (audio) + 0x04 (text/subtitles) + 0x10 (soft-volume) = 0x00000017
         self.pipeline.set_property("flags", 0x00000017)
