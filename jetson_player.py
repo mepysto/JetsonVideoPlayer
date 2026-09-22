@@ -428,29 +428,48 @@ REMOTE_HTML = """<!DOCTYPE html>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
   body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 16px; }
-  .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 16px; }
-  .header { display: flex; justify-content: space-between; align-items: center; padding: 6px 4px; }
+  .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 14px; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 4px 2px; }
   .title { font-size: 16px; font-weight: 800; color: #e9ff5b; letter-spacing: 1px; }
   .badge { background: #1f2937; color: #9ca3af; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
   .badge.online { background: #064e3b; color: #34d399; }
-  .card { background: #141a24; border: 1px solid #232c3d; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+  .card { background: #141a24; border: 1px solid #232c3d; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+  .card-title-row { display: flex; justify-content: space-between; align-items: center; }
+  .card-title { font-size: 14px; font-weight: 700; color: #cbd5e1; }
   .now-playing-title { font-size: 15px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .time-row { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; font-family: monospace; }
   input[type=range] { width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; background: #2a3447; outline: none; }
   input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #e9ff5b; cursor: pointer; }
   .btn-row { display: flex; justify-content: space-around; align-items: center; gap: 8px; }
-  button { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; border-radius: 12px; padding: 12px 16px; font-size: 16px; font-weight: 700; cursor: pointer; transition: background 0.1s, transform 0.1s; display: flex; align-items: center; justify-content: center; }
+  button { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; border-radius: 12px; padding: 10px 14px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.1s, transform 0.1s; display: flex; align-items: center; justify-content: center; }
   button:active { background: #2d3748; transform: scale(0.96); }
-  button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 64px; height: 64px; border-radius: 32px; font-size: 26px; }
+  button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 60px; height: 60px; border-radius: 30px; font-size: 24px; }
   button.primary:active { background: #f2ff91; }
   .vol-row { display: flex; align-items: center; gap: 12px; }
   .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 44px; text-align: right; }
-  .grid-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-  .grid-actions button { font-size: 13px; padding: 10px; }
-  .playlist-card { max-height: 240px; overflow-y: auto; }
-  .playlist-item { padding: 10px; border-radius: 8px; font-size: 13px; color: #cbd5e1; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #1c2433; }
-  .playlist-item:active { background: #232c3d; }
-  .playlist-item.active { background: #242b35; color: #e9ff5b; font-weight: bold; border-left: 3px solid #e9ff5b; }
+  
+  /* 속도 조절 UI */
+  .speed-badge { background: #232d3f; color: #e9ff5b; padding: 3px 8px; border-radius: 6px; font-size: 13px; font-weight: 800; font-family: monospace; }
+  .speed-presets { display: flex; gap: 6px; justify-content: space-between; }
+  .speed-presets button { flex: 1; padding: 8px 2px; font-size: 12px; border-radius: 8px; }
+  .speed-presets button.active-speed { background: #e9ff5b; color: #0c1017; font-weight: bold; border-color: #e9ff5b; }
+  .speed-steps { display: flex; gap: 6px; }
+  .speed-steps button { flex: 1; padding: 8px 6px; font-size: 12px; border-radius: 8px; }
+
+  .grid-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .grid-actions button { font-size: 13px; padding: 10px; border-radius: 10px; }
+  
+  /* 폴더 아코디언 재생목록 */
+  .playlist-card { max-height: 360px; overflow-y: auto; padding: 12px; }
+  .folder-group { margin-bottom: 8px; border: 1px solid #232c3d; border-radius: 10px; overflow: hidden; background: #0f141d; }
+  .folder-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #19202c; cursor: pointer; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+  .folder-header:active { background: #222c3e; }
+  .folder-header.has-active { color: #e9ff5b; border-left: 3px solid #e9ff5b; }
+  .folder-items { display: none; flex-direction: column; }
+  .folder-items.open { display: flex; }
+  .playlist-item { padding: 9px 12px 9px 24px; font-size: 12px; color: #94a3b8; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid #161c28; }
+  .playlist-item:active { background: #1c2432; }
+  .playlist-item.active { background: #222b3a; color: #e9ff5b; font-weight: bold; border-left: 3px solid #e9ff5b; }
 </style>
 </head>
 <body>
@@ -460,6 +479,7 @@ REMOTE_HTML = """<!DOCTYPE html>
     <div id="statusBadge" class="badge">연결 중...</div>
   </div>
 
+  <!-- 현재 재생 카드 -->
   <div class="card">
     <div id="trackTitle" class="now-playing-title">재생 중인 영상 없음</div>
     <div class="time-row">
@@ -477,6 +497,28 @@ REMOTE_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- 재생 속도 조절 카드 -->
+  <div class="card">
+    <div class="card-title-row">
+      <span class="card-title">⚡ 재생 속도 조절</span>
+      <span id="speedVal" class="speed-badge">1.0x</span>
+    </div>
+    <div class="speed-presets">
+      <button onclick="cmd('speed', {val: 0.5})" id="sp_05">0.5x</button>
+      <button onclick="cmd('speed', {val: 0.75})" id="sp_075">0.75x</button>
+      <button onclick="cmd('speed', {val: 1.0})" id="sp_10">1.0x</button>
+      <button onclick="cmd('speed', {val: 1.25})" id="sp_125">1.25x</button>
+      <button onclick="cmd('speed', {val: 1.5})" id="sp_15">1.5x</button>
+      <button onclick="cmd('speed', {val: 2.0})" id="sp_20">2.0x</button>
+    </div>
+    <div class="speed-steps">
+      <button onclick="cmd('speed_step', {delta: -0.25})">˗ 느리게 (-0.25x)</button>
+      <button onclick="cmd('speed_reset')" style="flex: 0.8;">1.0x 기본</button>
+      <button onclick="cmd('speed_step', {delta: 0.25})">˖ 빠르게 (+0.25x)</button>
+    </div>
+  </div>
+
+  <!-- 볼륨 및 기타 액션 카드 -->
   <div class="card">
     <div class="vol-row">
       <button onclick="cmd('mute')" id="muteBtn" style="padding: 8px 12px; font-size: 18px;">🔊</button>
@@ -491,8 +533,12 @@ REMOTE_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- 폴더별 정리된 재생목록 카드 -->
   <div class="card playlist-card">
-    <div style="font-size: 13px; font-weight: 700; color: #9ca3af; margin-bottom: 4px;">📂 재생목록</div>
+    <div class="card-title-row" style="margin-bottom: 8px;">
+      <span class="card-title">📂 폴더별 재생목록</span>
+      <span id="playlistTotalCount" style="font-size: 12px; color: #94a3b8;"></span>
+    </div>
     <div id="playlistContainer"></div>
   </div>
 </div>
@@ -502,6 +548,9 @@ let isSeeking = false;
 let isVolDragging = false;
 const progress = document.getElementById('progressBar');
 const volBar = document.getElementById('volBar');
+let openFolders = new Set();
+let autoOpenedActiveFolder = false;
+let currentPlaylistGroups = [];
 
 progress.addEventListener('input', () => { isSeeking = true; });
 progress.addEventListener('change', () => {
@@ -534,6 +583,65 @@ function fmtTime(sec) {
   return `${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
 }
 
+function escapeHtml(str) {
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function toggleFolder(encFolder) {
+  const folder = decodeURIComponent(encFolder);
+  if (openFolders.has(folder)) {
+    openFolders.delete(folder);
+  } else {
+    openFolders.add(folder);
+  }
+  renderPlaylistGroups(currentPlaylistGroups);
+}
+
+function renderPlaylistGroups(groups) {
+  currentPlaylistGroups = groups;
+  const container = document.getElementById('playlistContainer');
+  if (!groups || groups.length === 0) {
+    container.innerHTML = '<div style="font-size:12px; color:#64748b; padding:8px;">재생목록이 비어 있습니다.</div>';
+    return;
+  }
+
+  // 활성 항목이 있는 폴더 자동 최초 오픈
+  if (!autoOpenedActiveFolder) {
+    groups.forEach(g => {
+      if (g.has_active) {
+        openFolders.add(g.folder);
+        autoOpenedActiveFolder = true;
+      }
+    });
+  }
+
+  let html = '';
+  groups.forEach((g, idx) => {
+    const isOpen = openFolders.has(g.folder);
+    const arrow = isOpen ? '▼' : '▶';
+    const activeCls = g.has_active ? ' has-active' : '';
+    const openCls = isOpen ? ' open' : '';
+    const enc = encodeURIComponent(g.folder);
+
+    html += '<div class="folder-group">';
+    html += `  <div class="folder-header${activeCls}" onclick="toggleFolder('${enc}')">`;
+    html += `    <span>${escapeHtml(g.folder)} <small style="opacity:0.75; font-size:11px;">(${g.count}개)</small></span>`;
+    html += `    <span style="font-size: 11px; opacity:0.8;">${arrow}</span>`;
+    html += '  </div>';
+    html += `  <div class="folder-items${openCls}">`;
+    g.items.forEach(it => {
+      const itActive = it.active ? ' active' : '';
+      html += `    <div class="playlist-item${itActive}" onclick="cmd('play_index', {index: ${it.index}})">`;
+      html += `      ${it.index + 1}. ${escapeHtml(it.name)}`;
+      html += '    </div>';
+    });
+    html += '  </div>';
+    html += '</div>';
+  });
+
+  container.innerHTML = html;
+}
+
 function updateStatus() {
   fetch('/api/status')
     .then(r => r.json())
@@ -554,29 +662,39 @@ function updateStatus() {
         document.getElementById('volVal').innerText = data.volume + '%';
       }
 
+      // 속도 UI 갱신
+      const curSpeed = data.speed || 1.0;
+      document.getElementById('speedVal').innerText = curSpeed.toFixed(2) + 'x';
+      ['05', '075', '10', '125', '15', '20'].forEach(id => {
+        const el = document.getElementById('sp_' + id);
+        if (el) el.className = '';
+      });
+      if (Math.abs(curSpeed - 0.5) < 0.02) document.getElementById('sp_05').className = 'active-speed';
+      else if (Math.abs(curSpeed - 0.75) < 0.02) document.getElementById('sp_075').className = 'active-speed';
+      else if (Math.abs(curSpeed - 1.0) < 0.02) document.getElementById('sp_10').className = 'active-speed';
+      else if (Math.abs(curSpeed - 1.25) < 0.02) document.getElementById('sp_125').className = 'active-speed';
+      else if (Math.abs(curSpeed - 1.5) < 0.02) document.getElementById('sp_15').className = 'active-speed';
+      else if (Math.abs(curSpeed - 2.0) < 0.02) document.getElementById('sp_20').className = 'active-speed';
+
       let repeatLabel = '전체반복';
       if (data.repeat_mode === 'repeat_one') repeatLabel = '한곡반복';
       else if (data.repeat_mode === 'stop_after_finish') repeatLabel = '순차정지';
       else if (data.repeat_mode === 'shuffle') repeatLabel = '무작위';
       document.getElementById('repeatModeText').innerText = repeatLabel;
 
-      if (data.playlist && data.playlist.length > 0) {
-        let box = document.getElementById('playlistContainer');
-        if (box.children.length !== data.playlist.length) {
-          box.innerHTML = '';
-          data.playlist.forEach(item => {
-            let d = document.createElement('div');
-            d.className = 'playlist-item' + (item.active ? ' active' : '');
-            d.innerText = `${item.index + 1}. ${item.name}`;
-            d.onclick = () => cmd('play_index', { index: item.index });
-            box.appendChild(d);
-          });
-        } else {
-          data.playlist.forEach((item, idx) => {
-            let el = box.children[idx];
-            if (el) el.className = 'playlist-item' + (item.active ? ' active' : '');
-          });
-        }
+      if (data.total_videos !== undefined) {
+        document.getElementById('playlistTotalCount').innerText = `총 ${data.total_videos}개`;
+      }
+
+      // 폴더 그룹 렌더링
+      if (data.playlist_groups) {
+        // 활성 항목 변경 감지 시 활성 폴더 열기
+        data.playlist_groups.forEach(g => {
+          if (g.has_active && !openFolders.has(g.folder)) {
+            openFolders.add(g.folder);
+          }
+        });
+        renderPlaylistGroups(data.playlist_groups);
       }
     })
     .catch(() => {
@@ -1250,12 +1368,34 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if self.playlist and 0 <= self.current_index < len(self.playlist):
             cur_title = os.path.basename(self.playlist[self.current_index])
 
-        playlist_items = []
-        for idx, fpath in enumerate(self.playlist[:50]):
-            playlist_items.append({
+        # 폴더별 그룹화된 재생목록 생성
+        abs_root = os.path.abspath(self.input_path) if (self.input_path and os.path.isdir(self.input_path)) else None
+        groups_map = {}
+        for idx, fpath in enumerate(self.playlist):
+            if abs_root:
+                dir_path = os.path.dirname(fpath)
+                rel = os.path.relpath(dir_path, abs_root)
+                folder_name = "📁 루트 폴더" if rel == "." else f"📁 {rel}"
+            else:
+                dir_name = os.path.basename(os.path.dirname(fpath))
+                folder_name = f"📁 {dir_name}" if dir_name else "📁 동영상 목록"
+
+            if folder_name not in groups_map:
+                groups_map[folder_name] = []
+
+            groups_map[folder_name].append({
                 "index": idx,
                 "name": os.path.basename(fpath),
                 "active": idx == self.current_index
+            })
+
+        playlist_groups = []
+        for folder_name, items in groups_map.items():
+            playlist_groups.append({
+                "folder": folder_name,
+                "has_active": any(it["active"] for it in items),
+                "count": len(items),
+                "items": items
             })
 
         vol = int(self.volume_scale.get_value()) if getattr(self, "volume_scale", None) else 100
@@ -1271,7 +1411,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             "subtitles_enabled": self.subtitles_enabled,
             "is_fullscreen": self.is_fullscreen,
             "repeat_mode": self.repeat_mode,
-            "playlist": playlist_items
+            "playlist_groups": playlist_groups,
+            "total_videos": len(self.playlist)
         }
 
     def handle_remote_command(self, action, val=None, index=None, delta=None, percent=None):
@@ -1292,6 +1433,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             GLib.idle_add(self.cycle_repeat_mode)
         elif action == "screenshot":
             GLib.idle_add(self.capture_screenshot)
+        elif action == "speed" and val is not None:
+            try:
+                s = float(val)
+                GLib.idle_add(lambda: self.set_playback_rate(s))
+            except Exception:
+                pass
+        elif action == "speed_step" and delta is not None:
+            try:
+                d = float(delta)
+                GLib.idle_add(lambda: self.step_playback_rate(d))
+            except Exception:
+                pass
+        elif action == "speed_reset":
+            GLib.idle_add(self.reset_playback_rate)
         elif action == "seek" and delta is not None:
             try:
                 d = float(delta) * Gst.SECOND
