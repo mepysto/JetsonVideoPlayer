@@ -3925,7 +3925,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if not self.playlist:
             return
         current_path = self.playlist[self.current_index]
-        abs_root = os.path.abspath(self.input_path) if os.path.isdir(self.input_path) else None
+        abs_root = os.path.abspath(self.input_path) if (self.input_path and os.path.isdir(self.input_path)) else None
         if abs_root:
             display_name = os.path.relpath(current_path, abs_root)
         else:
