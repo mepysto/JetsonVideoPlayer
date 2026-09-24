@@ -1,52 +1,43 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# AI 자막 번역 엔진(llama.cpp, CUDA) 설치 스크립트 — 선택 설치
-#   사용법: ./scripts/setup_translator.sh [모델]
-#   모델 기본값: qwen2.5-1.5b   (qwen2.5-3b: 품질이 더 좋지만 메모리 약 2GB 필요)
-#   설치 위치: ~/.local/share/jetson_video_player/llama.cpp
+# AI 자막 번역 엔진 설치 스크립트 — 선택 설치
+#   사용법: ./scripts/setup_translator.sh
+#   설치 위치: ~/.local/share/jetson_video_player/nllb   (약 650MB)
 #
-# Whisper가 인식한 자막을 로컬 LLM으로 한국어 등으로 번역합니다 (네트워크 불필요).
+# Meta NLLB-200 (distilled 600M) 번역 전용 모델을 CTranslate2(CPU int8)로 실행합니다 (네트워크 불필요).
+#   - 모델 라이선스: CC-BY-NC 4.0 (비상업적 이용만 허용)
+#   - 파이썬 패키지는 전용 폴더에 의존성 없이 설치하여 시스템 패키지(numpy 등)를 바꾸지 않습니다.
 # ==============================================================================
 set -euo pipefail
 
-MODEL="${1:-qwen2.5-1.5b}"
-PREFIX="${JVP_LLAMA_DIR:-$HOME/.local/share/jetson_video_player/llama.cpp}"
-NVCC="${NVCC:-/usr/local/cuda/bin/nvcc}"
-JOBS="${JOBS:-2}"
+PREFIX="${JVP_NLLB_DIR:-$HOME/.local/share/jetson_video_player/nllb}"
+MODEL_REPO="JustFrederik/nllb-200-distilled-600M-ct2-int8"
+MODEL_FILES="config.json model.bin sentencepiece.bpe.model shared_vocabulary.txt special_tokens_map.json tokenizer_config.json"
 
-case "$MODEL" in
-    qwen2.5-1.5b) URL="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf" ;;
-    qwen2.5-3b)   URL="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" ;;
-    *) echo "알 수 없는 모델: $MODEL (qwen2.5-1.5b | qwen2.5-3b)"; exit 1 ;;
-esac
+echo "📦 번역 엔진 설치 위치: $PREFIX"
+mkdir -p "$PREFIX/pylib" "$PREFIX/model"
 
-echo "📦 llama.cpp 설치 위치: $PREFIX"
-if [ ! -d "$PREFIX/.git" ]; then
-    git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$PREFIX"
-else
-    git -C "$PREFIX" pull --ff-only || true
-fi
+echo "🐍 CTranslate2 / SentencePiece 설치 (전용 폴더, 의존성 없이)"
+python3 -m pip install --quiet --no-deps --upgrade --target "$PREFIX/pylib" ctranslate2 sentencepiece
 
-CUDA_FLAGS=()
-if [ -x "$NVCC" ]; then
-    echo "⚡ CUDA 빌드 (nvcc: $NVCC)"
-    CUDA_FLAGS=(-DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER="$NVCC" -DCMAKE_CUDA_ARCHITECTURES=87)
-else
-    echo "⚠️ nvcc를 찾지 못해 CPU 빌드로 진행합니다 (느림)."
-fi
+for f in $MODEL_FILES; do
+    if [ ! -s "$PREFIX/model/$f" ]; then
+        echo "⬇️ 모델 파일: $f"
+        curl -L --fail -o "$PREFIX/model/$f.part" "https://huggingface.co/$MODEL_REPO/resolve/main/$f"
+        mv "$PREFIX/model/$f.part" "$PREFIX/model/$f"
+    fi
+done
 
-cmake -S "$PREFIX" -B "$PREFIX/build" -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF "${CUDA_FLAGS[@]}"
-cmake --build "$PREFIX/build" --config Release -j "$JOBS" --target llama-server
+echo "🧪 동작 확인"
+PYTHONPATH="$PREFIX/pylib" python3 - "$PREFIX/model" <<'PY'
+import sys, os
+import ctranslate2, sentencepiece
+model = sys.argv[1]
+tr = ctranslate2.Translator(model, device="cpu", compute_type="int8")
+sp = sentencepiece.SentencePieceProcessor(model_file=os.path.join(model, "sentencepiece.bpe.model"))
+r = tr.translate_batch([sp.encode("Welcome to my channel.", out_type=str) + ["</s>", "eng_Latn"]], target_prefix=[["kor_Hang"]])
+print("   Welcome to my channel. →", sp.decode(r[0].hypotheses[0][1:]))
+PY
 
-MODEL_DIR="$PREFIX/models"
-MODEL_FILE="$MODEL_DIR/$(basename "$URL")"
-mkdir -p "$MODEL_DIR"
-if [ ! -s "$MODEL_FILE" ]; then
-    echo "⬇️ 모델 다운로드: $(basename "$URL")"
-    curl -L --fail -o "$MODEL_FILE.part" "$URL"
-    mv "$MODEL_FILE.part" "$MODEL_FILE"
-fi
-
-echo "✅ 설치 완료"
-echo "   실행 파일: $PREFIX/build/bin/llama-server"
-echo "   모델:      $MODEL_FILE"
+echo "✅ 설치 완료 — 플레이어에서 자막을 켜고 Shift+G 로 번역하세요."
+echo "   (모델 라이선스: CC-BY-NC 4.0, 비상업적 이용)"

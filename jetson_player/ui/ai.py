@@ -4,12 +4,12 @@ import os
 from gi.repository import GLib
 
 from ..ai.translate import TranslationJob, make_backend, resolve_backend
-from ..ai.whisper import LANGUAGE_NAMES, MODEL_NOTES, AiSubtitleJob, ai_subtitle_path, format_srt, list_whisper_models, whisper_available
+from ..ai.whisper import LANGUAGE_NAMES, MODEL_NOTES, AiSubtitleJob, ai_subtitle_path, list_whisper_models, whisper_available
 from ..settings import settings
 
 AI_COLOR = "#B388FF"
 TRANSLATE_TARGETS = [("ko", "한국어"), ("en", "영어"), ("ja", "일본어"), ("zh", "중국어")]
-TRANSLATE_BACKENDS = [("auto", "자동 (로컬 우선)"), ("local", "로컬 AI (오프라인)"), ("claude", "Claude API")]
+TRANSLATE_BACKENDS = [("auto", "자동 (로컬 우선)"), ("local", "로컬 번역 모델 NLLB (오프라인)"), ("claude", "Claude API")]
 AI_LANGUAGES = [("auto", "자동 감지"), ("ko", "한국어"), ("en", "영어"), ("ja", "일본어"), ("zh", "중국어")]
 
 
@@ -76,6 +76,7 @@ class AiSubtitlesMixin:
             entry["label"] = f"🤖 AI {lang_name} ({os.path.basename(srt_path)})"
             entry["track"].label = entry["label"]
             entry["path"] = srt_path
+            entry["lang"] = "en" if translate else language
             self.show_osd(f"🤖 AI 자막 완성: {len(entry['events'])}문장 (다음 재생부터 자동 로드)", duration_sec=4.0)
             self.update_subtitle_button_ui()
             target = settings.get("translate_target")
@@ -100,6 +101,16 @@ class AiSubtitlesMixin:
             job.cancel()
 
     # ---- 자막 번역 ------------------------------------------------------------
+    @staticmethod
+    def _entry_language(entry):
+        """자막 트랙의 언어 코드 (AI 자막은 감지된 언어, 외부 자막은 레이블의 언어, 모르면 영어)"""
+        if entry.get("lang"):
+            return entry["lang"]
+        for code, name in LANGUAGE_NAMES.items():
+            if name in entry.get("label", ""):
+                return code
+        return "en"
+
     def _translation_source(self):
         """번역할 자막: 지금 켜져 있는 외부/AI 자막 중 첫 번째 (번역 결과 트랙 제외)"""
         for idx in sorted(self.active_subtitle_indices):
@@ -120,6 +131,10 @@ class AiSubtitlesMixin:
             self.show_osd("⚠️ 번역할 자막이 없습니다. 자막을 켜거나 🤖 AI 자막을 먼저 만드세요.", duration_sec=3.5)
             return
         target = settings.get("translate_target")
+        source_lang = self._entry_language(source)
+        if source_lang == target:
+            self.show_osd(f"이미 {LANGUAGE_NAMES.get(target, target)} 자막입니다.", duration_sec=2.5)
+            return
         backend_name = resolve_backend(settings.get("translate_backend"))
         if backend_name is None:
             self.show_osd("⚠️ 번역 엔진이 없습니다: ./scripts/setup_translator.sh 실행 (또는 Claude API 키 설정)", duration_sec=5.0)
@@ -131,6 +146,7 @@ class AiSubtitlesMixin:
         target_name = LANGUAGE_NAMES.get(target, target)
         entry = self.make_subtitle_entry(None, f"🌐 {target_name} 번역 (번역 중...)", "#FFFFFF", [])
         entry["is_translation"] = True
+        entry["lang"] = target
         self.available_subtitles.append(entry)
         self.active_subtitle_indices = {len(self.available_subtitles) - 1}
         self.subtitles_enabled = True
@@ -159,9 +175,7 @@ class AiSubtitlesMixin:
                 self.update_subtitle_button_ui()
                 self.show_osd(f"⏹ 번역 중단 ({len(events)}문장까지 표시)", duration_sec=3.0)
                 return
-            path = ai_subtitle_path(video_path, target)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(format_srt(events))
+            path = save_path   # 작업 스레드가 이미 저장함
             entry["label"] = f"🌐 {target_name} 번역 ({os.path.basename(path)})"
             entry["track"].label = entry["label"]
             entry["path"] = path
@@ -169,13 +183,14 @@ class AiSubtitlesMixin:
             self.show_osd(f"🌐 {target_name} 번역 완성: {len(events)}문장 (다음 재생부터 자동 로드)", duration_sec=4.0)
             self.update_subtitle_button_ui()
 
+        save_path = ai_subtitle_path(video_path, target)
         job = TranslationJob(list(source["events"]), target, make_backend(backend_name),
-                             position_ms=self.last_known_pos_ns // 1_000_000,
+                             position_ms=self.last_known_pos_ns // 1_000_000, source=source_lang, save_path=save_path,
                              on_segments=on_segments, on_status=on_status, on_done=on_done)
         self.translate_job = job
         self.translate_status = ("🌐 번역 준비 중...", 0.0)
         job.start()
-        engine = "로컬 AI" if backend_name == "local" else "Claude API"
+        engine = "로컬 번역 모델" if backend_name == "local" else "Claude API"
         self.show_osd(f"🌐 {target_name} 번역 시작 ({engine}) — Shift+G: 취소", duration_sec=2.5)
 
     def cancel_translation(self):

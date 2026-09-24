@@ -23,7 +23,9 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
   - 결과는 영상 옆에 `영상이름.ai.<언어>.srt`로 저장되어 다음부터 자동으로 불러옵니다.
   - 인식 언어(자동/한국어/영어/일본어/중국어), 인식 모델(기본 small, 더 정확한 large-v3-turbo), "YouTube 영상은 자동 생성"은 `⋯` 메뉴에서 설정합니다.
 - **🌐 자막 번역 (`Shift+G`)**: 켜 둔 자막(AI 자막이나 영어 `.srt` 등)을 한국어(또는 영어/일본어/중국어)로 번역합니다.
-  - 엔진은 **로컬 AI**(llama.cpp + Qwen2.5, 오프라인)와 **Claude API**(`anthropic` 패키지와 API 키가 있을 때) 중에서 고릅니다.
+  - 엔진은 **로컬 번역 모델**(Meta NLLB-200 600M, 오프라인, CPU)과 **Claude API**(`anthropic` 패키지와 API 키가 있을 때) 중에서 고릅니다.
+    음성 인식 자막은 문장 중간에서 줄이 끊기므로, 번역 전에 실제 문장 단위로 다시 나눕니다. 11분 영상 기준 첫 번역은 약 8초, 전체는 재생 중 약 1분 30초가 걸립니다.
+  - NLLB-200 모델 라이선스는 **CC-BY-NC 4.0(비상업적 이용만 허용)**입니다.
   - 지금 보는 위치부터 번역해 바로 화면에 표시하고, 결과는 `영상이름.ai.ko.srt`로 저장합니다. "AI 자막을 만들면 자동으로 번역"도 켤 수 있습니다.
 
 ### 3. 타임라인·챕터
@@ -70,7 +72,7 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 ./install.sh --set-default       # 영상 파일을 더블클릭하면 이 플레이어로 열리도록 기본 앱 지정 (선택)
 ./scripts/setup_whisper.sh       # (선택) AI 자막 엔진: whisper.cpp CUDA 빌드 + small 모델 (Orin Nano에서 빌드 약 1시간)
 ./scripts/setup_whisper.sh large-v3-turbo-q5_0   # (선택) 더 정확한 인식 모델 추가
-./scripts/setup_translator.sh    # (선택) 자막 번역 엔진: llama.cpp CUDA 빌드 + Qwen2.5-1.5B (빌드 수 시간)
+./scripts/setup_translator.sh    # (선택) 자막 번역 엔진: NLLB-200 번역 모델 (약 650MB, 몇 분)
 python3 scripts/check_deps.py    # 실행 환경만 다시 점검
 ./uninstall.sh                   # 제거 (설정·기록은 유지)
 ```
@@ -173,7 +175,7 @@ jetson_player/
   mpris.py                  # MPRIS2 D-Bus 서비스
   system.py                 # 파일 관리자 연동, Jetson 온도/GPU/RAM, 로컬 IP
   ai/whisper.py             # AI 자막 (whisper.cpp 실행, 음성 추출, SRT 저장)
-  ai/translate.py           # 자막 번역 (llama.cpp 로컬 / Claude API)
+  ai/translate.py           # 자막 번역 (NLLB 로컬 / Claude API), 문장 재분할
   media/codecs.py           # NVDEC 지원 형식 판별
   media/gst_setup.py        # NVDEC 우선순위, HW 영상 출력(nvvidconv) 구성
   media/thumbnails.py       # 썸네일 생성, 정밀 장면 분석

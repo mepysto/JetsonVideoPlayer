@@ -1,27 +1,29 @@
 """AI 자막 번역: 자막 트랙을 다른 언어(기본 한국어)로 번역합니다.
 
 번역 엔진
-  - local  : llama.cpp(CUDA) + Qwen2.5 — 오프라인, 설치: ./scripts/setup_translator.sh
+  - local  : Meta NLLB-200 (600M, CTranslate2 int8, CPU) — 오프라인 번역 전용 모델
+             설치: ./scripts/setup_translator.sh   (모델 라이선스: CC-BY-NC 4.0, 비상업적 이용)
   - claude : Claude API (claude-opus-5) — anthropic 패키지와 API 인증 정보가 있을 때만 사용
   - auto   : local이 설치되어 있으면 local, 아니면 claude
 
-동작: 대사를 20줄 단위로 묶어 번역합니다(앞뒤 문맥 포함, 결과 줄 수를 JSON 스키마로 강제).
-      지금 보고 있는 위치 근처부터 번역하고, 끝나면 <영상>.ai.<언어>.srt 로 저장합니다.
+음성 인식 자막은 문장 중간에서 줄이 끊기므로 먼저 실제 문장 단위로 다시 나눈 뒤 번역합니다.
+지금 보고 있는 위치 근처부터 번역하고, 끝나면 <영상>.ai.<언어>.srt 로 저장합니다.
+
+(범용 소형 LLM(Qwen2.5 1.5B/3B, llama.cpp)도 시험했지만 이 기기에서 줄 대응이 어긋나고 다른 문자가
+ 섞이는 등 자막 번역 품질이 부족해 번역 전용 모델을 사용합니다.)
 """
 import importlib.util
 import json
 import os
-import shutil
-import socket
-import subprocess
+import sys
 import threading
-import time
-import urllib.error
-import urllib.request
 
 from gi.repository import GLib
 
-LLAMA_HOME = os.environ.get("JVP_LLAMA_DIR", os.path.expanduser("~/.local/share/jetson_video_player/llama.cpp"))
+NLLB_HOME = os.environ.get("JVP_NLLB_DIR", os.path.expanduser("~/.local/share/jetson_video_player/nllb"))
+# NLLB 언어 코드
+NLLB_CODES = {"ko": "kor_Hang", "en": "eng_Latn", "ja": "jpn_Jpan", "zh": "zho_Hans",
+              "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn", "ru": "rus_Cyrl"}
 TARGET_LANGUAGES = {"ko": "Korean (한국어)", "en": "English", "ja": "Japanese (日本語)", "zh": "Simplified Chinese (简体中文)"}
 BATCH_SIZE = 20
 CONTEXT_LINES = 3
@@ -33,6 +35,42 @@ SYSTEM_PROMPT = (
     "Lines under 'context' are for understanding only and must not be translated. "
     "Return exactly one translation per numbered line, in the same order."
 )
+
+
+SENTENCE_END = (".", "?", "!", "。", "？", "！", "…", '"', "”")
+
+
+def resegment_sentences(events, max_chars=120, max_gap_ms=1500):
+    """음성 인식 자막은 문장 중간에서 줄이 끊기므로, 번역 전에 실제 문장 단위로 다시 나눕니다.
+
+    각 줄의 단어에 글자 위치 비율로 시각을 배분한 뒤, 문장 끝(. ? ! 등), 긴 공백, 글자 수 한도에서 끊습니다.
+    반환: [(start_ms, end_ms, sentence), ...]
+    """
+    words = []  # (start_ms, end_ms, word)
+    for start, end, text in sorted(events):
+        tokens = text.split()
+        total = sum(len(t) + 1 for t in tokens) or 1
+        pos = 0
+        for tok in tokens:
+            w_start = start + (end - start) * pos // total
+            pos += len(tok) + 1
+            words.append((w_start, start + (end - start) * pos // total, tok))
+
+    sentences, cur = [], []
+
+    def flush():
+        if cur:
+            sentences.append((cur[0][0], max(cur[-1][1], cur[0][0] + 800), " ".join(w for _s, _e, w in cur)))
+            cur.clear()
+
+    for word in words:
+        if cur and (word[0] - cur[-1][1] > max_gap_ms or sum(len(w) + 1 for _s, _e, w in cur) + len(word[2]) > max_chars):
+            flush()
+        cur.append(word)
+        if word[2].endswith(SENTENCE_END):
+            flush()
+    flush()
+    return sentences
 
 
 def translation_schema(count):
@@ -67,32 +105,33 @@ def parse_translations(text, expected):
     return [t.strip() for t in items]
 
 
-def plan_batches(events, position_ms, size=BATCH_SIZE):
-    """[(시작 인덱스, 끝 인덱스), ...] — 현재 위치가 포함된 묶음부터, 그 뒤, 그다음 앞부분 순서."""
-    batches = [(i, min(i + size, len(events))) for i in range(0, len(events), size)]
-    current = next((n for n, (a, b) in enumerate(batches) if events[b - 1][1] >= position_ms), 0)
-    return batches[current:] + batches[:current]
+def plan_batches(events, position_ms, size=BATCH_SIZE, first_size=6):
+    """[(시작 인덱스, 끝 인덱스), ...] — 현재 위치부터 끝까지, 그다음 앞부분 순서.
+
+    첫 묶음은 작게(first_size) 잡아 번역된 자막이 화면에 빨리 나타나게 합니다.
+    """
+    n = len(events)
+    start = next((i for i, ev in enumerate(events) if ev[1] >= position_ms), 0)
+    batches = []
+    for lo, hi in ((start, n), (0, start)):
+        i = lo
+        while i < hi:
+            step = first_size if not batches else size
+            batches.append((i, min(i + step, hi)))
+            i += step
+    return batches
 
 
 # ---- 번역 엔진 ---------------------------------------------------------------
-def find_llama_server():
-    for c in (os.environ.get("JVP_LLAMA_SERVER"), os.path.join(LLAMA_HOME, "build", "bin", "llama-server"), shutil.which("llama-server")):
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    return None
-
-
-def find_llama_model():
-    model_dir = os.path.join(LLAMA_HOME, "models")
-    try:
-        models = sorted(f for f in os.listdir(model_dir) if f.endswith(".gguf"))
-    except OSError:
-        return None
-    return os.path.join(model_dir, models[0]) if models else None
+def nllb_paths():
+    """(파이썬 라이브러리 폴더, 모델 폴더) — setup_translator.sh 가 설치한 위치"""
+    return os.path.join(NLLB_HOME, "pylib"), os.path.join(NLLB_HOME, "model")
 
 
 def local_available():
-    return find_llama_server() is not None and find_llama_model() is not None
+    pylib, model = nllb_paths()
+    return (os.path.isdir(os.path.join(pylib, "ctranslate2")) and os.path.isfile(os.path.join(model, "model.bin"))
+            and os.path.isfile(os.path.join(model, "sentencepiece.bpe.model")))
 
 
 def claude_available():
@@ -112,61 +151,39 @@ def resolve_backend(preference):
     return None
 
 
-class LlamaCppBackend:
-    """llama-server를 필요할 때만 띄워 번역하고, 작업이 끝나면 종료해 메모리를 돌려줍니다."""
+class NllbBackend:
+    """NLLB-200 번역 전용 모델 (CTranslate2, CPU int8). 입력 한 줄 → 출력 한 줄이라 줄 대응이 어긋나지 않습니다."""
 
-    def __init__(self):
-        self.proc = None
-        self.port = None
+    def __init__(self, threads=4):
+        self.threads = threads
+        self.translator = None
+        self.sp = None
 
     def start(self, cancelled):
-        server, model = find_llama_server(), find_llama_model()
-        if not server or not model:
+        pylib, model = nllb_paths()
+        if not local_available():
             raise RuntimeError("번역 엔진이 설치되어 있지 않습니다. ./scripts/setup_translator.sh 를 실행하세요.")
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            self.port = s.getsockname()[1]
-        self.proc = subprocess.Popen(
-            [server, "-m", model, "--host", "127.0.0.1", "--port", str(self.port), "-ngl", "99", "-c", "4096", "--no-webui"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            if cancelled() or self.proc.poll() is not None:
-                break
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as r:
-                    if r.status == 200:
-                        return
-            except (urllib.error.URLError, OSError):
-                pass
-            time.sleep(0.5)
-        self.stop()
-        raise RuntimeError("번역 엔진을 시작하지 못했습니다.")
+        if pylib not in sys.path:
+            sys.path.append(pylib)   # 시스템 파이썬 패키지(numpy 등)를 건드리지 않는 전용 설치 폴더
+        import ctranslate2
+        import sentencepiece
+        self.translator = ctranslate2.Translator(model, device="cpu", compute_type="int8", intra_threads=self.threads)
+        self.sp = sentencepiece.SentencePieceProcessor(model_file=os.path.join(model, "sentencepiece.bpe.model"))
 
-    def translate(self, lines, context, target):
-        body = {
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT.format(target=TARGET_LANGUAGES[target])},
-                {"role": "user", "content": build_user_message(lines, context)},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 2048,
-            "response_format": {"type": "json_schema", "schema": translation_schema(len(lines))},
-        }
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/chat/completions",
-                                     data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as r:
-            reply = json.loads(r.read().decode("utf-8"))
-        return parse_translations(reply["choices"][0]["message"]["content"], len(lines))
+    def translate(self, lines, context, target, source="en"):
+        src, tgt = NLLB_CODES.get(source, "eng_Latn"), NLLB_CODES[target]
+        tokens = [self.sp.encode(line, out_type=str) + ["</s>", src] for line in lines]
+        results = self.translator.translate_batch(tokens, target_prefix=[[tgt]] * len(lines), beam_size=2, max_batch_size=16)
+        out = []
+        for r in results:
+            text = self.sp.decode(r.hypotheses[0][1:]).replace("⁇", "")
+            out.append(" ".join(text.split()))
+        return out
 
     def stop(self):
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-        self.proc = None
+        # 모델 메모리(약 1.2GB)를 바로 돌려줍니다.
+        self.translator = None
+        self.sp = None
 
 
 class ClaudeBackend:
@@ -180,7 +197,7 @@ class ClaudeBackend:
             import anthropic
             self.client = anthropic.Anthropic()
 
-    def translate(self, lines, context, target):
+    def translate(self, lines, context, target, source="en"):
         response = self.client.beta.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=16000,
@@ -200,15 +217,18 @@ class ClaudeBackend:
 
 
 def make_backend(name):
-    return LlamaCppBackend() if name == "local" else ClaudeBackend()
+    return NllbBackend() if name == "local" else ClaudeBackend()
 
 
 # ---- 번역 작업 ---------------------------------------------------------------
 class TranslationJob:
     """콜백(모두 메인 스레드): on_segments([(start, end, text)]), on_status(text, fraction), on_done(events, error)"""
 
-    def __init__(self, events, target="ko", backend=None, position_ms=0, on_segments=None, on_status=None, on_done=None):
-        self.events = sorted(events)
+    def __init__(self, events, target="ko", backend=None, position_ms=0, on_segments=None, on_status=None, on_done=None,
+                 source="en", resegment=True, save_path=None):
+        self.events = resegment_sentences(events) if resegment else sorted(events)
+        self.source = source
+        self.save_path = save_path   # 끝까지 번역되면 작업 스레드에서 바로 SRT로 저장 (앱을 곧바로 닫아도 유지)
         self.target = target
         self.backend = backend
         self.position_ms = position_ms
@@ -236,7 +256,7 @@ class TranslationJob:
         """묶음 번역. 줄 수가 맞지 않으면 반으로 나눠 재시도하고, 한 줄도 실패하면 원문을 둡니다."""
         lines = [text.replace("\n", " ") for _s, _e, text in self.events[a:b]]
         context = [text.replace("\n", " ") for _s, _e, text in self.events[max(0, a - CONTEXT_LINES):a]]
-        result = self.backend.translate(lines, context, self.target)
+        result = self.backend.translate(lines, context, self.target, self.source)
         if result is not None:
             return result
         if b - a == 1:
@@ -274,4 +294,11 @@ class TranslationJob:
         if self.cancelled:
             error = "취소됨"
         result = [self.translated[i] for i in sorted(self.translated)]
+        if not error and result and self.save_path:
+            try:
+                from .whisper import format_srt
+                with open(self.save_path, "w", encoding="utf-8") as f:
+                    f.write(format_srt(result))
+            except OSError as e:
+                error = f"저장 실패: {e}"
         self._emit(self.on_done, result, error)

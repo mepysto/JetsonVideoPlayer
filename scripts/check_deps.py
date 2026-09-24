@@ -75,9 +75,9 @@ def main():
     whisper = os.path.expanduser("~/.local/share/jetson_video_player/whisper.cpp/build/bin/whisper-cli")
     report(OK if os.path.exists(whisper) else WARN, "AI 자막 엔진 (whisper.cpp)",
            "" if os.path.exists(whisper) else "선택 설치: ./scripts/setup_whisper.sh", False)
-    llama = os.path.expanduser("~/.local/share/jetson_video_player/llama.cpp/build/bin/llama-server")
-    report(OK if os.path.exists(llama) else WARN, "AI 자막 번역 엔진 (llama.cpp)",
-           "" if os.path.exists(llama) else "선택 설치: ./scripts/setup_translator.sh", False)
+    nllb = os.path.expanduser("~/.local/share/jetson_video_player/nllb/model/model.bin")
+    report(OK if os.path.exists(nllb) else WARN, "AI 자막 번역 엔진 (NLLB-200)",
+           "" if os.path.exists(nllb) else "선택 설치: ./scripts/setup_translator.sh", False)
 
     apt = sorted({p for p in problems["required"] + problems["optional"] if not p.startswith("pip:")})
     pip = sorted({p[4:] for p in problems["required"] + problems["optional"] if p.startswith("pip:")})
