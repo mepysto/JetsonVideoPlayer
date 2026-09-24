@@ -216,8 +216,10 @@ class FeaturesMixin:
         video_path = self.playlist[self.current_index] if (self.playlist and 0 <= self.current_index < len(self.playlist)) else "없음"
         fname = os.path.basename(video_path)
         
-        decoders = ", ".join(self.decoder_names) if self.decoder_names else "감지 중..."
-        hw_str = "⚡ NVDEC 하드웨어 가속" if "nvv4l2" in decoders.lower() else "💻 소프트웨어 디코딩"
+        # 시도했다가 버려진 디코더가 아니라, 실제로 영상이 흐르는(협상 완료된) 디코더를 표시합니다.
+        active = self.active_video_decoder()
+        decoders = active or "감지 중..."
+        hw_str = "⚡ NVDEC 하드웨어 가속" if active and "nvv4l2" in active else ("💻 소프트웨어 디코딩" if active else "")
         
         pos_str = self.format_time(self.last_known_pos_ns)
         dur_str = self.format_time(self.duration_ns) if self.duration_ns > 0 else "00:00"

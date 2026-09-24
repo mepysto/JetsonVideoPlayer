@@ -72,6 +72,39 @@ class PlaybackMixin:
         self.update_speed_button_ui()
         self.show_osd(f"⚡ 속도: {self.playback_rate:.2f}x")
 
+    def active_video_decoder(self):
+        """현재 영상 데이터를 실제로 디코딩 중인 디코더 이름 (출력 caps가 협상된 요소)"""
+        if not self.pipeline:
+            return None
+        it = self.pipeline.iterate_recurse()
+        while True:
+            res, el = it.next()
+            if res != Gst.IteratorResult.OK:
+                return None
+            factory = el.get_factory()
+            klass = factory.get_metadata("klass") if factory else ""
+            if klass and "Decoder" in klass and "Video" in klass:
+                pad = el.get_static_pad("src")
+                caps = pad.get_current_caps() if pad else None
+                if caps and caps.to_string().startswith("video/x-raw"):
+                    return factory.get_name()
+
+    def _prepare_video_output(self, video_path):
+        """(출력 요소, 하드웨어 경로 여부)를 반환합니다. GL 싱크를 HW 출력 bin에 넣거나 빼서 재사용합니다."""
+        has_hw_bin = self.video_output is not self.video_sink
+        use_hw = has_hw_bin and video_path not in self.hw_output_disabled
+        if not has_hw_bin:
+            return self.video_sink, False
+        parent = self.video_sink.get_parent()
+        if use_hw:
+            if parent is None:
+                self.video_output.add(self.video_sink)
+                self.video_output.get_by_name("hw_vidcaps").link(self.video_sink)
+            return self.video_output, True
+        if parent is self.video_output:
+            self.video_output.remove(self.video_sink)
+        return self.video_sink, False
+
     def _update_overlay_video_size(self):
         """영상 해상도와 픽셀 종횡비를 읽어 자막 오버레이의 레터박스 계산에 사용합니다."""
         try:
@@ -419,8 +452,16 @@ class PlaybackMixin:
         self.pipeline.connect("deep-element-added", self.on_deep_element_added)
         self.pipeline.connect("source-setup", self.on_source_setup)
 
-        # 0x01 (video) + 0x02 (audio) + 0x04 (text/subtitles) + 0x10 (soft-volume) = 0x00000017
-        self.pipeline.set_property("flags", 0x00000017)
+        # 영상 출력 선택: NVDEC(하드웨어) 경로를 우선 사용하고, 이 파일에서 실패한 적이 있으면 기존 경로 사용
+        video_output, self.using_hw_video_output = self._prepare_video_output(video_path)
+
+        # 0x01 video + 0x02 audio + 0x04 text + 0x10 soft-volume (= 0x17)
+        # 하드웨어 경로에서는 0x40 native-video를 추가해 playsink가 NVMM 메모리를 처리할 수 없는
+        # videoconvert를 끼워 넣지 않게 합니다 (끼워 넣으면 decodebin이 소프트웨어 디코더로 대체함).
+        self.pipeline.set_property("flags", 0x57 if self.using_hw_video_output else 0x17)
+
+        # 내장 자막(MKV 등)은 텍스트만 받아 영상 위 오버레이로 직접 그립니다.
+        self.setup_embedded_text_sink()
 
         # Totem 공식 네이티브 GTK OpenGL 비디오 싱크 할당 (60Hz V-Sync 완벽 일치 & 4K 1:1 선명도 보장)
         # 배속 재생 시 지연 프레임으로 인한 파이프라인 정체를 방지하기 위해 qos=True 및 max-lateness=50ms 설정
@@ -431,7 +472,7 @@ class PlaybackMixin:
                 self.video_sink.set_property("qos", True)
             if self.video_sink.find_property("max-lateness"):
                 self.video_sink.set_property("max-lateness", 50 * Gst.MSECOND)
-            self.pipeline.set_property("video-sink", self.video_sink)
+            self.pipeline.set_property("video-sink", video_output)
 
         # scaletempo가 포함된 커스텀 오디오 싱크 bin 생성 (배속 재생 시 끊김 및 음정 왜곡 없는 완벽한 사운드 보장)
         audio_bin = Gst.Bin.new("audio_sink_bin")
@@ -559,6 +600,12 @@ class PlaybackMixin:
                 return
             path = self.playlist[self.current_index]
             name = os.path.basename(path)[:40]
+            if self.using_hw_video_output and path not in self.hw_output_disabled:
+                # HW 출력 경로(nvvidconv)가 이 영상 포맷을 처리하지 못함 → 기존(소프트웨어 변환) 경로로 즉시 재시도
+                print("↩️ HW 영상 출력 경로 실패 — 호환 경로로 다시 재생합니다.")
+                self.hw_output_disabled.add(path)
+                GLib.timeout_add(100, self.play_current_video, self.last_known_pos_ns)
+                return
             retries = self.retry_counts.get(path, 0)
             if retries < self.max_retries:
                 self.retry_counts[path] = retries + 1

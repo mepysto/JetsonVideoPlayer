@@ -1,4 +1,5 @@
 """자막 파일(SMI/SRT/VTT/ASS) 탐색·파싱과 언어 감지"""
+import html
 import os
 import re
 
@@ -274,3 +275,11 @@ def find_all_matching_subtitles(video_path):
 
     found_files.sort(key=sort_key)
     return found_files
+
+
+_MARKUP_TAG = re.compile(r"<[^>]+>")
+
+
+def strip_markup(text):
+    """Pango/HTML 마크업 태그와 엔티티를 제거한 순수 텍스트 (내장 자막 표시용)"""
+    return html.unescape(_MARKUP_TAG.sub("", text)).strip()

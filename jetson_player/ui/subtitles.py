@@ -1,6 +1,7 @@
 """외부/내장 자막 선택, 크기·싱크 조절"""
 from gi.repository import Gst, Gtk
 
+from ..subtitles.parse import strip_markup
 from ..subtitles.timeline import SubtitleTrack
 
 
@@ -215,13 +216,45 @@ class SubtitlesMixin:
         self.sub_popover.show_all()
         self.sub_popover.popup()
 
-    def _detect_embedded_subtitles(self):
-        """외부 자막이 없을 때 컨테이너 내장 자막 트랙 수를 감지하고 표시 여부를 적용합니다."""
-        if not self.pipeline:
+    # ---- 내장 자막 (컨테이너 텍스트 트랙) ----------------------------------
+    def setup_embedded_text_sink(self):
+        """playbin의 내장 자막 텍스트를 appsink로 받아 오버레이 트랙에 쌓습니다 (새 파이프라인마다 호출)."""
+        self.embedded_track = SubtitleTrack("💬 내장 자막", "#FFFFFF")
+        sink = Gst.ElementFactory.make("appsink", "embedded_text_sink")
+        if not sink:
             return
-        if self.available_subtitles:
-            # 외부/AI 자막을 쓰는 동안에는 내장 자막을 겹쳐 표시하지 않습니다.
-            self._apply_embedded_subs_visibility()
+        # sync=False: 자막 버퍼를 미리 받아 두고, 표시 시점은 오버레이가 재생 위치로 판단합니다.
+        sink.set_property("sync", False)
+        sink.set_property("async", False)
+        sink.set_property("emit-signals", True)
+        sink.connect("new-sample", self._on_embedded_text_sample)
+        self.pipeline.set_property("text-sink", sink)
+
+    def _on_embedded_text_sample(self, sink):
+        """[스트리밍 스레드] 내장 자막 버퍼 → (시작, 끝, 텍스트) 이벤트"""
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        if buf.pts == Gst.CLOCK_TIME_NONE:
+            return Gst.FlowReturn.OK
+        try:
+            raw = buf.extract_dup(0, buf.get_size()).decode("utf-8", errors="replace")
+        except Exception:
+            return Gst.FlowReturn.OK
+        caps = sample.get_caps()
+        fmt = caps.get_structure(0).get_string("format") if caps and caps.get_size() else None
+        text = strip_markup(raw) if fmt != "utf8" else raw
+        start_ms = buf.pts // Gst.MSECOND
+        dur_ms = buf.duration // Gst.MSECOND if buf.duration != Gst.CLOCK_TIME_NONE else 4000
+        track = getattr(self, "embedded_track", None)
+        if track is not None and text.strip():
+            track.add_events([(start_ms, start_ms + max(200, dur_ms), text)])
+        return Gst.FlowReturn.OK
+
+    def _detect_embedded_subtitles(self):
+        """컨테이너 내장 자막 트랙 수를 확인하고 오버레이 표시 대상을 갱신합니다."""
+        if not self.pipeline:
             return
         try:
             n_text = self.pipeline.get_property("n-text")
@@ -231,17 +264,11 @@ class SubtitlesMixin:
             self.n_embedded_text = n_text
             if n_text > 0:
                 print(f"💬 [내장 자막 감지] {n_text}개 트랙")
-        if self.n_embedded_text > 0:
-            self._apply_embedded_subs_visibility()
-        self.update_subtitle_button_ui()
+            self.reload_and_apply_subtitles()
 
     def _apply_embedded_subs_visibility(self):
-        for ov in self.subtitle_overlays:
-            try:
-                if ov.find_property("silent"):
-                    ov.set_property("silent", bool(self.available_subtitles) or not self.embedded_subs_enabled)
-            except Exception:
-                pass
+        """(이전 textoverlay 방식 호환) 내장 자막도 오버레이로 그리므로 표시 대상만 다시 계산합니다."""
+        self.reload_and_apply_subtitles()
 
     def _embedded_track_label(self, idx):
         """내장 자막 트랙의 언어 태그를 읽어 표시용 이름을 만듭니다."""
@@ -258,7 +285,7 @@ class SubtitlesMixin:
 
     def toggle_embedded_subtitles(self):
         self.embedded_subs_enabled = not self.embedded_subs_enabled
-        self._apply_embedded_subs_visibility()
+        self.reload_and_apply_subtitles()
         cur = self.pipeline.get_property("current-text") if self.pipeline else 0
         name = self._embedded_track_label(max(0, cur))
         self.show_osd(f"💬 {name} {'ON' if self.embedded_subs_enabled else 'OFF'}")
@@ -270,7 +297,8 @@ class SubtitlesMixin:
             return
         if not self.embedded_subs_enabled:
             self.embedded_subs_enabled = True
-            self.pipeline.set_property("current-text", 0)
+            if self.pipeline.get_property("current-text") != 0:
+                self.pipeline.set_property("current-text", 0)
             nxt = 0
         else:
             cur = max(0, self.pipeline.get_property("current-text"))
@@ -279,7 +307,9 @@ class SubtitlesMixin:
                 self.embedded_subs_enabled = False
             else:
                 self.pipeline.set_property("current-text", nxt)
-        self._apply_embedded_subs_visibility()
+        # 트랙이 바뀌면 이전 트랙의 미리 받은 대사를 버립니다.
+        self.embedded_track = SubtitleTrack("💬 내장 자막", "#FFFFFF")
+        self.reload_and_apply_subtitles()
         if self.embedded_subs_enabled:
             self.show_osd(f"💬 {self._embedded_track_label(nxt)}")
         else:
@@ -368,14 +398,17 @@ class SubtitlesMixin:
     def reload_and_apply_subtitles(self):
         """선택된 외부/AI 자막 트랙을 오버레이에 반영합니다."""
         tracks = []
-        if self.subtitles_enabled:
-            for idx in sorted(self.active_subtitle_indices):
-                if 0 <= idx < len(self.available_subtitles):
-                    tracks.append(self.available_subtitles[idx]["track"])
+        if self.available_subtitles:
+            if self.subtitles_enabled:
+                for idx in sorted(self.active_subtitle_indices):
+                    if 0 <= idx < len(self.available_subtitles):
+                        tracks.append(self.available_subtitles[idx]["track"])
+        elif self.n_embedded_text > 0 and self.embedded_subs_enabled and self.embedded_track is not None:
+            # 외부/AI 자막이 없을 때만 내장 자막을 표시합니다 (겹침 방지).
+            tracks.append(self.embedded_track)
         self.subtitle_overlay.set_tracks(tracks)
         self.subtitle_overlay.set_offset(self.subtitle_offset_ms)
         self.subtitle_overlay.set_font_scale(self.subtitle_font_scale)
-        self._apply_embedded_subs_visibility()
         self.update_subtitle_button_ui()
 
     def update_subtitle_button_ui(self):

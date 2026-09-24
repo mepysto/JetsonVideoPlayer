@@ -6,7 +6,7 @@ from gi.repository import GLib, Gdk, Gst, Gtk
 
 from ..settings import settings
 from ..shortcuts import find_shortcut
-from ..media.gst_setup import enable_x11_compositor_bypass, optimize_gstreamer_ranks
+from ..media.gst_setup import build_hw_video_output, enable_x11_compositor_bypass, optimize_gstreamer_ranks
 from ..storage import bookmark_cache, history_cache, hw_cache, resume_cache
 from ..youtube import is_youtube_url
 from .remote import RemoteMixin
@@ -201,6 +201,7 @@ class JetsonSignageFlexiblePlayer(
         self.n_embedded_text = 0
         self.embedded_subs_enabled = settings.get("embedded_subs_enabled")
         self.subtitle_overlays = []  # 현재 파이프라인의 textoverlay/subtitleoverlay (silent 토글용)
+        self.embedded_track = None  # 내장 자막 텍스트 (appsink로 수신, 오버레이로 표시)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
         self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
@@ -213,6 +214,10 @@ class JetsonSignageFlexiblePlayer(
             self.gtk_sink = Gst.ElementFactory.make("gtksink", "gtk_sink")
             self.video_widget = self.gtk_sink.get_property("widget") if self.gtk_sink else Gtk.DrawingArea()
             self.video_sink = self.gtk_sink
+        # playbin에 연결할 최종 영상 출력 (NVDEC 하드웨어 디코딩 유지를 위한 nvvidconv 포함)
+        self.video_output = build_hw_video_output(self.video_sink)
+        self.using_hw_video_output = False
+        self.hw_output_disabled = set()  # HW 출력 경로가 실패한 파일 (호환 경로로 재생)
 
         self.video_widget.set_hexpand(True)
         self.video_widget.set_vexpand(True)

@@ -92,3 +92,8 @@ def test_atomic_write_json(jp, tmp_path):
     jp.atomic_write_json(str(target), {"한글": 1})
     assert json.loads(target.read_text(encoding="utf-8")) == {"한글": 1}
     assert not (tmp_path / "sub" / "data.json.tmp").exists()
+
+
+def test_strip_markup(jp):
+    assert jp.strip_markup("<i>Hello</i> &amp; <span foreground='red'>bye</span>") == "Hello & bye"
+    assert jp.strip_markup("plain") == "plain"

@@ -1,4 +1,5 @@
 """GStreamer 디코더 랭크 최적화와 X11 컴포지터 우회"""
+import os
 import subprocess
 
 from gi.repository import GdkX11, Gst
@@ -62,3 +63,32 @@ def optimize_gstreamer_ranks():
         print("⚡ [하드웨어 가속 60 FPS 최적화] nvv4l2decoder HW 가속 및 60 FPS 전용 파이프라인 무결 적용 완료.")
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
+
+
+def build_hw_video_output(sink, fmt="NV12"):
+    """NVDEC 출력(NVMM 메모리)을 GTK GL 싱크가 받을 수 있도록 nvvidconv 변환을 앞에 붙인 출력 bin을 만듭니다.
+
+    gtkglsink/glsinkbin은 video/x-raw(memory:NVMM)를 받지 못하므로, 그대로 두면 decodebin이
+    nvv4l2decoder를 버리고 소프트웨어 디코더(avdec_*)로 대체합니다. nvvidconv가 VIC 하드웨어로
+    NVMM → 시스템 메모리 NV12 변환을 맡으면 디코딩은 NVDEC에서 계속 수행됩니다.
+    JVP_HW_VIDEO=0 환경 변수로 끌 수 있습니다 (문제 진단용).
+    """
+    if os.environ.get("JVP_HW_VIDEO", "1") == "0":
+        return sink
+    conv = Gst.ElementFactory.make("nvvidconv", "hw_vidconv")
+    capsfilter = Gst.ElementFactory.make("capsfilter", "hw_vidcaps")
+    if not conv or not capsfilter:
+        return sink
+    capsfilter.set_property("caps", Gst.Caps.from_string(f"video/x-raw,format={fmt}"))
+    out = Gst.Bin.new("hw_video_output")
+    for el in (conv, capsfilter, sink):
+        out.add(el)
+    if not (conv.link(capsfilter) and capsfilter.link(sink)):
+        print("⚠️ HW 영상 출력 구성 실패: 기본 싱크를 사용합니다.")
+        for el in (conv, capsfilter, sink):
+            out.remove(el)
+        return sink
+    ghost = Gst.GhostPad.new("sink", conv.get_static_pad("sink"))
+    ghost.set_active(True)
+    out.add_pad(ghost)
+    return out
