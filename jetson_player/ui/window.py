@@ -189,11 +189,9 @@ class JetsonSignageFlexiblePlayer(
         self.single_sub_mode = True  # 기본 1개(한국어 우선)만 활성화 (화면 가림 방지)
         self.available_subtitles = []  # list of dicts: {'path', 'label', 'color', 'events'}
         self.active_subtitle_indices = set()  # set of int indices
-        self.current_suburi = None
         self.pending_seek_ns = 0
         self.last_known_pos_ns = 0  # 자막 전환 시 0초 튕김 방지용 백업 위치
         self.is_updating_sub_checkboxes = False  # 모두 선택/해제 일괄 변경 락
-        self.sub_reload_timer_id = None  # 자막 리로드 디바운스 타이머
         self.subtitle_font_scale = settings.get("subtitle_font_scale")  # 자막 크기 스케일 (0.6 ~ 1.6)
         self.subtitle_offset_ms = 0  # 자막 싱크 오프셋 (ms 단위, 음수: 빠르게, 양수: 느리게)
         self.scale_label = None
@@ -397,12 +395,6 @@ class JetsonSignageFlexiblePlayer(
                 pass
             self.osd_timer_id = None
 
-        if getattr(self, "sub_reload_timer_id", None):
-            try:
-                GLib.source_remove(self.sub_reload_timer_id)
-            except Exception:
-                pass
-            self.sub_reload_timer_id = None
 
         if getattr(self, "position_timer_id", None):
             try:

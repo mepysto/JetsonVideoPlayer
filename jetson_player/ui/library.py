@@ -196,12 +196,7 @@ class LibraryMixin:
                 idx = len(self.available_subtitles)
                 color = get_subtitle_color(first, idx)
                 lbl = get_subtitle_label(first)
-                self.available_subtitles.append({
-                    'path': first,
-                    'label': lbl,
-                    'color': color,
-                    'events': evs
-                })
+                self.available_subtitles.append(self.make_subtitle_entry(first, lbl, color, evs))
                 self.active_subtitle_indices.add(idx)
                 self.has_subtitles = True
                 self.subtitles_enabled = True

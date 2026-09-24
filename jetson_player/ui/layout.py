@@ -4,6 +4,7 @@ import os
 from gi.repository import Gdk, Gtk, Pango
 
 from ..storage import resume_cache
+from .subtitle_overlay import SubtitleOverlay
 
 
 STYLE_CSS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style.css")
@@ -105,6 +106,11 @@ class LayoutMixin:
         self.video_event_box.connect("button-press-event", self.on_video_button_press)
         self.video_event_box.add(self.video_widget)
         self.video_container.add(self.video_event_box)
+
+        # 외부/AI 자막 오버레이 (클릭은 아래 영상 영역으로 통과)
+        self.subtitle_overlay = SubtitleOverlay(self._subtitle_position_ms)
+        self.video_container.add_overlay(self.subtitle_overlay)
+        self.video_container.set_overlay_pass_through(self.subtitle_overlay, True)
 
         # 0) 플레이스홀더 (빈 화면 안내)
         self.placeholder_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)

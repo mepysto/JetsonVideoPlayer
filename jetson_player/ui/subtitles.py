@@ -1,10 +1,7 @@
 """외부/내장 자막 선택, 크기·싱크 조절"""
-import os
-from urllib.request import pathname2url
+from gi.repository import Gst, Gtk
 
-from gi.repository import GLib, Gst, Gtk
-
-from ..subtitles.merge import generate_merged_subtitle_file
+from ..subtitles.timeline import SubtitleTrack
 
 
 class SubtitlesMixin:
@@ -173,12 +170,7 @@ class SubtitlesMixin:
             self.show_osd(f"🗚 자막 크기: {pct}%")
             if getattr(self, "scale_label", None):
                 self.scale_label.set_text(f"{pct}%")
-            if getattr(self, "subtitle_overlay_element", None):
-                try:
-                    self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
-                except Exception:
-                    pass
-            self.schedule_subtitles_reload()
+            self._apply_subtitle_font_scale()
 
     def reset_subtitle_scale(self, _btn=None):
         """자막 크기를 기본값(100%)으로 복원합니다."""
@@ -188,12 +180,7 @@ class SubtitlesMixin:
             self.show_osd("🗚 자막 크기: 100%")
             if getattr(self, "scale_label", None):
                 self.scale_label.set_text("100%")
-            if getattr(self, "subtitle_overlay_element", None):
-                try:
-                    self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
-                except Exception:
-                    pass
-            self.schedule_subtitles_reload()
+            self._apply_subtitle_font_scale()
 
     def adjust_subtitle_sync(self, delta_ms):
         """자막 싱크를 delta_ms만큼 앞당기거나 늦추고 실시간 OSD 반영 후 디바운스로 적용합니다."""
@@ -203,7 +190,7 @@ class SubtitlesMixin:
         self.show_osd(f"⏱️ 자막 싱크: {sec_str}")
         if getattr(self, "sync_label", None):
             self.sync_label.set_text(sec_str)
-        self.schedule_subtitles_reload()
+        self.subtitle_overlay.set_offset(self.subtitle_offset_ms)
 
     def reset_subtitle_sync(self, _btn=None):
         """자막 싱크를 기본값(0.0초)으로 복원합니다."""
@@ -213,7 +200,7 @@ class SubtitlesMixin:
             self.show_osd("⏱️ 자막 싱크: 0.0s")
             if getattr(self, "sync_label", None):
                 self.sync_label.set_text("0.0s")
-            self.schedule_subtitles_reload()
+            self.subtitle_overlay.set_offset(0)
 
     def show_subtitle_popover(self, parent_btn=None):
         """자막 선택 팝오버를 열거나 닫습니다."""
@@ -230,7 +217,11 @@ class SubtitlesMixin:
 
     def _detect_embedded_subtitles(self):
         """외부 자막이 없을 때 컨테이너 내장 자막 트랙 수를 감지하고 표시 여부를 적용합니다."""
-        if not self.pipeline or self.available_subtitles:
+        if not self.pipeline:
+            return
+        if self.available_subtitles:
+            # 외부/AI 자막을 쓰는 동안에는 내장 자막을 겹쳐 표시하지 않습니다.
+            self._apply_embedded_subs_visibility()
             return
         try:
             n_text = self.pipeline.get_property("n-text")
@@ -248,7 +239,7 @@ class SubtitlesMixin:
         for ov in self.subtitle_overlays:
             try:
                 if ov.find_property("silent"):
-                    ov.set_property("silent", not self.embedded_subs_enabled)
+                    ov.set_property("silent", bool(self.available_subtitles) or not self.embedded_subs_enabled)
             except Exception:
                 pass
 
@@ -347,65 +338,44 @@ class SubtitlesMixin:
         self.schedule_subtitles_reload()
 
     def schedule_subtitles_reload(self):
-        """빠른 조작이나 연타 시 파이프라인 중복 파괴를 막기 위해 150ms 디바운스로 안전하게 재로드합니다."""
-        if getattr(self, "sub_reload_timer_id", None):
+        """자막 선택 변경을 반영합니다 (오버레이 렌더링이라 즉시 적용되며 파이프라인을 다시 만들지 않습니다)."""
+        self.reload_and_apply_subtitles()
+
+    def make_subtitle_entry(self, path, label, color, events):
+        """available_subtitles 항목 생성 (오버레이용 SubtitleTrack 포함)"""
+        return {"path": path, "label": label, "color": color, "events": events,
+                "track": SubtitleTrack(label, color, events)}
+
+    def _subtitle_position_ms(self):
+        """오버레이가 사용할 현재 재생 위치(ms)"""
+        if not self.pipeline:
+            return None
+        ok, pos = self.pipeline.query_position(Gst.Format.TIME)
+        if not ok or pos < 0:
+            pos = self.last_known_pos_ns
+        return pos // Gst.MSECOND
+
+    def _apply_subtitle_font_scale(self):
+        self.subtitle_overlay.set_font_scale(self.subtitle_font_scale)
+        # 내장 자막(textoverlay) 글꼴 크기도 함께 조절
+        for ov in self.subtitle_overlays:
             try:
-                GLib.source_remove(self.sub_reload_timer_id)
+                if ov.find_property("font-desc"):
+                    ov.set_property("font-desc", self.get_current_subtitle_font_desc())
             except Exception:
                 pass
-            self.sub_reload_timer_id = None
-        self.sub_reload_timer_id = GLib.timeout_add(150, self._deferred_reload_subtitles)
-
-    def _deferred_reload_subtitles(self):
-        self.sub_reload_timer_id = None
-        self.reload_and_apply_subtitles()
-        return False
 
     def reload_and_apply_subtitles(self):
-        """선택된 다중 자막 트랙들을 실시간 병합하여 GStreamer 파이프라인에 즉시 반영합니다."""
-        if not self.pipeline:
-            return
-            
-        video_path = self.playlist[self.current_index]
-        active_tracks = []
-        for idx in sorted(list(self.active_subtitle_indices)):
-            if 0 <= idx < len(self.available_subtitles):
-                sub = self.available_subtitles[idx]
-                active_tracks.append((sub['label'], sub['color'], sub['events']))
-                
-        if active_tracks and self.subtitles_enabled:
-            merged_file = generate_merged_subtitle_file(
-                active_tracks, video_path,
-                font_scale=self.subtitle_font_scale,
-                offset_ms=self.subtitle_offset_ms
-            )
-            new_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}" if merged_file else None
-        else:
-            new_suburi = None
-            
-        # GStreamer playbin은 실행 중 suburi 변경 시 내부 파서를 다시 읽지 않으므로,
-        # 자막 스트림이 변경된 경우 현재 재생 위치(초 단위)를 100% 보존하여 즉시 매끄럽게 재로드합니다.
-        if new_suburi != getattr(self, "current_suburi", None):
-            pos_ns = 0
-            if self.pipeline:
-                success, q_pos = self.pipeline.query_position(Gst.Format.TIME)
-                if success and q_pos > 0:
-                    pos_ns = q_pos
-                elif getattr(self, "last_known_pos_ns", 0) > 0:
-                    pos_ns = self.last_known_pos_ns
-            self.play_current_video(start_position_ns=pos_ns)
-        else:
-            if not self.subtitles_enabled or not active_tracks:
-                self.pipeline.set_property("current-text", -1)
-            else:
-                self.pipeline.set_property("current-text", 0)
-                
-        if getattr(self, "subtitle_overlay_element", None):
-            try:
-                self.subtitle_overlay_element.set_property("font-desc", self.get_current_subtitle_font_desc())
-            except Exception:
-                pass
-
+        """선택된 외부/AI 자막 트랙을 오버레이에 반영합니다."""
+        tracks = []
+        if self.subtitles_enabled:
+            for idx in sorted(self.active_subtitle_indices):
+                if 0 <= idx < len(self.available_subtitles):
+                    tracks.append(self.available_subtitles[idx]["track"])
+        self.subtitle_overlay.set_tracks(tracks)
+        self.subtitle_overlay.set_offset(self.subtitle_offset_ms)
+        self.subtitle_overlay.set_font_scale(self.subtitle_font_scale)
+        self._apply_embedded_subs_visibility()
         self.update_subtitle_button_ui()
 
     def update_subtitle_button_ui(self):

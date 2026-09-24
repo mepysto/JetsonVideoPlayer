@@ -6,7 +6,6 @@ from urllib.request import pathname2url
 from gi.repository import GLib, GdkX11, Gst, GstVideo
 
 from ..storage import history_cache, resume_cache
-from ..subtitles.merge import generate_merged_subtitle_file
 from ..subtitles.parse import find_all_matching_subtitles, get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
 
 
@@ -72,6 +71,26 @@ class PlaybackMixin:
 
         self.update_speed_button_ui()
         self.show_osd(f"⚡ 속도: {self.playback_rate:.2f}x")
+
+    def _update_overlay_video_size(self):
+        """영상 해상도와 픽셀 종횡비를 읽어 자막 오버레이의 레터박스 계산에 사용합니다."""
+        try:
+            pad = self.pipeline.emit("get-video-pad", 0)
+            caps = pad.get_current_caps() if pad else None
+            if not caps:
+                return
+            st = caps.get_structure(0)
+            ok_w, w = st.get_int("width")
+            ok_h, h = st.get_int("height")
+            if not (ok_w and ok_h):
+                return
+            ok_par, par_n, par_d = st.get_fraction("pixel-aspect-ratio")
+            if ok_par and par_d:
+                w = w * par_n / par_d
+            self.subtitle_overlay.set_video_size(w, h)
+            self.video_resolution = (st.get_int("width")[1], h)
+        except Exception as e:
+            print(f"⚠️ 영상 크기 확인 실패: {e}")
 
     def step_volume(self, delta):
         """볼륨을 delta(%)만큼 조절합니다 (0~200%)."""
@@ -354,12 +373,7 @@ class PlaybackMixin:
                 if evs:
                     color = get_subtitle_color(s_path, idx)
                     lbl = get_subtitle_label(s_path)
-                    self.available_subtitles.append({
-                        'path': s_path,
-                        'label': lbl,
-                        'color': color,
-                        'events': evs
-                    })
+                    self.available_subtitles.append(self.make_subtitle_entry(s_path, lbl, color, evs))
 
             self.active_subtitle_indices = set()
             if self.available_subtitles:
@@ -407,34 +421,6 @@ class PlaybackMixin:
 
         # 0x01 (video) + 0x02 (audio) + 0x04 (text/subtitles) + 0x10 (soft-volume) = 0x00000017
         self.pipeline.set_property("flags", 0x00000017)
-
-        # 활성화된 자막 병합 파일 준비 및 suburi 설정
-        active_tracks = []
-        for idx in sorted(list(self.active_subtitle_indices)):
-            if 0 <= idx < len(self.available_subtitles):
-                sub = self.available_subtitles[idx]
-                active_tracks.append((sub['label'], sub['color'], sub['events']))
-
-        if active_tracks and self.subtitles_enabled:
-            merged_file = generate_merged_subtitle_file(
-                active_tracks, video_path,
-                font_scale=self.subtitle_font_scale,
-                offset_ms=self.subtitle_offset_ms
-            )
-            if merged_file:
-                self.current_suburi = f"file://{pathname2url(os.path.abspath(merged_file))}"
-                self.pipeline.set_property("suburi", self.current_suburi)
-                if self.pipeline.find_property("subtitle-font-desc"):
-                    self.pipeline.set_property("subtitle-font-desc", self.get_current_subtitle_font_desc())
-                if self.pipeline.find_property("subtitle-encoding"):
-                    self.pipeline.set_property("subtitle-encoding", "UTF-8")
-                selected_labels = [t[0] for t in active_tracks]
-                sync_info = f" / 싱크 {self.subtitle_offset_ms/1000:+.1f}s" if self.subtitle_offset_ms != 0 else ""
-                print(f"💬 [다중 자막 로드 완료 ({len(active_tracks)}개 / 크기 {int(self.subtitle_font_scale*100)}%{sync_info})] " + ", ".join(selected_labels))
-            else:
-                self.current_suburi = None
-        else:
-            self.current_suburi = None
 
         # Totem 공식 네이티브 GTK OpenGL 비디오 싱크 할당 (60Hz V-Sync 완벽 일치 & 4K 1:1 선명도 보장)
         # 배속 재생 시 지연 프레임으로 인한 파이프라인 정체를 방지하기 위해 qos=True 및 max-lateness=50ms 설정
@@ -489,10 +475,9 @@ class PlaybackMixin:
         self.pipeline.set_property("uri", video_uri)
         self.pipeline.set_property("volume", self.volume_scale.get_value() / 100.0)
 
-        if not self.subtitles_enabled or not active_tracks:
-            self.pipeline.set_property("current-text", -1)
-
-        self.update_subtitle_button_ui()
+        # 외부/AI 자막은 영상 위 오버레이가 그립니다 (내장 자막만 playbin이 렌더링).
+        self.subtitle_overlay.set_video_size(None, None)
+        self.reload_and_apply_subtitles()
         self.update_speed_button_ui()
 
         # 재생 중간 위치에서 자막을 재로드할 경우, 비디오/오디오/자막 스트림의 완벽한 Preroll을 위해
@@ -591,6 +576,7 @@ class PlaybackMixin:
 
         elif message.type == Gst.MessageType.ASYNC_DONE:
             self._detect_embedded_subtitles()
+            self._update_overlay_video_size()
             if getattr(self, "pending_seek_ns", 0) > 0 and self.pipeline:
                 seek_ns = self.pending_seek_ns
                 self.pending_seek_ns = 0

@@ -55,20 +55,6 @@ def test_subtitle_label_and_color(jp):
     assert jp.get_subtitle_color("/x/movie.srt", 1) == jp.FALLBACK_PALETTE[1]
 
 
-def test_merge_subtitle_tracks_multi(jp):
-    tracks = [
-        ("🇰🇷 한국어 (a.ko.srt)", "#FFFFFF", [(1000, 2000, "안녕")]),
-        ("🇺🇸 영어 (a.en.srt)", "#FFE066", [(1000, 2000, "Hi <there>")]),
-    ]
-    out = jp.merge_subtitle_tracks(tracks, offset_ms=500)
-    assert "<SYNC Start=1500>" in out
-    assert "[KR] 안녕" in out and "[EN] Hi &lt;there&gt;" in out
-    assert '<font color="#FFE066">' in out
-
-
-def test_merge_subtitle_tracks_empty(jp):
-    assert jp.merge_subtitle_tracks([]) == ""
-
 
 def test_find_all_matching_subtitles(jp, tmp_path):
     video = tmp_path / "Movie.mkv"
