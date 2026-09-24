@@ -15,17 +15,6 @@ class PlaybackMixin:
             self.current_index = idx
             self.play_current_video()
 
-    def set_volume(self, val):
-        val = max(0, min(200, val))
-        if getattr(self, "volume_scale", None):
-            self.volume_scale.set_value(val)
-        if getattr(self, "fs_volume_scale", None):
-            self.fs_volume_scale.set_value(val)
-        if self.pipeline:
-            self.pipeline.set_property("volume", val / 100.0)
-        boost_str = " (부스트)" if val > 100 else ""
-        self.show_osd(f"🔊 볼륨: {int(val)}%{boost_str}")
-
     def seek_direct(self, target_ns):
         """지정된 나노초 위치로 즉각 Seek합니다."""
         if self.pipeline and target_ns >= 0:
@@ -152,34 +141,6 @@ class PlaybackMixin:
     def reset_playback_rate(self):
         """재생 속도를 1.0x (기본값)으로 복원합니다."""
         self.set_playback_rate(1.0)
-
-    def toggle_mute(self):
-        """음소거 상태를 토글합니다."""
-        self.is_muted = not self.is_muted
-        if self.is_muted:
-            if hasattr(self, "volume_scale"):
-                self.pre_mute_volume = self.volume_scale.get_value()
-                self.volume_scale.set_value(0)
-            if getattr(self, "fs_volume_scale", None):
-                self.fs_volume_scale.set_value(0)
-            if self.pipeline:
-                self.pipeline.set_property("volume", 0.0)
-            self.show_osd("🔇 음소거")
-            lbl = "🔇"
-        else:
-            restore_val = self.pre_mute_volume if self.pre_mute_volume > 0 else 50
-            if hasattr(self, "volume_scale"):
-                self.volume_scale.set_value(restore_val)
-            if getattr(self, "fs_volume_scale", None):
-                self.fs_volume_scale.set_value(restore_val)
-            if self.pipeline:
-                self.pipeline.set_property("volume", restore_val / 100.0)
-            self.show_osd(f"🔊 볼륨: {int(restore_val)}%")
-            lbl = "◖)))"
-        if getattr(self, "mute_btn", None):
-            self.mute_btn.set_label(lbl)
-        if getattr(self, "fs_mute_btn", None):
-            self.fs_mute_btn.set_label(lbl)
 
     def cycle_repeat_mode(self):
         """재생 모드를 순환 전환합니다 (전체 반복 -> 1곡 반복 -> 순차 후 정지 -> 셔플)."""
@@ -544,9 +505,6 @@ class PlaybackMixin:
             self.pipeline.set_state(Gst.State.PLAYING)
             
         self.is_playing = True
-        self.play_button.set_label("Ⅱ")
-        if getattr(self, "fs_play_button", None):
-            self.fs_play_button.set_label("Ⅱ")
         
         return False
 
@@ -676,10 +634,6 @@ class PlaybackMixin:
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             _old_state, new_state, _pending = message.parse_state_changed()
             self.is_playing = new_state == Gst.State.PLAYING
-            lbl = "Ⅱ" if self.is_playing else "▶"
-            self.play_button.set_label(lbl)
-            if getattr(self, "fs_play_button", None):
-                self.fs_play_button.set_label(lbl)
 
     def seek_relative(self, offset_seconds):
         """현재 재생 위치를 기준으로 지정된 초만큼 앞/뒤로 이동합니다."""
@@ -727,17 +681,11 @@ class PlaybackMixin:
         if self.is_playing:
             self.pipeline.set_state(Gst.State.PAUSED)
             self.is_playing = False
-            self.play_button.set_label("▶")
-            if getattr(self, "fs_play_button", None):
-                self.fs_play_button.set_label("▶")
             self.show_osd("⏸ 일시 정지")
             print("⏸ 일시 정지")
         else:
             self.pipeline.set_state(Gst.State.PLAYING)
             self.is_playing = True
-            self.play_button.set_label("Ⅱ")
-            if getattr(self, "fs_play_button", None):
-                self.fs_play_button.set_label("Ⅱ")
             self.show_osd("▶ 재생")
             print("▶ 다시 재생")
 

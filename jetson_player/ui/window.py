@@ -23,9 +23,11 @@ from .menu import MenuMixin
 from .timeline import TimelineMixin
 from .ai import AiSubtitlesMixin
 from .viewing import ViewingMixin
+from .state import ControlStateMixin
 
 
 class JetsonSignageFlexiblePlayer(
+    ControlStateMixin,
     RemoteMixin,
     YouTubeMixin,
     FeaturesMixin,

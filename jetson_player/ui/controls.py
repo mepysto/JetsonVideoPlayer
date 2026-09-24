@@ -261,7 +261,7 @@ class ControlsMixin:
         self.fs_volume_scale.set_size_request(90, -1)
         self.fs_volume_scale.set_draw_value(False)
         self.fs_volume_scale.set_value(100)
-        self.fs_volume_scale.connect("value-changed", self.on_fs_volume_changed)
+        self.fs_volume_scale.connect("value-changed", self._on_volume_scale_changed)
         actions.pack_start(self.fs_volume_scale, False, False, 0)
 
         # 창 모드로 복귀
@@ -333,20 +333,6 @@ class ControlsMixin:
         self.is_seeking = False
         return False
 
-    def on_fs_volume_changed(self, scale):
-        val = scale.get_value()
-        if self.is_muted and val > 0:
-            self.is_muted = False
-            if getattr(self, "mute_btn", None):
-                self.mute_btn.set_label("◖)))")
-            if getattr(self, "fs_mute_btn", None):
-                self.fs_mute_btn.set_label("◖)))")
-        if hasattr(self, "volume_scale") and abs(self.volume_scale.get_value() - val) > 0.5:
-            self.volume_scale.set_value(val)
-        if self.pipeline:
-            self.pipeline.set_property("volume", val / 100.0)
-        boost_str = " (부스트)" if val > 100 else ""
-        self.show_osd(f"🔊 볼륨: {int(val)}%{boost_str}")
     @staticmethod
     def format_time(nanoseconds):
         total_seconds = max(0, int(nanoseconds / Gst.SECOND))
@@ -445,20 +431,6 @@ class ControlsMixin:
             self.show_osd(f"⏱️ {self.format_time(target)} / {self.format_time(self.duration_ns)}")
         self.is_seeking = False
         return False
-
-    def on_volume_changed(self, scale):
-        val = scale.get_value()
-        if self.is_muted and val > 0:
-            self.is_muted = False
-            if getattr(self, "mute_btn", None):
-                self.mute_btn.set_label("◖)))")
-            if getattr(self, "fs_mute_btn", None):
-                self.fs_mute_btn.set_label("◖)))")
-        if hasattr(self, "fs_volume_scale") and abs(self.fs_volume_scale.get_value() - val) > 0.5:
-            self.fs_volume_scale.set_value(val)
-        if self.pipeline:
-            self.pipeline.set_property("volume", val / 100.0)
-        self.show_osd(f"🔊 볼륨: {int(val)}%")
 
     def hide_cursor(self):
         """마우스 커서를 투명(숨김) 커서로 설정합니다."""

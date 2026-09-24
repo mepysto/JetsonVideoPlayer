@@ -315,7 +315,7 @@ class LayoutMixin:
         self.volume_scale.set_size_request(110, -1)
         self.volume_scale.set_draw_value(False)
         self.volume_scale.set_value(100)
-        self.volume_scale.connect("value-changed", self.on_volume_changed)
+        self.volume_scale.connect("value-changed", self._on_volume_scale_changed)
         actions.pack_start(self.volume_scale, False, False, 0)
 
         self.fullscreen_button = Gtk.Button(label="⛶")
