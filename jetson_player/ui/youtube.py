@@ -45,6 +45,7 @@ class YouTubeMixin:
 
     def _add_and_play_youtube_file(self, path, play_now=True):
         """다운로드된 파일을 재생목록에 넣고, play_now면 즉시 재생 / 아니면 "다음에 재생" 대기열에 넣습니다."""
+        self.mark_for_auto_ai_subtitles(path)
         if getattr(self, "placeholder_box", None):
             self.placeholder_box.hide()
         if path not in self.playlist:

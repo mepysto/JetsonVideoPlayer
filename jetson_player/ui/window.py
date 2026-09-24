@@ -225,6 +225,7 @@ class JetsonSignageFlexiblePlayer(
         self.autoplay_timer_id = None
         self.night_elements = (None, None)
         self.ai_status = None  # (상태 문구, 진행률)
+        self.auto_ai_paths = set()  # 재생되면 AI 자막을 자동 생성할 영상 (YouTube 다운로드)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
         self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")

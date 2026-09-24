@@ -369,6 +369,7 @@ class ControlsMixin:
                 if duration_ok and duration > 0:
                     self.duration_ns = duration
                     self.refresh_timeline_marks()
+                    self.maybe_start_auto_ai_subtitles()
             self.update_duration_labels(position)
 
             # 1) 일반 모드 컨트롤 UI 갱신

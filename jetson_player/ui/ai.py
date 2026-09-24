@@ -86,6 +86,29 @@ class AiSubtitlesMixin:
         if job and job.is_running():
             job.cancel()
 
+    # ---- YouTube 영상 자동 AI 자막 ------------------------------------------------
+    def mark_for_auto_ai_subtitles(self, path):
+        """설정이 켜져 있으면 이 영상이 재생될 때 AI 자막을 자동으로 만듭니다."""
+        if settings.get("youtube_auto_ai_subtitles"):
+            self.auto_ai_paths.add(path)
+
+    def maybe_start_auto_ai_subtitles(self):
+        """[영상 길이가 처음 확인될 때 호출] 자동 생성 대상이면 AI 자막을 시작합니다."""
+        if not self.playlist or not (0 <= self.current_index < len(self.playlist)):
+            return
+        path = self.playlist[self.current_index]
+        if path not in self.auto_ai_paths:
+            return
+        self.auto_ai_paths.discard(path)
+        if self.available_subtitles:
+            return  # 자막이 이미 있음 (이전에 만든 AI 자막 포함)
+        job = getattr(self, "ai_job", None)
+        if job and job.is_running():
+            return
+        if whisper_available(settings.get("whisper_model")):
+            print(f"🤖 [자동 AI 자막] {os.path.basename(path)}")
+            self.start_ai_subtitles()
+
     def ai_menu_label(self):
         job = getattr(self, "ai_job", None)
         if job and job.is_running():
@@ -103,4 +126,6 @@ class AiSubtitlesMixin:
             ("submenu", "🤖 AI 자막 언어", languages),
             ("check", "🤖 AI 자막을 영어로 번역", settings.get("whisper_translate"),
              lambda: settings.set("whisper_translate", not settings.get("whisper_translate"))),
+            ("check", "🤖 YouTube 영상은 AI 자막 자동 생성", settings.get("youtube_auto_ai_subtitles"),
+             lambda: settings.set("youtube_auto_ai_subtitles", not settings.get("youtube_auto_ai_subtitles"))),
         ]

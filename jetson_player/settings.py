@@ -29,6 +29,7 @@ DEFAULTS = {
     "whisper_model": "small-q5_1",
     "whisper_language": "auto",
     "whisper_translate": False,
+    "youtube_auto_ai_subtitles": False,
 }
 
 REPEAT_MODES = ("all", "one", "none", "shuffle")
