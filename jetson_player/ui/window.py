@@ -238,6 +238,7 @@ class JetsonSignageFlexiblePlayer(
         # playbin에 연결할 최종 영상 출력 (NVDEC 하드웨어 디코딩 유지를 위한 nvvidconv 포함)
         self.video_output = build_hw_video_output(self.video_sink)
         self.using_hw_video_output = False
+        self.hw_decode_expected = None  # 현재 영상의 NVDEC 지원 여부 (None: 판별 불가)
         self.hw_output_disabled = set()  # HW 출력 경로가 실패한 파일 (호환 경로로 재생)
 
         self.video_widget.set_hexpand(True)

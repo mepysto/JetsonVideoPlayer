@@ -9,6 +9,7 @@ from urllib.parse import unquote
 
 from gi.repository import GLib, Gst, GstPbutils, Gtk
 
+from ..media.codecs import nvdec_supports
 from ..library import VIDEO_EXTS, scan_video_files, sort_video_paths
 from ..settings import settings
 from ..storage import history_cache, hw_cache
@@ -222,81 +223,45 @@ class LibraryMixin:
         context.finish(False, False, time)
 
     def check_video_hw_support(self, file_path):
-        """
-        ffprobe JSON 정보를 분석하여 Jetson NVDEC 하드웨어 디코더가
-        100% 안정적으로 가속 지원하는 포맷(H.265/HEVC 및 H.264 8-bit)인지 판정합니다.
-        JetPack 드라이버 상 DPB/버퍼 결함이 발생하는 AV1, VP9 등의 코덱이나
-        H.264 10-bit 영상은 미지원으로 분류하여 H.265로 자동 변환하도록 유도합니다.
-        영구 캐시(hw_cache)를 우선 조회하여 불필요한 ffprobe 중복 실행을 차단합니다.
+        """NVDEC 하드웨어 디코딩 가능 여부를 (지원 여부, 사유)로 반환합니다.
+
+        지원 여부가 None이면 판별할 수 없다는 뜻입니다 (ffprobe/Discoverer 실패) — 이 경우 호출하는 쪽은
+        하드웨어 경로를 먼저 시도합니다. 결과는 파일 크기/수정 시각 기준으로 캐시합니다.
         """
         cached = hw_cache.get(file_path)
         if cached is not None:
             return cached
 
+        codec, pix_fmt, profile = None, "", ""
         try:
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries",
-                "stream=codec_name,pix_fmt,profile,width,height,color_space,color_transfer,color_primaries",
-                "-of", "json",
-                file_path
-            ]
-            data = json.loads(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True))
+            cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                   "-show_entries", "stream=codec_name,pix_fmt,profile", "-of", "json", file_path]
+            data = json.loads(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=15))
             if not data.get("streams"):
                 res = (False, "비디오 스트림 없음")
                 hw_cache.set(file_path, res[0], res[1])
                 return res
             stream = data["streams"][0]
-            codec = stream.get("codec_name", "").lower()
-            pix_fmt = stream.get("pix_fmt", "").lower()
-            profile = stream.get("profile", "").lower()
-
-            # 1. H.265 / HEVC -> 8-bit 및 10-bit 모두 Jetson NVDEC 하드웨어 가속 100% 완벽 지원
-            if codec in ["hevc", "h265"]:
-                bit_depth = "10-bit" if "10" in pix_fmt or "p10" in pix_fmt else "8-bit"
-                res = (True, f"HEVC ({codec.upper()}) {bit_depth} NVDEC 지원")
-                hw_cache.set(file_path, res[0], res[1])
-                return res
-
-            # 2. H.264 / AVC -> 8-bit만 지원 (High 10 / yuv420p10le 등 10-bit는 NVDEC 미지원)
-            if codec in ["h264", "avc"]:
-                if "10" in pix_fmt or "10" in profile or "p10" in pix_fmt:
-                    res = (False, f"H.264 10-bit NVDEC 미지원 ({pix_fmt}/{profile})")
-                else:
-                    res = (True, "H.264 8-bit NVDEC 지원")
-                hw_cache.set(file_path, res[0], res[1])
-                return res
-
-            # 3. 그 외 (AV1, VP9, VP8 등) -> JetPack nvv4l2decoder DPB 결함 및 SW 디코딩 병목 방지를 위해 H.265 변환 대상
-            res = (False, f"NVDEC 미지원/불안정 코덱 ({codec.upper()})")
-            hw_cache.set(file_path, res[0], res[1])
-            return res
-        except Exception as e:
-            # ffprobe 실패 시 GStreamer Discoverer로 안전하게 2차 분석 (cuvid 드라이버 누락 등 방지)
+            codec, pix_fmt, profile = stream.get("codec_name", ""), stream.get("pix_fmt", ""), stream.get("profile", "")
+        except Exception:
+            # ffprobe가 없거나 실패하면 GStreamer Discoverer로 코덱만 확인
             try:
                 uri = f"file://{pathname2url(os.path.abspath(file_path))}"
-                disc = GstPbutils.Discoverer.new(3 * Gst.SECOND)
-                info = disc.discover_uri(uri)
-                v_streams = info.get_video_streams()
-                if v_streams:
-                    caps_str = v_streams[0].get_caps().to_string().lower()
-                    if "video/x-h265" in caps_str or "video/x-hevc" in caps_str:
-                        res = (True, "HEVC (H.265) NVDEC 지원")
-                    elif "video/x-h264" in caps_str:
-                        if "10-bit" in caps_str or "bit-depth-luma=(uint)10" in caps_str:
-                            res = (False, "H.264 10-bit NVDEC 미지원")
-                        else:
-                            res = (True, "H.264 8-bit NVDEC 지원")
-                    else:
-                        cname = caps_str.split(',')[0].replace('video/x-', '')
-                        res = (False, f"NVDEC 미지원 코덱 ({cname.upper()})")
-                    hw_cache.set(file_path, res[0], res[1])
-                    return res
+                info = GstPbutils.Discoverer.new(3 * Gst.SECOND).discover_uri(uri)
+                streams = info.get_video_streams()
+                if streams:
+                    caps = streams[0].get_caps().to_string().lower()
+                    codec = caps.split(",")[0].replace("video/x-", "")
+                    depth = "10" if "bit-depth-luma=(uint)10" in caps else ""
+                    chroma = "444" if "4:4:4" in caps else ("422" if "4:2:2" in caps else "420")
+                    pix_fmt = f"yuv{chroma}p{depth}le" if depth else f"yuv{chroma}p"
             except Exception:
                 pass
-            res = (False, f"코덱 분석 실패 ({e})")
-            return res
+        if not codec:
+            return None, "코덱 분석 실패"
+        res = nvdec_supports(codec, pix_fmt, profile)
+        hw_cache.set(file_path, res[0], res[1])
+        return res
 
     def build_playlist(self):
         """입력값을 분석하여 재생 목록을 구성합니다 (같은 폴더의 _h265.mp4 변환본이 있으면 우선 사용).

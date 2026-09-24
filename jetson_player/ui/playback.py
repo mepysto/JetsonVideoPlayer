@@ -83,7 +83,7 @@ class PlaybackMixin:
     def _prepare_video_output(self, video_path):
         """(출력 요소, 하드웨어 경로 여부)를 반환합니다. GL 싱크를 HW 출력 bin에 넣거나 빼서 재사용합니다."""
         has_hw_bin = self.video_output is not self.video_sink
-        use_hw = has_hw_bin and video_path not in self.hw_output_disabled
+        use_hw = has_hw_bin and video_path not in self.hw_output_disabled and self.hw_decode_expected is not False
         if not has_hw_bin:
             return self.video_sink, False
         parent = self.video_sink.get_parent()
@@ -349,13 +349,14 @@ class PlaybackMixin:
             if getattr(self, "ab_badge", None):
                 self.ab_badge.hide()
 
-        # [하드웨어 적합성 검사 (SW Fallback 우선)]
+        # [하드웨어 디코딩 가능 여부 사전 판별] — 불가능한 형식은 처음부터 소프트웨어 경로로 재생해
+        # NVDEC가 첫 프레임에서 실패한 뒤 다시 시작하는 끊김을 없앱니다. 판별 불가(None)면 하드웨어부터 시도.
+        self.hw_decode_expected = None
         if os.path.exists(video_path):
             is_supported, reason = self.check_video_hw_support(video_path)
-            if not is_supported:
-                print(f"ℹ️ [코덱 상태] {os.path.basename(video_path)}: {reason} (소프트웨어 디코딩으로 즉시 재생합니다)")
-                if "AV1" in reason.upper():
-                    self.show_osd("⚠️ AV1 코덱: Jetson NVDEC 미지원 (H.264/H.265 포맷 권장)", duration_sec=4.0)
+            self.hw_decode_expected = is_supported
+            if is_supported is False:
+                print(f"ℹ️ [코덱 상태] {os.path.basename(video_path)}: {reason} → 소프트웨어 디코딩으로 재생합니다")
         
         if getattr(self, "yt_loading_box", None):
             self.hide_yt_loading()

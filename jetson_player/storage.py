@@ -58,7 +58,8 @@ class HWSupportCache:
 
         with self.lock:
             entry = self.cache.get(file_path)
-            if entry and entry.get("mtime") == mtime and entry.get("size") == size:
+            # v2: 실제 NVDEC 능력 기준 판정 (이전 버전의 AV1/VP9 '미지원' 판정은 무시하고 다시 검사)
+            if entry and entry.get("v") == 2 and entry.get("mtime") == mtime and entry.get("size") == size:
                 return entry.get("supported", False), entry.get("reason", "")
         return None
 
@@ -76,7 +77,8 @@ class HWSupportCache:
                 "mtime": mtime,
                 "size": size,
                 "supported": supported,
-                "reason": reason
+                "reason": reason,
+                "v": 2,
             }
             self.is_dirty = True
 
