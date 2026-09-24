@@ -60,7 +60,6 @@ def _window_methods():
     return names
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 4 기능(AI 자막, 회전, 야간 모드, 수면 타이머, 챕터) 구현 중")
 def test_all_actions_implemented():
     missing = sorted({sc.action for sc in SHORTCUTS} - _window_methods())
     assert not missing, f"단축키 동작 미구현: {missing}"

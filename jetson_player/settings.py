@@ -25,7 +25,6 @@ DEFAULTS = {
     "playlist_sort": "name",
     "autoplay_countdown": True,
     "night_mode": False,
-    "video_rotation": "none",
     "remote_pin": "",
     "whisper_model": "small-q5_1",
     "whisper_language": "auto",
@@ -34,7 +33,6 @@ DEFAULTS = {
 
 REPEAT_MODES = ("all", "one", "none", "shuffle")
 PLAYLIST_SORTS = ("name", "mtime", "size")
-ROTATIONS = ("none", "clockwise", "rotate-180", "counterclockwise", "horizontal-flip", "vertical-flip")
 
 
 def _validate(key, value):
@@ -58,7 +56,7 @@ def _validate(key, value):
     if isinstance(default, str):
         if not isinstance(value, str):
             return default
-        choices = {"repeat_mode": REPEAT_MODES, "playlist_sort": PLAYLIST_SORTS, "video_rotation": ROTATIONS}.get(key)
+        choices = {"repeat_mode": REPEAT_MODES, "playlist_sort": PLAYLIST_SORTS}.get(key)
         if choices and value not in choices:
             return default
         return value

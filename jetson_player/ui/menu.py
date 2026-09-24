@@ -75,4 +75,4 @@ class MenuMixin:
 
     def more_menu_setting_items(self):
         """재생/화면 설정 항목 [("item"|"check"|"submenu", ...)]"""
-        return list(self.ai_setting_entries())
+        return list(self.viewing_setting_entries()) + list(self.ai_setting_entries())

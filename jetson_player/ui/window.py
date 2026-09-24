@@ -21,6 +21,7 @@ from .subtitles import SubtitlesMixin
 from .menu import MenuMixin
 from .timeline import TimelineMixin
 from .ai import AiSubtitlesMixin
+from .viewing import ViewingMixin
 
 
 class JetsonSignageFlexiblePlayer(
@@ -36,6 +37,7 @@ class JetsonSignageFlexiblePlayer(
     MenuMixin,
     TimelineMixin,
     AiSubtitlesMixin,
+    ViewingMixin,
     Gtk.Window,
 ):
     """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""
@@ -205,6 +207,15 @@ class JetsonSignageFlexiblePlayer(
         self.subtitle_overlays = []  # 현재 파이프라인의 textoverlay/subtitleoverlay (silent 토글용)
         self.embedded_track = None  # 내장 자막 텍스트 (appsink로 수신, 오버레이로 표시)
         self.ai_job = None     # AI 자막 생성 작업 (whisper.cpp)
+        # 시청 경험: 화면 회전 / 수면 타이머 / 자동 재생 카운트다운 / 야간 모드 요소
+        self.video_rotation = "identity"
+        self.sleep_minutes = 0
+        self.sleep_deadline = None
+        self.sleep_timer_id = None
+        self.sleep_fading = False
+        self.autoplay_action = None
+        self.autoplay_timer_id = None
+        self.night_elements = (None, None)
         self.ai_status = None  # (상태 문구, 진행률)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
@@ -371,6 +382,12 @@ class JetsonSignageFlexiblePlayer(
             settings.save()
         except Exception as e:
             print(f"⚠️ 종료 시 저장 실패: {e}")
+
+        for timer_name in ("sleep_timer_id", "autoplay_timer_id"):
+            timer_id = getattr(self, timer_name, None)
+            if timer_id:
+                GLib.source_remove(timer_id)
+                setattr(self, timer_name, None)
 
         if getattr(self, "cache_flush_timer_id", None):
             try:

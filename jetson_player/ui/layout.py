@@ -217,6 +217,9 @@ class LayoutMixin:
         self.hud_box.set_no_show_all(True)
         self.video_container.add_overlay(self.hud_box)
 
+        # 2-1) 다음 영상 자동 재생 카운트다운 카드 (우측 하단)
+        self.video_container.add_overlay(self.build_autoplay_overlay())
+
         # 3) 전체화면 플로팅 컨트롤 바 오버레이 (화면 하단)
         self.fs_controls_box = self.build_fs_controls()
         self.fs_controls_box.set_halign(Gtk.Align.FILL)

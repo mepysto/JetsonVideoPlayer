@@ -106,6 +106,11 @@ class PlaybackMixin:
         return self.video_sink, False
 
     def _update_overlay_video_size(self):
+        if self.pipeline is None:
+            return
+        self._update_overlay_video_size_impl()
+
+    def _update_overlay_video_size_impl(self):
         """영상 해상도와 픽셀 종횡비를 읽어 자막 오버레이의 레터박스 계산에 사용합니다."""
         try:
             pad = self.pipeline.emit("get-video-pad", 0)
@@ -120,8 +125,10 @@ class PlaybackMixin:
             ok_par, par_n, par_d = st.get_fraction("pixel-aspect-ratio")
             if ok_par and par_d:
                 w = w * par_n / par_d
-            self.subtitle_overlay.set_video_size(w, h)
             self.video_resolution = (st.get_int("width")[1], h)
+            if self.is_rotated_quarter():
+                w, h = h, w
+            self.subtitle_overlay.set_video_size(w, h)
         except Exception as e:
             print(f"⚠️ 영상 크기 확인 실패: {e}")
 
@@ -397,6 +404,10 @@ class PlaybackMixin:
             self.refresh_timeline_marks()
             self.start_thumbnails(video_path)
             self.cancel_ai_subtitles()
+            self.cancel_autoplay_countdown()
+            if self.video_rotation != "identity" and self.gtk_sink.find_property("rotate-method"):
+                self.gtk_sink.set_property("rotate-method", "identity")
+                self.video_rotation = "identity"
             self.decoder_names.clear()
             self.last_dropped_frames = 0
             self.last_ui_pos_sec = -1
@@ -497,7 +508,16 @@ class PlaybackMixin:
             audio_bin.add(aresample)
             audio_bin.add(asink)
             aconv.link(scaletempo)
-            scaletempo.link(aresample)
+            night_dyn, night_gain = self.build_night_mode_elements()
+            if night_dyn and night_gain:
+                # 야간 모드: 압축기 + 보정 볼륨 (꺼져 있을 때는 효과 없는 값으로 대기)
+                audio_bin.add(night_dyn)
+                audio_bin.add(night_gain)
+                scaletempo.link(night_dyn)
+                night_dyn.link(night_gain)
+                night_gain.link(aresample)
+            else:
+                scaletempo.link(aresample)
             aresample.link(asink)
 
             pad = aconv.get_static_pad("sink")
@@ -572,27 +592,32 @@ class PlaybackMixin:
                 resume_cache.mark_completed(self.playlist[self.current_index], self.duration_ns)
                 resume_cache.save()
 
+            if self.sleep_after_this_video():
+                return
             if self.play_queue:
                 # 사용자가 지정한 "다음에 재생" 대기열이 반복 모드보다 우선합니다.
-                self.play_next_video()
+                next_idx = self.pop_queued_index()
             elif self.repeat_mode == "one" or self.is_single_file_mode:
                 print("🔄 1곡 반복: 처음부터 다시 재생합니다.")
                 GLib.timeout_add(10, self.play_current_video, 0)
+                return
             elif self.repeat_mode == "shuffle" and len(self.playlist) > 1:
                 next_idx = self.current_index
                 while next_idx == self.current_index:
                     next_idx = random.randint(0, len(self.playlist) - 1)
-                self.current_index = next_idx
-                GLib.timeout_add(50, self.play_current_video, 0)
             elif self.repeat_mode == "none":
-                if self.current_index + 1 < len(self.playlist):
-                    self.current_index += 1
-                    GLib.timeout_add(50, self.play_current_video, 0)
-                else:
+                if self.current_index + 1 >= len(self.playlist):
                     print("⏹ 모든 영상 재생 완료 (순차 재생 정지).")
                     self.toggle_play_pause()
+                    return
+                next_idx = self.current_index + 1
             else:
-                self.play_next_video()
+                next_idx = (self.current_index + 1) % len(self.playlist)
+
+            if next_idx is None:
+                next_idx = (self.current_index + 1) % len(self.playlist)
+            # 다음 영상 안내 카드(5초 카운트다운) 후 재생
+            self.start_autoplay_countdown(self.playlist[next_idx], lambda i=next_idx: self.play_index_direct(i))
             
         elif message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()

@@ -397,6 +397,9 @@ class ControlsMixin:
             if getattr(self, "fs_progress_scale", None) and self.duration_ns > 0 and not self.is_seeking:
                 self.fs_progress_scale.set_value(min(100, position * 100 / self.duration_ns))
 
+        # 수면 타이머 페이드아웃
+        self.apply_sleep_fade()
+
         # 미디어 HUD 갱신
         if getattr(self, "is_hud_visible", False) and self.stats_ticks % 4 == 0:
             self.update_hud_info()

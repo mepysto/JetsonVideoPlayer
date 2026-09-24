@@ -117,3 +117,5 @@ paned > separator:hover {
 .timeline-preview { background: rgba(10, 13, 19, 0.95); border: 1px solid #3b4455; border-radius: 8px; padding: 4px; }
 .timeline-preview-time { font-family: monospace; font-size: 12px; font-weight: 700; color: #e9ff5b; }
 scale mark indicator { color: #e9ff5b; min-height: 5px; min-width: 2px; }
+.autoplay-card { background: rgba(14, 18, 26, 0.94); border: 1px solid #3b4455; border-radius: 12px; padding: 14px 16px; min-width: 300px; }
+.autoplay-title { color: #f0f4fc; font-size: 14px; font-weight: 700; }
