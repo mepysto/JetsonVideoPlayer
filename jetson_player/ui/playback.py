@@ -10,15 +10,6 @@ from ..subtitles.parse import find_all_matching_subtitles, get_subtitle_color, g
 
 
 class PlaybackMixin:
-    def seek_to_percent(self, pct):
-        if not self.pipeline:
-            return
-        success, duration = self.pipeline.query_duration(Gst.Format.TIME)
-        if success and duration > 0:
-            target = int(duration * (pct / 100.0))
-            self.last_known_pos_ns = target
-            self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target)
-
     def play_index_direct(self, idx):
         if self.playlist and 0 <= idx < len(self.playlist):
             self.current_index = idx

@@ -8,52 +8,72 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Jetson Player Remote</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
-  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 14px; }
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
+         display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+         padding: calc(12px + env(safe-area-inset-top, 0px)) 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
   .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 12px; }
   .header { display: flex; justify-content: space-between; align-items: center; padding: 4px 2px; }
   .title { font-size: 16px; font-weight: 800; color: #e9ff5b; letter-spacing: 1px; }
   .badge { background: #1f2937; color: #9ca3af; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
   .badge.online { background: #064e3b; color: #34d399; }
-  .card { background: #141a24; border: 1px solid #232c3d; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
-  .card-title-row { display: flex; justify-content: space-between; align-items: center; }
+  .card { background: #141a24; border: 1px solid #232c3d; border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .card-title-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .card-title { font-size: 14px; font-weight: 700; color: #cbd5e1; }
-  .now-playing-title { font-size: 15px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .muted { font-size: 12px; color: #94a3b8; }
+  .now { display: flex; gap: 12px; align-items: center; }
+  .thumb { width: 128px; aspect-ratio: 16 / 9; border-radius: 8px; background: #0f141d center/cover no-repeat; flex: none; border: 1px solid #232c3d; }
+  .now-playing-title { font-size: 15px; font-weight: 700; color: #fff; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .chapter { font-size: 12px; color: #e9ff5b; margin-top: 4px; }
   .time-row { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; font-family: monospace; }
-  input[type=range] { width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; background: #2a3447; outline: none; }
-  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #e9ff5b; cursor: pointer; }
+  .seek-wrap { position: relative; }
+  .seek-preview { position: absolute; bottom: 26px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 2px;
+                  background: #0c1017ee; border: 1px solid #3b4455; border-radius: 8px; padding: 4px; pointer-events: none; }
+  .seek-preview img { width: 144px; aspect-ratio: 16 / 9; border-radius: 4px; background: #0f141d; object-fit: cover; }
+  .seek-preview span { font: 700 12px monospace; color: #e9ff5b; }
+  input[type=range] { width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; appearance: none; background: #2a3447; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #e9ff5b; }
   .btn-row { display: flex; justify-content: space-around; align-items: center; gap: 8px; }
-  button { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; border-radius: 12px; padding: 10px 14px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.1s, transform 0.1s; display: flex; align-items: center; justify-content: center; }
-  button:active { background: #2d3748; transform: scale(0.96); }
-  button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 60px; height: 60px; border-radius: 30px; font-size: 24px; }
-  button.primary:active { background: #f2ff91; }
+  button { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; border-radius: 12px; padding: 10px 12px; font-size: 14px; font-weight: 700;
+           display: flex; align-items: center; justify-content: center; gap: 4px; }
+  button:active { background: #2d3748; transform: scale(0.97); }
+  button.on { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; }
+  button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 62px; height: 62px; border-radius: 31px; font-size: 24px; }
+  button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { padding: 8px 10px; font-size: 12px; border-radius: 10px; flex: 1 1 auto; }
   .vol-row { display: flex; align-items: center; gap: 12px; }
-  .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 60px; text-align: right; }
-  
-  /* 속도 조절 UI */
-  .speed-badge { background: #232d3f; color: #e9ff5b; padding: 3px 8px; border-radius: 6px; font-size: 13px; font-weight: 800; font-family: monospace; }
-  .speed-presets { display: flex; gap: 6px; justify-content: space-between; }
-  .speed-presets button { flex: 1; padding: 8px 2px; font-size: 12px; border-radius: 8px; }
-  .speed-presets button.active-speed { background: #e9ff5b; color: #0c1017; font-weight: bold; border-color: #e9ff5b; }
-  .speed-steps { display: flex; gap: 6px; }
-  .speed-steps button { flex: 1; padding: 8px 6px; font-size: 12px; border-radius: 8px; }
-
-  .grid-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .grid-actions button { font-size: 13px; padding: 10px; border-radius: 10px; }
-  
-  /* 폴더 아코디언 재생목록 */
-  .playlist-card { max-height: 380px; overflow-y: auto; padding: 14px; }
-  .search-input { width: 100%; background: #161c28; color: #f0f4fc; border: 1px solid #2a3447; border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none; margin-bottom: 10px; }
-  .search-input:focus { border-color: #e9ff5b; }
+  .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 64px; text-align: right; }
+  .speed-badge { background: #232d3f; color: #e9ff5b; padding: 3px 8px; border-radius: 6px; font: 800 13px monospace; }
+  .list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; border: 1px solid #232c3d; border-radius: 10px; }
+  .list .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; border-top: 1px solid #161c28; }
+  .list .row:first-child { border-top: 0; }
+  .list .row:active { background: #1c2432; }
+  .list .row.active { color: #e9ff5b; font-weight: 700; }
+  .list .row .t { font: 12px monospace; color: #94a3b8; flex: none; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .empty { font-size: 12px; color: #64748b; padding: 10px; text-align: center; }
+  .progress { width: 100%; height: 6px; background: #222c3d; border-radius: 3px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0%; background: #e9ff5b; transition: width 0.2s; }
+  .search-input, select, input[type=url] { width: 100%; background: #161c28; color: #f0f4fc; border: 1px solid #2a3447; border-radius: 8px; padding: 9px 12px; font-size: 14px; outline: none; }
+  .search-input:focus, input[type=url]:focus { border-color: #e9ff5b; }
   .folder-group { margin-bottom: 8px; border: 1px solid #232c3d; border-radius: 10px; overflow: hidden; background: #0f141d; }
-  .folder-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #19202c; cursor: pointer; font-size: 13px; font-weight: 700; color: #cbd5e1; }
-  .folder-header:active { background: #222c3e; }
+  .folder-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #19202c; font-size: 13px; font-weight: 700; color: #cbd5e1; }
   .folder-header.has-active { color: #e9ff5b; border-left: 3px solid #e9ff5b; }
   .folder-items { display: none; flex-direction: column; }
   .folder-items.open { display: flex; }
-  .playlist-item { padding: 9px 12px 9px 24px; font-size: 12px; color: #94a3b8; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid #161c28; }
-  .playlist-item:active { background: #1c2432; }
+  .playlist-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; font-size: 12px; color: #94a3b8; border-top: 1px solid #161c28; }
+  .playlist-item img { width: 64px; aspect-ratio: 16 / 9; border-radius: 4px; object-fit: cover; background: #161c28; flex: none; }
+  .playlist-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .playlist-item.active { background: #222b3a; color: #e9ff5b; font-weight: bold; border-left: 3px solid #e9ff5b; }
+  .playlist-item button { padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+  details summary { list-style: none; cursor: pointer; }
+  details summary::-webkit-details-marker { display: none; }
+  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: #1c2433; color: #e9ff5b;
+           border: 1px solid #3b4455; border-radius: 10px; padding: 8px 14px; font-size: 13px; font-weight: 700; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -63,375 +83,303 @@
     <div id="statusBadge" class="badge">연결 중...</div>
   </div>
 
-  <!-- 현재 재생 카드 -->
+  <!-- 현재 재생 -->
   <div class="card">
-    <div id="trackTitle" class="now-playing-title">재생 중인 영상 없음</div>
-    <div class="time-row">
-      <span id="curTime">00:00</span>
-      <span id="durTime">00:00</span>
+    <div class="now">
+      <div id="nowThumb" class="thumb"></div>
+      <div style="min-width:0">
+        <div id="trackTitle" class="now-playing-title">재생 중인 영상 없음</div>
+        <div id="chapterName" class="chapter"></div>
+      </div>
     </div>
-    <input type="range" id="progressBar" min="0" max="100" value="0" step="0.1">
-    
+    <div class="time-row"><span id="curTime">00:00</span><span id="durTime">00:00</span></div>
+    <div class="seek-wrap">
+      <div id="seekPreview" class="seek-preview"><img id="seekImg" alt=""><span id="seekTime">00:00</span></div>
+      <input type="range" id="progressBar" min="0" max="1000" value="0" step="1">
+    </div>
     <div class="btn-row">
       <button onclick="cmd('prev')">⏮</button>
-      <button onclick="cmd('seek', {delta: -10})">⏪ 10s</button>
+      <button onclick="cmd('seek', {delta: -10})">⏪ 10</button>
       <button id="playBtn" class="primary" onclick="cmd('play_pause')">▶</button>
-      <button onclick="cmd('seek', {delta: 10})">10s ⏩</button>
+      <button onclick="cmd('seek', {delta: 10})">10 ⏩</button>
       <button onclick="cmd('next')">⏭</button>
     </div>
   </div>
 
-  <!-- 재생 속도 조절 카드 -->
-  <div class="card">
-    <div class="card-title-row">
-      <span class="card-title">⚡ 재생 속도 조절</span>
-      <span id="speedVal" class="speed-badge">1.0x</span>
-    </div>
-    <div class="speed-presets">
-      <button onclick="cmd('speed', {val: 0.5})" id="sp_05">0.5x</button>
-      <button onclick="cmd('speed', {val: 0.75})" id="sp_075">0.75x</button>
-      <button onclick="cmd('speed', {val: 1.0})" id="sp_10">1.0x</button>
-      <button onclick="cmd('speed', {val: 1.25})" id="sp_125">1.25x</button>
-      <button onclick="cmd('speed', {val: 1.5})" id="sp_15">1.5x</button>
-      <button onclick="cmd('speed', {val: 2.0})" id="sp_20">2.0x</button>
-    </div>
-    <div class="speed-steps">
-      <button onclick="cmd('speed_step', {delta: -0.25})">˗ 느리게 (-0.25x)</button>
-      <button onclick="cmd('speed_reset')" style="flex: 0.8;">1.0x 기본</button>
-      <button onclick="cmd('speed_step', {delta: 0.25})">˖ 빠르게 (+0.25x)</button>
-    </div>
-  </div>
-
-  <!-- 볼륨 및 기본 액션 카드 -->
+  <!-- 볼륨 / 속도 -->
   <div class="card">
     <div class="vol-row">
-      <button onclick="cmd('mute')" id="muteBtn" style="padding: 8px 12px; font-size: 18px;">🔊</button>
+      <button id="muteBtn" onclick="cmd('mute')" style="font-size:18px">🔊</button>
       <input type="range" id="volBar" min="0" max="200" value="100" step="1">
       <span id="volVal" class="vol-label">100%</span>
     </div>
-    <div class="grid-actions">
-      <button onclick="cmd('fullscreen')">📺 전체화면 토글</button>
-      <button onclick="cmd('subtitles')">💬 자막 토글</button>
-      <button onclick="cmd('repeat')">🔁 <span id="repeatModeText">반복 모드</span></button>
-      <button onclick="cmd('screenshot')">📸 스크린샷 캡처</button>
+    <div class="card-title-row"><span class="card-title">⚡ 재생 속도</span><span id="speedVal" class="speed-badge">1.0x</span></div>
+    <div class="chips" id="speedChips"></div>
+  </div>
+
+  <!-- 자막 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">💬 자막</span><button id="subToggle" onclick="cmd('subtitles')" style="padding:6px 10px;font-size:12px">켜기/끄기</button></div>
+    <div id="subList" class="list"></div>
+    <div class="grid3">
+      <button onclick="cmd('sub_sync', {delta: -500})">-0.5초</button>
+      <button id="subSyncVal" onclick="cmd('sub_sync_reset')">0.0s</button>
+      <button onclick="cmd('sub_sync', {delta: 500})">+0.5초</button>
+    </div>
+    <button id="aiBtn" onclick="cmd('ai_subtitles')">🤖 AI 자막 생성</button>
+    <div id="aiProgress" class="progress" style="display:none"><div></div></div>
+  </div>
+
+  <!-- 챕터 / 북마크 / 구간 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">📑 챕터 · 🔖 북마크</span><button onclick="cmd('bookmark_add')" style="padding:6px 10px;font-size:12px">＋ 북마크</button></div>
+    <div id="markList" class="list"></div>
+    <div class="grid3">
+      <button id="abA" onclick="cmd('ab_a')">[A] 시작</button>
+      <button id="abB" onclick="cmd('ab_b')">[B] 끝</button>
+      <button onclick="cmd('ab_clear')">구간 해제</button>
     </div>
   </div>
 
-  <!-- 고급 조작 카드 (A-B 구간반복 / 북마크 / 오디오 트랙) -->
+  <!-- 화면 / 편의 -->
   <div class="card">
-    <div class="card-title-row">
-      <span class="card-title">🎛️ 구간반복 & 북마크 & 오디오</span>
+    <div class="card-title">🎛️ 화면 · 소리 · 편의</div>
+    <div class="grid">
+      <button onclick="cmd('fullscreen')">📺 전체화면</button>
+      <button id="repeatBtn" onclick="cmd('repeat')">🔁 반복</button>
+      <button id="nightBtn" onclick="cmd('night')">🌙 야간 모드</button>
+      <button onclick="cmd('rotate')">🔄 화면 회전</button>
+      <button id="audioBtn" onclick="cmd('audio_cycle')">🎵 음성 트랙</button>
+      <button onclick="cmd('screenshot')">📸 캡처</button>
     </div>
-    <div style="display: flex; gap: 6px;">
-      <button onclick="cmd('ab_a')" style="flex:1; font-size:12px; padding:9px 4px;">🔁 [A] 시작</button>
-      <button onclick="cmd('ab_b')" style="flex:1; font-size:12px; padding:9px 4px;">🔁 [B] 끝</button>
-      <button onclick="cmd('ab_clear')" style="flex:0.8; font-size:12px; padding:9px 4px;">반복 해제</button>
-    </div>
-    <div class="grid-actions">
-      <button onclick="cmd('bookmark_add')">🔖 북마크 추가</button>
-      <button onclick="cmd('audio_cycle')">🎵 오디오 트랙 전환</button>
-      <button onclick="cmd('open_location')" style="grid-column: span 2;">📂 파일 위치 열기 (파일 브라우저)</button>
-    </div>
+    <div class="card-title-row"><span class="muted">⏾ 수면 타이머</span><span id="sleepVal" class="muted"></span></div>
+    <div class="chips" id="sleepChips"></div>
   </div>
 
-  <!-- 유튜브 영상 재생 및 다운로드 카드 -->
+  <!-- 유튜브 -->
   <div class="card">
-    <div class="card-title-row">
-      <span class="card-title">📺 유튜브 (YouTube) 무선 전송</span>
-    </div>
-    <div style="display: flex; gap: 6px; margin-bottom: 8px;">
-      <input type="url" id="ytUrlInput" class="search-input" style="margin-bottom:0; flex:1;" placeholder="유튜브 링크 붙여넣기 (Ctrl+V)...">
-    </div>
-    <div style="display: flex; gap: 6px; margin-bottom: 8px; align-items: center;">
-      <span style="font-size: 12px; color: #94a3b8; min-width: 36px;">화질:</span>
-      <select id="ytQualitySelect" style="flex: 1; background: #161c28; color: #f0f4fc; border: 1px solid #2a3447; border-radius: 8px; padding: 7px 10px; font-size: 12px; outline: none;">
-        <option value="best" selected>최고 화질 (1080p Full HD / HW 가속)</option>
-        <option value="1080p">1080p Full HD (H.264)</option>
-        <option value="720p">720p HD (초고속)</option>
-        <option value="audio">오디오만 (M4A)</option>
+    <div class="card-title">📺 유튜브 받아서 재생</div>
+    <input type="url" id="ytUrlInput" placeholder="유튜브 링크 붙여넣기">
+    <div style="display:flex; gap:8px">
+      <select id="ytQuality" style="flex:1">
+        <option value="best" selected>최고 화질 (H.264)</option>
+        <option value="1080p">1080p</option>
+        <option value="720p">720p (빠름)</option>
+        <option value="audio">오디오만</option>
       </select>
+      <button onclick="submitYt()" class="on" style="flex:none">⬇️ 받아서 재생</button>
     </div>
-    <div style="display: flex; gap: 6px;">
-      <button onclick="submitYt('download')" class="primary" style="flex:1.2; font-size:12px; padding:10px 6px; font-weight:bold; border-radius:8px; width:auto; height:auto;">⬇️ 다운로드 & 재생</button>
-      <button onclick="submitYt('stream')" style="flex:1; font-size:12px; padding:10px 6px; border-radius:8px;">🎬 바로 보기</button>
-    </div>
-    <div id="ytProgressBox" style="display:none; margin-top:10px; background:#141a24; padding:8px 10px; border-radius:8px; border:1px solid #293548;">
-      <div style="display:flex; justify-content:space-between; font-size:11px; color:#e9ff5b; font-weight:700; margin-bottom:4px;">
-        <span id="ytProgTitle" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px;">다운로드 중...</span>
-        <span id="ytProgPct">0%</span>
-      </div>
-      <div style="width:100%; height:6px; background:#222c3d; border-radius:3px; overflow:hidden;">
-        <div id="ytProgBar" style="width:0%; height:100%; background:#e9ff5b; transition:width 0.2s;"></div>
-      </div>
-      <div style="display:flex; justify-content:space-between; font-size:10px; color:#94a3b8; margin-top:4px;">
-        <span id="ytProgSpeed">-- MB/s</span>
-        <span id="ytProgEta">남은 시간 --</span>
-      </div>
+    <div id="ytBox" style="display:none; flex-direction:column; gap:6px">
+      <div class="card-title-row"><span id="ytTitle" class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><span id="ytPct" class="muted"></span></div>
+      <div class="progress"><div id="ytBar"></div></div>
+      <div class="card-title-row"><span id="ytSpeed" class="muted"></span><button class="danger" onclick="cmd('yt_cancel')" style="padding:4px 10px;font-size:12px">취소</button></div>
+      <div id="ytQueue" class="list"></div>
     </div>
   </div>
 
-  <!-- 폴더별 정리된 재생목록 카드 (검색창 포함) -->
-  <div class="card playlist-card">
-    <div class="card-title-row" style="margin-bottom: 6px;">
-      <span class="card-title">📂 폴더별 재생목록</span>
-      <span id="playlistTotalCount" style="font-size: 12px; color: #94a3b8;"></span>
-    </div>
+  <!-- 재생목록 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">📂 재생목록</span><span id="playlistTotalCount" class="muted"></span></div>
     <input type="search" id="playlistSearch" class="search-input" placeholder="🔍 영상 제목 검색..." oninput="onSearch(this.value)">
     <div id="playlistContainer"></div>
   </div>
 </div>
+<div id="toast" class="toast"></div>
 
 <script>
-let isSeeking = false;
-let isVolDragging = false;
-const progress = document.getElementById('progressBar');
-const volBar = document.getElementById('volBar');
-let openFolders = new Set();
-let autoOpenedActiveFolder = false;
-let currentPlaylistGroups = [];
-let lastPlaylistDataHash = "";
-let searchQuery = "";
+const $ = (id) => document.getElementById(id);
+const progress = $('progressBar'), volBar = $('volBar');
+let S = {};                       // 최신 상태
+let thumbs = { positions: [], video: -1 };
+let isSeeking = false, isVolDragging = false;
+let playlistGroups = [], openFolders = new Set(), searchQuery = '';
 
-progress.addEventListener('input', () => { isSeeking = true; });
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmt(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(s).padStart(2, '0');
+}
+let toastTimer;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1500); }
+
+async function cmd(action, params = {}) {
+  if (navigator.vibrate) navigator.vibrate(12);
+  try {
+    const r = await fetch('/api/cmd', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...params }) });
+    if (r.status === 401) location.reload();
+  } catch (e) { toast('연결이 끊어졌습니다'); }
+}
+
+// ---- 썸네일 --------------------------------------------------------------
+function thumbIndexAt(sec) {
+  const p = thumbs.positions;
+  if (!p.length) return -1;
+  let best = 0;
+  for (let i = 1; i < p.length; i++) if (Math.abs(p[i] - sec) < Math.abs(p[best] - sec)) best = i;
+  return best;
+}
+function thumbUrl(i) { return `/api/thumb?i=${i}&v=${thumbs.video}`; }
+let lastThumb = '';
+function updateNowThumb(sec) {
+  const i = thumbIndexAt(sec);
+  const url = i >= 0 ? thumbUrl(i) : '';
+  if (url !== lastThumb) { lastThumb = url; $('nowThumb').style.backgroundImage = url ? `url("${url}")` : 'none'; }
+}
+
+// ---- 진행바 (드래그 중 썸네일 미리보기) ------------------------------------
+function showSeekPreview() {
+  const sec = (progress.value / 1000) * (S.duration_sec || 0);
+  const box = $('seekPreview');
+  box.style.display = 'flex';
+  box.style.left = Math.min(92, Math.max(8, progress.value / 10)) + '%';
+  $('seekTime').textContent = fmt(sec);
+  const i = thumbIndexAt(sec);
+  $('seekImg').style.display = i >= 0 ? 'block' : 'none';
+  if (i >= 0) $('seekImg').src = thumbUrl(i);
+}
+progress.addEventListener('input', () => { isSeeking = true; showSeekPreview(); });
 progress.addEventListener('change', () => {
-  cmd('seek_to', { percent: progress.value });
-  isSeeking = false;
+  cmd('seek_to', { percent: progress.value / 10 });
+  $('seekPreview').style.display = 'none';
+  setTimeout(() => { isSeeking = false; }, 400);
+});
+volBar.addEventListener('input', () => { isVolDragging = true; volLabel(volBar.value); });
+volBar.addEventListener('change', () => { cmd('volume', { val: Number(volBar.value) }); setTimeout(() => { isVolDragging = false; }, 400); });
+function volLabel(v) { const l = $('volVal'); l.textContent = v + '%' + (v > 100 ? ' 부스트' : ''); l.style.color = v > 100 ? '#ff9800' : '#e9ff5b'; }
+
+// ---- 고정 버튼 ------------------------------------------------------------
+[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].forEach(s => {
+  const b = document.createElement('button'); b.textContent = s + 'x'; b.dataset.speed = s;
+  b.onclick = () => cmd('speed', { val: s }); $('speedChips').appendChild(b);
+});
+[[0, '끄기'], [15, '15분'], [30, '30분'], [60, '60분'], [-1, '영상 끝']].forEach(([m, label]) => {
+  const b = document.createElement('button'); b.textContent = label; b.dataset.min = m;
+  b.onclick = () => cmd('sleep', { minutes: m }); $('sleepChips').appendChild(b);
 });
 
-volBar.addEventListener('input', () => {
-  isVolDragging = true;
-  updateVolLabel(volBar.value);
-});
-volBar.addEventListener('change', () => {
-  cmd('volume', { val: volBar.value });
-  isVolDragging = false;
-});
+function submitYt() {
+  const url = $('ytUrlInput').value.trim();
+  if (!url) { toast('유튜브 링크를 입력하세요'); return; }
+  cmd('yt', { url, quality: $('ytQuality').value });
+  $('ytUrlInput').value = '';
+  toast('⬇️ 요청을 보냈습니다');
+}
 
-function updateVolLabel(val) {
-  const lbl = document.getElementById('volVal');
-  if (!lbl) return;
-  if (val > 100) {
-    lbl.innerText = val + '% (부스트)';
-    lbl.style.color = '#ff9800';
-  } else {
-    lbl.innerText = val + '%';
-    lbl.style.color = '#e9ff5b';
+// ---- 상태 렌더링 -------------------------------------------------------
+function renderStatus(d) {
+  S = d;
+  $('trackTitle').textContent = d.title || '대기 화면';
+  $('chapterName').textContent = d.chapter ? '📑 ' + d.chapter : '';
+  $('curTime').textContent = fmt(d.position_sec);
+  $('durTime').textContent = fmt(d.duration_sec);
+  $('playBtn').textContent = d.is_playing ? 'Ⅱ' : '▶';
+  $('muteBtn').textContent = d.is_muted ? '🔇' : '🔊';
+  if (!isSeeking && d.duration_sec > 0) progress.value = Math.round(d.position_sec / d.duration_sec * 1000);
+  if (!isVolDragging) { volBar.value = d.volume; volLabel(d.volume); }
+  updateNowThumb(d.position_sec);
+
+  const sp = d.speed || 1;
+  $('speedVal').textContent = sp.toFixed(2) + 'x';
+  document.querySelectorAll('#speedChips button').forEach(b => b.classList.toggle('on', Math.abs(b.dataset.speed - sp) < 0.02));
+
+  const repeatNames = { all: '전체 반복', one: '한 곡 반복', none: '순차 후 정지', shuffle: '셔플' };
+  $('repeatBtn').textContent = '🔁 ' + (repeatNames[d.repeat_mode] || '반복');
+  $('nightBtn').classList.toggle('on', !!d.night_mode);
+  $('audioBtn').textContent = d.audio && d.audio.total > 1 ? `🎵 음성 ${d.audio.current}/${d.audio.total}` : '🎵 음성 트랙';
+
+  // 수면 타이머
+  const sl = d.sleep || {};
+  document.querySelectorAll('#sleepChips button').forEach(b => b.classList.toggle('on', Number(b.dataset.min) === (sl.minutes || 0)));
+  $('sleepVal').textContent = sl.remaining ? `${fmt(sl.remaining)} 남음` : (sl.minutes === -1 ? '영상이 끝나면 정지' : '');
+
+  // 자막
+  $('subSyncVal').textContent = ((d.subtitle_offset_ms || 0) / 1000).toFixed(1) + 's';
+  const subs = d.subtitle_tracks || [];
+  $('subList').innerHTML = subs.length ? subs.map(t =>
+    `<div class="row ${t.active ? 'active' : ''}" onclick="cmd('sub_toggle_track', {index: ${t.index}})">
+       <span style="display:flex;gap:8px;align-items:center;min-width:0"><span class="dot" style="background:${esc(t.color)}"></span>
+       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.label)}</span></span><span>${t.active ? '✓' : ''}</span></div>`).join('')
+    : `<div class="empty">${d.embedded_subtitles ? `내장 자막 ${d.embedded_subtitles}개 (켜기/끄기 버튼)` : '자막 없음 — 🤖 AI 자막을 만들어 보세요'}</div>`;
+  const ai = d.ai || {};
+  $('aiBtn').textContent = ai.running ? `⏹ AI 자막 취소 (${Math.round((ai.fraction || 0) * 100)}%)` : (ai.available ? '🤖 AI 자막 생성' : '🤖 AI 자막 (엔진 미설치)');
+  $('aiBtn').classList.toggle('danger', !!ai.running);
+  $('aiProgress').style.display = ai.running ? 'block' : 'none';
+  $('aiProgress').firstElementChild.style.width = Math.round((ai.fraction || 0) * 100) + '%';
+
+  // 챕터 + 북마크
+  const marks = [...(d.chapters || []).map(c => ({ ...c, kind: '📑' })), ...(d.bookmarks || []).map(b => ({ sec: b.sec, title: b.label, kind: '🔖' }))]
+    .sort((a, b) => a.sec - b.sec);
+  $('markList').innerHTML = marks.length ? marks.map(m =>
+    `<div class="row ${m.kind === '📑' && m.title === d.chapter ? 'active' : ''}" onclick="cmd('seek_abs', {sec: ${m.sec}})">
+       <span>${m.kind} ${esc(m.title)}</span><span class="t">${fmt(m.sec)}</span></div>`).join('')
+    : '<div class="empty">챕터/북마크가 없습니다</div>';
+  const ab = d.ab || {};
+  $('abA').classList.toggle('on', ab.a != null);
+  $('abB').classList.toggle('on', !!ab.active);
+
+  // 유튜브
+  const yt = d.yt_download || {};
+  const busy = yt.active || (yt.queue && yt.queue.length);
+  $('ytBox').style.display = busy ? 'flex' : 'none';
+  if (busy) {
+    $('ytTitle').textContent = yt.active ? (yt.title || '준비 중...') : '대기 중';
+    $('ytPct').textContent = yt.active ? (yt.percent || 0).toFixed(0) + '%' : '';
+    $('ytBar').style.width = (yt.percent || 0) + '%';
+    $('ytSpeed').textContent = yt.active && yt.speed ? `${yt.speed} · 남은 ${yt.eta}` : '';
+    $('ytQueue').innerHTML = (yt.queue || []).map((q, i) =>
+      `<div class="row"><span>🕒 ${i + 1}. ${esc(q.url.split('v=').pop())} (${esc(q.quality)})</span>
+         <button class="danger" style="padding:2px 8px;font-size:11px" onclick="cmd('yt_remove', {url: '${esc(q.url)}'})">✕</button></div>`).join('');
   }
+  $('playlistTotalCount').textContent = d.total_videos ? `총 ${d.total_videos}개` : '';
 }
 
-function cmd(action, params={}) {
-  if (navigator.vibrate) navigator.vibrate(15);
-  let q = new URLSearchParams({ action, ...params });
-  fetch('/api/cmd?' + q.toString()).catch(() => {});
-}
-
-function fmtTime(sec) {
-  sec = Math.floor(sec || 0);
-  let m = Math.floor(sec / 60);
-  let s = sec % 60;
-  let h = Math.floor(m / 60);
-  m = m % 60;
-  if (h > 0) return `${h}:${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
-  return `${m<10?'0':''}${m}:${s<10?'0':''}${s}`;
-}
-
-function submitYt(mode) {
-  const inp = document.getElementById('ytUrlInput');
-  const url = (inp ? inp.value : '').trim();
-  if (!url) {
-    alert('유튜브 링크를 입력하세요.');
-    return;
-  }
-  const qSelect = document.getElementById('ytQualitySelect');
-  const q = qSelect ? qSelect.value : 'best';
-  const pBox = document.getElementById('ytProgressBox');
-  if (pBox) {
-    pBox.style.display = 'block';
-    pBox.removeAttribute('data-keep');
-  }
-  if (mode === 'download') {
-    cmd('yt_download', { url: url, quality: q });
-    document.getElementById('ytProgTitle').innerText = '⬇️ 최고 화질 다운로드 준비 중...';
-  } else {
-    cmd('yt_stream', { url: url, quality: q });
-    document.getElementById('ytProgTitle').innerText = '⚡ 최고 화질 빠른 재생 버퍼링 중...';
-  }
-  inp.value = '';
-}
-
-function escapeHtml(str) {
-  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function toggleFolderById(idx) {
-  const itemsEl = document.getElementById('fitems_' + idx);
-  const arrowEl = document.getElementById('farrow_' + idx);
-  if (itemsEl) {
-    const isOpen = itemsEl.classList.toggle('open');
-    if (arrowEl) arrowEl.innerText = isOpen ? '▼' : '▶';
-    const folder = itemsEl.getAttribute('data-folder');
-    if (isOpen) openFolders.add(folder);
-    else openFolders.delete(folder);
-  }
-}
-
-function onSearch(query) {
-  searchQuery = (query || "").trim().toLowerCase();
-  renderPlaylistGroups(currentPlaylistGroups);
-}
-
-function renderPlaylistGroups(groups) {
-  currentPlaylistGroups = groups;
-  const container = document.getElementById('playlistContainer');
-  if (!groups || groups.length === 0) {
-    container.innerHTML = '<div style="font-size:12px; color:#64748b; padding:8px;">재생목록이 비어 있습니다.</div>';
-    return;
-  }
-
-  // 활성 항목이 있는 폴더 최초 자동 열기
-  if (!autoOpenedActiveFolder) {
-    groups.forEach(g => {
-      if (g.has_active) {
-        openFolders.add(g.folder);
-        autoOpenedActiveFolder = true;
-      }
+// ---- 재생목록 ---------------------------------------------------------------
+function onSearch(q) { searchQuery = (q || '').trim().toLowerCase(); renderPlaylist(); }
+function toggleFolder(name) { openFolders.has(name) ? openFolders.delete(name) : openFolders.add(name); renderPlaylist(); }
+function renderPlaylist() {
+  const c = $('playlistContainer');
+  if (!playlistGroups.length) { c.innerHTML = '<div class="empty">재생목록이 비어 있습니다.</div>'; return; }
+  let html = '', total = 0;
+  playlistGroups.forEach((g, gi) => {
+    const items = searchQuery ? g.items.filter(it => it.name.toLowerCase().includes(searchQuery)) : g.items;
+    if (!items.length) return;
+    total += items.length;
+    const open = searchQuery || openFolders.has(g.folder);
+    html += `<div class="folder-group"><div class="folder-header ${g.has_active ? 'has-active' : ''}" onclick='toggleFolder(${JSON.stringify(g.folder)})'>
+               <span>${esc(g.folder)} <small style="opacity:.7">(${items.length})</small></span><span>${open ? '▼' : '▶'}</span></div>
+             <div class="folder-items ${open ? 'open' : ''}">`;
+    items.forEach(it => {
+      html += `<div class="playlist-item ${it.active ? 'active' : ''}" onclick="cmd('play_index', {index: ${it.index}})">
+                 ${it.thumb ? `<img loading="lazy" src="/api/thumb?p=${it.index}&v=${it.thumb}" onerror="this.remove()">` : ''}
+                 <span class="name">${it.watched ? '✓ ' : ''}${it.index + 1}. ${esc(it.name)}</span>
+                 <button onclick="event.stopPropagation(); cmd('queue_next', {index: ${it.index}}); toast('다음에 재생')">⏭</button></div>`;
     });
-  }
-
-  let html = '';
-  let matchCount = 0;
-
-  groups.forEach((g, idx) => {
-    // 검색어 필터링
-    let visibleItems = g.items;
-    if (searchQuery) {
-      visibleItems = g.items.filter(it => it.name.toLowerCase().includes(searchQuery));
-    }
-    if (visibleItems.length === 0) return;
-
-    matchCount += visibleItems.length;
-    // 검색 중일 때는 검색 결과가 있는 폴더 자동 펼침
-    const isOpen = searchQuery ? true : openFolders.has(g.folder);
-    const arrow = isOpen ? '▼' : '▶';
-    const activeCls = g.has_active ? ' has-active' : '';
-    const openCls = isOpen ? ' open' : '';
-
-    html += '<div class="folder-group">';
-    html += `  <div class="folder-header${activeCls}" onclick="toggleFolderById(${idx})">`;
-    html += `    <span>${escapeHtml(g.folder)} <small style="opacity:0.75; font-size:11px;">(${visibleItems.length}개)</small></span>`;
-    html += `    <span id="farrow_${idx}" style="font-size: 11px; opacity:0.8;">${arrow}</span>`;
-    html += '  </div>';
-    html += `  <div class="folder-items${openCls}" id="fitems_${idx}" data-folder="${escapeHtml(g.folder)}">`;
-    visibleItems.forEach(it => {
-      const itActive = it.active ? ' active' : '';
-      html += `    <div class="playlist-item${itActive}" onclick="cmd('play_index', {index: ${it.index}})">`;
-      html += `      ${it.index + 1}. ${escapeHtml(it.name)}`;
-      html += '    </div>';
-    });
-    html += '  </div>';
-    html += '</div>';
+    html += '</div></div>';
   });
-
-  if (searchQuery && matchCount === 0) {
-    html = '<div style="font-size:12px; color:#64748b; padding:12px; text-align:center;">검색 결과가 없습니다.</div>';
-  }
-
-  container.innerHTML = html;
+  c.innerHTML = total ? html : '<div class="empty">검색 결과가 없습니다.</div>';
 }
 
-function updateStatus() {
-  fetch('/api/status')
-    .then(r => r.json())
-    .then(data => {
-      document.getElementById('statusBadge').innerText = '연결됨';
-      document.getElementById('statusBadge').className = 'badge online';
-      document.getElementById('trackTitle').innerText = data.title || '대기 화면';
-      document.getElementById('curTime').innerText = fmtTime(data.position_sec);
-      document.getElementById('durTime').innerText = fmtTime(data.duration_sec);
-      document.getElementById('playBtn').innerText = data.is_playing ? 'Ⅱ' : '▶';
-      document.getElementById('muteBtn').innerText = data.is_muted ? '🔇' : '🔊';
-
-      if (!isSeeking && data.duration_sec > 0) {
-        progress.value = (data.position_sec / data.duration_sec) * 100;
-      }
-      if (!isVolDragging) {
-        volBar.value = data.volume;
-        updateVolLabel(data.volume);
-      }
-
-      // 속도 UI 갱신
-      const curSpeed = data.speed || 1.0;
-      document.getElementById('speedVal').innerText = curSpeed.toFixed(2) + 'x';
-      ['05', '075', '10', '125', '15', '20'].forEach(id => {
-        const el = document.getElementById('sp_' + id);
-        if (el) el.className = '';
-      });
-      if (Math.abs(curSpeed - 0.5) < 0.02) document.getElementById('sp_05').className = 'active-speed';
-      else if (Math.abs(curSpeed - 0.75) < 0.02) document.getElementById('sp_075').className = 'active-speed';
-      else if (Math.abs(curSpeed - 1.0) < 0.02) document.getElementById('sp_10').className = 'active-speed';
-      else if (Math.abs(curSpeed - 1.25) < 0.02) document.getElementById('sp_125').className = 'active-speed';
-      else if (Math.abs(curSpeed - 1.5) < 0.02) document.getElementById('sp_15').className = 'active-speed';
-      else if (Math.abs(curSpeed - 2.0) < 0.02) document.getElementById('sp_20').className = 'active-speed';
-
-      let repeatLabel = '전체반복';
-      if (data.repeat_mode === 'one') repeatLabel = '한곡반복';
-      else if (data.repeat_mode === 'none') repeatLabel = '순차정지';
-      else if (data.repeat_mode === 'shuffle') repeatLabel = '무작위';
-      document.getElementById('repeatModeText').innerText = repeatLabel;
-
-      if (data.total_videos !== undefined) {
-        document.getElementById('playlistTotalCount').innerText = `총 ${data.total_videos}개`;
-      }
-
-      // 유튜브 다운로드 상태 실시간 갱신
-      const pBox = document.getElementById('ytProgressBox');
-      if (data.yt_download && data.yt_download.active) {
-        if (pBox) pBox.style.display = 'block';
-        document.getElementById('ytProgTitle').innerText = data.yt_download.title || '다운로드 중...';
-        document.getElementById('ytProgPct').innerText = (data.yt_download.percent || 0).toFixed(1) + '%';
-        document.getElementById('ytProgBar').style.width = (data.yt_download.percent || 0) + '%';
-        document.getElementById('ytProgSpeed').innerText = data.yt_download.speed || '';
-        document.getElementById('ytProgEta').innerText = data.yt_download.eta ? '남은 시간: ' + data.yt_download.eta : '';
-      } else if (data.yt_download && data.yt_download.completed) {
-        if (pBox && !pBox.getAttribute('data-keep')) {
-          document.getElementById('ytProgTitle').innerText = '🎉 다운로드 완료! 자동 재생 중...';
-          document.getElementById('ytProgPct').innerText = '100%';
-          document.getElementById('ytProgBar').style.width = '100%';
-          document.getElementById('ytProgSpeed').innerText = '';
-          document.getElementById('ytProgEta').innerText = '';
-          pBox.setAttribute('data-keep', '1');
-          setTimeout(() => {
-            pBox.style.display = 'none';
-            pBox.removeAttribute('data-keep');
-          }, 3000);
-        }
-      } else {
-        if (pBox && !pBox.getAttribute('data-keep')) {
-          pBox.style.display = 'none';
-        }
-      }
-
-      // 폴더 그룹 데이터 변경 감지 (DOM 리렌더링 최적화: 변경 시에만 업데이트하여 터치 튐 방지)
-      if (data.playlist_groups) {
-        const dataHash = JSON.stringify(data.playlist_groups);
-        if (dataHash !== lastPlaylistDataHash) {
-          lastPlaylistDataHash = dataHash;
-          data.playlist_groups.forEach(g => {
-            if (g.has_active && !openFolders.has(g.folder)) {
-              openFolders.add(g.folder);
-            }
-          });
-          renderPlaylistGroups(data.playlist_groups);
-        }
-      }
-    })
-    .catch(() => {
-      document.getElementById('statusBadge').innerText = '오프라인';
-      document.getElementById('statusBadge').className = 'badge';
-    });
+// ---- 실시간 연결 (SSE) ------------------------------------------------------
+function connect() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('status', e => { renderStatus(JSON.parse(e.data)); setOnline(true); });
+  es.addEventListener('thumbs', e => { thumbs = JSON.parse(e.data); lastThumb = ''; updateNowThumb(S.position_sec || 0); });
+  es.addEventListener('playlist', e => {
+    playlistGroups = JSON.parse(e.data);
+    playlistGroups.forEach(g => { if (g.has_active) openFolders.add(g.folder); });
+    renderPlaylist();
+  });
+  es.onerror = async () => {
+    setOnline(false);
+    es.close();
+    const r = await fetch('/api/status').catch(() => null);
+    if (r && r.status === 401) { location.reload(); return; }
+    setTimeout(connect, 2000);
+  };
 }
-setInterval(updateStatus, 1000);
-updateStatus();
+function setOnline(on) { const b = $('statusBadge'); b.textContent = on ? '연결됨' : '재연결 중...'; b.className = 'badge' + (on ? ' online' : ''); }
+connect();
 </script>
 </body>
 </html>

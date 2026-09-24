@@ -4,6 +4,7 @@ import threading
 
 from gi.repository import GLib, Gdk, Gst, Gtk
 
+from ..mpris import start_mpris
 from ..settings import settings
 from ..shortcuts import find_shortcut
 from ..media.gst_setup import build_hw_video_output, enable_x11_compositor_bypass, optimize_gstreamer_ranks
@@ -165,6 +166,11 @@ class JetsonSignageFlexiblePlayer(
         self._remote_status_lock = threading.Lock()
         self._remote_status = {}
         self._remote_groups_cache = None
+        self._remote_playlist_paths = []           # HTTP 스레드용 재생목록 사본
+        self._remote_thumb_files = ({}, [], None)   # HTTP 스레드용 현재 영상 썸네일 목록
+        self.remote_auth = None
+        self.remote_broker = None
+        self.mpris = None
 
         # 검색 필터 텍스트
         self.search_text = ""
@@ -262,6 +268,8 @@ class JetsonSignageFlexiblePlayer(
 
         # 스마트폰 웹 리모컨 서버 자동 기동
         self.start_web_remote_server()
+        # 키보드 미디어 키 / 시스템 미디어 컨트롤 (MPRIS2)
+        self.mpris = start_mpris(self)
 
         # CLI 인자로 유튜브 링크가 입력된 경우 바로 받아서 재생
         if self.initial_yt_url:
