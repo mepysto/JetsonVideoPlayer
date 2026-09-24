@@ -1,7 +1,7 @@
 """AI 자막 생성 UI: whisper.cpp 작업 시작/취소, 실시간 자막 트랙 갱신, 설정 메뉴"""
 import os
 
-from ..ai.whisper import LANGUAGE_NAMES, AiSubtitleJob, whisper_available
+from ..ai.whisper import LANGUAGE_NAMES, MODEL_NOTES, AiSubtitleJob, list_whisper_models, whisper_available
 from ..settings import settings
 
 AI_COLOR = "#B388FF"
@@ -122,10 +122,22 @@ class AiSubtitlesMixin:
         current = settings.get("whisper_language")
         languages = [(label, (lambda code=code: settings.set("whisper_language", code)), code == current)
                      for code, label in AI_LANGUAGES]
-        return [
-            ("submenu", "🤖 AI 자막 언어", languages),
+        entries = [("submenu", "🤖 AI 자막 언어", languages)]
+        models = list_whisper_models()
+        if len(models) > 1:
+            current_model = settings.get("whisper_model")
+            if current_model not in models:
+                current_model = models[0]
+            entries.append(("submenu", "🤖 AI 인식 모델", [
+                (f"{m}  —  {MODEL_NOTES.get(m, '')}".rstrip(" —"), (lambda m=m: self._set_whisper_model(m)), m == current_model)
+                for m in models]))
+        return entries + [
             ("check", "🤖 AI 자막을 영어로 번역", settings.get("whisper_translate"),
              lambda: settings.set("whisper_translate", not settings.get("whisper_translate"))),
             ("check", "🤖 YouTube 영상은 AI 자막 자동 생성", settings.get("youtube_auto_ai_subtitles"),
              lambda: settings.set("youtube_auto_ai_subtitles", not settings.get("youtube_auto_ai_subtitles"))),
         ]
+
+    def _set_whisper_model(self, name):
+        settings.set("whisper_model", name)
+        self.show_osd(f"🤖 AI 인식 모델: {name} (다음 생성부터 적용)")

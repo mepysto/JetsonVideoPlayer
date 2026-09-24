@@ -36,3 +36,15 @@ def test_ai_subtitle_path(tmp_path):
     video.write_bytes(b"")
     assert ai_subtitle_path(str(video), "ko") == os.path.join(str(tmp_path), "movie.ai.ko.srt")
     assert ai_subtitle_path(str(video), "ko", translate=True).endswith("movie.ai.en.srt")
+
+
+def test_list_whisper_models_ignores_test_fixtures(tmp_path, monkeypatch):
+    from jetson_player.ai import whisper
+    models = tmp_path / "models"
+    models.mkdir()
+    for name in ("ggml-small-q5_1.bin", "ggml-large-v3-turbo-q5_0.bin", "for-tests-ggml-tiny.bin", "ggml-x.bin.part", "README.md"):
+        (models / name).write_bytes(b"")
+    monkeypatch.setattr(whisper, "WHISPER_HOME", str(tmp_path))
+    assert whisper.list_whisper_models() == ["large-v3-turbo-q5_0", "small-q5_1"]
+    assert whisper.find_whisper_model("large-v3-turbo-q5_0").endswith("ggml-large-v3-turbo-q5_0.bin")
+    assert whisper.find_whisper_model("medium").endswith(".bin")          # 없는 모델이면 설치된 것 사용

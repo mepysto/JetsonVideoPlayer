@@ -31,6 +31,24 @@ def find_whisper_binary():
     return None
 
 
+# 알려진 모델 설명 (Orin Nano 8GB, 60초 음성 실측)
+MODEL_NOTES = {
+    "small-q5_1": "기본 — 60초 음성 4.6초, 메모리 약 1.0GB",
+    "large-v3-turbo-q5_0": "더 정확 — 60초 음성 6.4초, 메모리 약 1.4GB",
+}
+MODEL_FILE_RE = re.compile(r"^ggml-(.+)\.bin$")
+
+
+def list_whisper_models():
+    """설치된 모델 이름 목록 (whisper.cpp 저장소의 테스트용 더미 모델 제외)"""
+    try:
+        names = [m.group(1) for f in os.listdir(os.path.join(WHISPER_HOME, "models"))
+                 if (m := MODEL_FILE_RE.match(f))]
+    except OSError:
+        return []
+    return sorted(names)
+
+
 def find_whisper_model(model_name="small-q5_1"):
     """설정된 모델을 우선 찾고, 없으면 설치된 아무 모델이나 사용합니다."""
     model_dir = os.path.join(WHISPER_HOME, "models")
