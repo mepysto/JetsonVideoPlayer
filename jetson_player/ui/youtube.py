@@ -27,7 +27,7 @@ class YouTubeMixin:
             if title and title != "YouTube Video":
                 self.yt_loading_title.set_markup(f"<span font='13' weight='bold' color='#e9ff5b'>{GLib.markup_escape_text(title)}</span>")
             speed_info = f" ({speed_str}, 남은시간 {eta_str})" if speed_str else ""
-            self.yt_loading_status.set_markup(f"<span font='11' color='#8f98a8'>⚡ 초고속 버퍼링 {pct:.0f}%{speed_info}</span>")
+            self.yt_loading_status.set_markup(f"<span font='11' color='#8f98a8'>⬇️ 받는 중 {pct:.0f}%{speed_info}</span>")
             self.yt_loading_progress.set_fraction(max(0.0, min(1.0, pct / 100.0)))
 
     def hide_yt_loading(self):
@@ -43,40 +43,48 @@ class YouTubeMixin:
             self.show_placeholder()
         return False
 
-    def start_youtube_download(self, url, quality="best"):
-        """유튜브 영상을 비동기로 다운로드하고 진행률을 표시하며, 완료 시 재생목록에 추가 및 자동 재생합니다."""
+    def _add_and_play_youtube_file(self, path, play_now=True):
+        """다운로드된 파일을 재생목록에 넣고, play_now면 즉시 재생 / 아니면 "다음에 재생" 대기열에 넣습니다."""
+        if getattr(self, "placeholder_box", None):
+            self.placeholder_box.hide()
+        if path not in self.playlist:
+            self.playlist.append(path)
+            self.populate_playlist_tree()
+            self.refresh_playlist_ui()
+        if play_now:
+            self.play_index_direct(self.playlist.index(path))
+        else:
+            self.queue_next(path)
+
+    def _reset_yt_button_later(self, delay_ms):
+        def reset():
+            if getattr(self, "yt_btn", None) and not youtube_mgr.get_status()["active"]:
+                self.yt_btn.set_label("▶️ 유튜브")
+            return False
+        GLib.timeout_add(delay_ms, reset)
+
+    def start_youtube(self, url, quality="best"):
+        """YouTube 영상을 H.264 최고 화질로 받아 Jetson HW 가속으로 재생합니다.
+
+        이미 받은 영상은 즉시 재생하고, 다른 다운로드가 진행 중이면 대기열에 넣었다가
+        완료되면 "다음에 재생" 대기열에 추가합니다 (보던 영상을 끊지 않음).
+        """
         norm_url = extract_youtube_url(url)
         if not norm_url:
             self.show_osd("⚠️ 올바른 유튜브 링크가 아닙니다.", duration_sec=2.0)
             return
 
-        # 1. 이미 다운로드 보관 중인 영상이 있으면 0초 즉시 재생
         existing = youtube_mgr.find_existing_video(norm_url)
         if existing:
-            print(f"⚡ [YouTube 다운로드] 이미 보관된 영상 발견: {existing}")
-            self.show_osd("⚡ 이미 저장된 유튜브 영상입니다. 즉시 재생합니다!", duration_sec=2.0)
-            if getattr(self, "placeholder_box", None):
-                self.placeholder_box.hide()
+            print(f"⚡ [YouTube] 이미 받은 영상을 바로 재생합니다: {existing}")
+            self.show_osd("⚡ 이미 받은 유튜브 영상입니다. 바로 재생합니다!", duration_sec=2.0)
             self.hide_yt_loading()
-            if existing not in self.playlist:
-                self.playlist.append(existing)
-                self.populate_playlist_tree()
-                self.refresh_playlist_ui()
-                new_idx = len(self.playlist) - 1
-                self.play_index_direct(new_idx)
-            else:
-                idx = self.playlist.index(existing)
-                self.play_index_direct(idx)
+            self._add_and_play_youtube_file(existing)
             return
 
-        q_desc = "최고 화질" if quality == "best" else quality
-        if not self.playlist:
-            self.show_yt_loading(title="YouTube 영상 다운로드 중...", status=f"⬇️ {q_desc} 다운로드 준비 중...")
-        self.show_osd("⬇️ [유튜브] 다운로드 준비 중...", duration_sec=1.5)
-        if getattr(self, "yt_btn", None):
-            self.yt_btn.set_label("⏳ 다운로드 중...")
-        print(f"⬇️ [YouTube 다운로드 시작] {norm_url} (품질: {quality})")
-
+        # 재생 중인 영상이 없을 때만 전체 로딩 화면을 띄우고, 완료 시 바로 재생합니다.
+        nothing_playing = not self.playlist or self.pipeline is None
+        q_desc = {"best": "최고 화질", "audio": "오디오"}.get(quality, quality)
         last_osd_time = [0]
 
         def _on_progress(pct, speed_str, eta_str, title):
@@ -85,135 +93,92 @@ class YouTubeMixin:
             now = time.time()
             if now - last_osd_time[0] >= 0.8 or pct >= 99.0:
                 last_osd_time[0] = now
-                self.show_osd(f"⬇️ {pct:.0f}% ({speed_str}, 남은시간 {eta_str})", duration_sec=1.2)
-            if not self.playlist or (getattr(self, "yt_loading_box", None) and self.yt_loading_box.get_visible()):
-                self.update_yt_loading(pct, speed_str, eta_str, title)
+                if not nothing_playing:
+                    self.show_osd(f"⬇️ {pct:.0f}% ({speed_str}, 남은시간 {eta_str})", duration_sec=1.2)
+            self.update_yt_loading(pct, speed_str, eta_str, title)
 
         def _on_finish(final_filepath, title):
             print(f"🎉 [YouTube 다운로드 완료] {final_filepath}")
             self.hide_yt_loading()
             if getattr(self, "yt_btn", None):
                 self.yt_btn.set_label("✅ 완료")
-                GLib.timeout_add(2500, lambda: self.yt_btn.set_label("▶️ 유튜브") if getattr(self, "yt_btn", None) else False)
-            self.show_osd(f"🎉 다운로드 완료: {title[:25]}", duration_sec=3.0)
-            
-            # 재생목록에 추가하고 사이드바 트리 갱신 및 즉시 하드웨어 가속 재생
-            if final_filepath not in self.playlist:
-                self.playlist.append(final_filepath)
-                self.populate_playlist_tree()
-                self.refresh_playlist_ui()
-                new_idx = len(self.playlist) - 1
-                self.play_index_direct(new_idx)
+                self._reset_yt_button_later(2500)
+            play_now = nothing_playing or self.pipeline is None
+            if play_now:
+                self.show_osd(f"▶️ 재생: {title[:30]}", duration_sec=3.0)
             else:
-                idx = self.playlist.index(final_filepath)
-                self.play_index_direct(idx)
+                self.show_osd(f"🎉 다운로드 완료 → 다음에 재생: {title[:25]}", duration_sec=3.5)
+            self._add_and_play_youtube_file(final_filepath, play_now=play_now)
 
         def _on_error(err):
-            print(f"❌ [YouTube 다운로드 실패] {err}")
+            cancelled = err == youtube_mgr.CANCELLED_MESSAGE
+            print(f"{'⏹' if cancelled else '❌'} [YouTube] {err}")
             if getattr(self, "yt_btn", None):
-                self.yt_btn.set_label("❌ 실패")
-                GLib.timeout_add(3000, lambda: self.yt_btn.set_label("▶️ 유튜브") if getattr(self, "yt_btn", None) else False)
-            self.show_osd(f"❌ 다운로드 실패: {err[:40]}", duration_sec=4.0)
+                self.yt_btn.set_label("⏹ 취소됨" if cancelled else "❌ 실패")
+                self._reset_yt_button_later(3000)
+            self.show_osd("⏹ 다운로드를 취소했습니다." if cancelled else f"❌ 다운로드 실패: {err[:40]}", duration_sec=3.0)
             if getattr(self, "yt_loading_box", None) and self.yt_loading_box.get_visible():
                 self.yt_spinner.stop()
-                self.yt_loading_title.set_markup("<span font='13' weight='bold' color='#ff6b6b'>다운로드 실패</span>")
-                self.yt_loading_status.set_markup(f"<span font='11' color='#dce2ec'>{GLib.markup_escape_text(err[:50])}</span>")
-                GLib.timeout_add(3500, self._restore_empty_or_loading_state)
+                head = "다운로드 취소" if cancelled else "다운로드 실패"
+                self.yt_loading_title.set_markup(f"<span font='13' weight='bold' color='#ff6b6b'>{head}</span>")
+                self.yt_loading_status.set_markup(f"<span font='11' color='#dce2ec'>{GLib.markup_escape_text(err[:60])}</span>")
+                GLib.timeout_add(2500 if cancelled else 3500, self._restore_empty_or_loading_state)
 
-        youtube_mgr.download_async(
-            norm_url,
-            quality=quality,
-            on_progress=_on_progress,
-            on_finish=_on_finish,
-            on_error=_on_error
+        result, position = youtube_mgr.download_async(
+            norm_url, quality=quality, on_progress=_on_progress, on_finish=_on_finish, on_error=_on_error
         )
+        if result == "started":
+            print(f"⬇️ [YouTube 다운로드 시작] {norm_url} (품질: {quality})")
+            if nothing_playing:
+                self.show_yt_loading(title="YouTube 영상 받는 중...", status=f"⬇️ {q_desc} 다운로드 준비 중...")
+            else:
+                self.show_osd(f"⬇️ [유튜브] {q_desc} 다운로드를 시작합니다.", duration_sec=1.5)
+            if getattr(self, "yt_btn", None):
+                self.yt_btn.set_label("⏳ 준비 중...")
+        elif result == "queued":
+            nothing_playing = False  # 대기열 작업은 완료 후 "다음에 재생"으로 추가
+            self.show_osd(f"🕒 다운로드 대기열 {position}번째로 추가했습니다.", duration_sec=2.5)
+        elif result == "downloading":
+            self.show_osd("⬇️ 이미 받고 있는 영상입니다.", duration_sec=2.0)
+
+    # 원격 리모컨/이전 코드 호환: 두 동작 모두 "받아서 재생"입니다.
+    def start_youtube_download(self, url, quality="best"):
+        self.start_youtube(url, quality)
 
     def start_youtube_stream(self, url, quality="best"):
-        """유튜브 영상을 초고속 버퍼링 다운로드 후 Jetson HW 가속으로 끊김 없이 즉시 최고 화질로 재생합니다."""
-        norm_url = extract_youtube_url(url)
-        if not norm_url:
-            self.show_osd("⚠️ 올바른 유튜브 링크가 아닙니다.", duration_sec=2.0)
-            return
+        self.start_youtube(url, quality)
 
-        # 1. 이미 다운로드되어 있는 영상인지 먼저 확인 (0.01초 즉시 재생)
-        existing = youtube_mgr.find_existing_video(norm_url)
-        if existing:
-            print(f"⚡ [YouTube 즉시 재생] 이미 저장된 영상 발견: {existing}")
-            self.show_osd("⚡ 보관된 유튜브 영상을 즉시 재생합니다!", duration_sec=2.0)
-            if getattr(self, "placeholder_box", None):
-                self.placeholder_box.hide()
-            self.hide_yt_loading()
-            if existing not in self.playlist:
-                self.playlist.append(existing)
-                self.populate_playlist_tree()
-                self.refresh_playlist_ui()
-                new_idx = len(self.playlist) - 1
-                self.play_index_direct(new_idx)
-            else:
-                idx = self.playlist.index(existing)
-                self.play_index_direct(idx)
-            return
-
-        # 2. 신규 영상 버퍼링 및 로딩 화면 활성화
-        q_desc = "최고 화질" if quality == "best" else quality
-        self.show_yt_loading(title="YouTube 영상 연결 중...", status=f"⚡ {q_desc} 초고속 버퍼링 준비 중...")
-        self.show_osd(f"⚡ [유튜브] {q_desc} 빠른 버퍼링 후 즉시 재생합니다...", duration_sec=2.5)
-        print(f"🎬 [YouTube 빠른 재생 버퍼링 시작] {norm_url} (품질: {quality})")
-        if getattr(self, "yt_btn", None):
-            self.yt_btn.set_label("⏳ 버퍼링...")
-
-        last_osd_time = [0]
-
-        def _on_progress(pct, speed_str, eta_str, title):
-            if getattr(self, "yt_btn", None):
-                self.yt_btn.set_label(f"⚡ {pct:.0f}%")
-            now = time.time()
-            if now - last_osd_time[0] >= 0.8 or pct >= 99.0:
-                last_osd_time[0] = now
-                self.show_osd(f"⚡ 버퍼링 {pct:.0f}% ({speed_str}, 남은시간 {eta_str})", duration_sec=1.2)
-            self.update_yt_loading(pct, speed_str, eta_str, title)
-
-        def _on_finish(final_filepath, title):
-            print(f"▶️ [YouTube 쾌속 재생 시작] {final_filepath}")
-            self.hide_yt_loading()
-            if getattr(self, "yt_btn", None):
-                self.yt_btn.set_label("✅ 재생 중")
-                GLib.timeout_add(2500, lambda: self.yt_btn.set_label("▶️ 유튜브") if getattr(self, "yt_btn", None) else False)
-            self.show_osd(f"▶️ 재생: {title[:25]}", duration_sec=3.0)
-            
-            if final_filepath not in self.playlist:
-                self.playlist.append(final_filepath)
-                self.populate_playlist_tree()
-                self.refresh_playlist_ui()
-                new_idx = len(self.playlist) - 1
-                self.play_index_direct(new_idx)
-            else:
-                idx = self.playlist.index(final_filepath)
-                self.play_index_direct(idx)
-
-        def _on_error(err):
-            print(f"❌ [YouTube 빠른 재생 실패] {err}")
-            if getattr(self, "yt_btn", None):
-                self.yt_btn.set_label("❌ 실패")
-                GLib.timeout_add(3000, lambda: self.yt_btn.set_label("▶️ 유튜브") if getattr(self, "yt_btn", None) else False)
-            self.show_osd(f"❌ 빠른 재생 실패: {err[:40]}", duration_sec=4.0)
-            if getattr(self, "yt_loading_box", None):
-                self.yt_spinner.stop()
-                self.yt_loading_title.set_markup("<span font='13' weight='bold' color='#ff6b6b'>재생 실패</span>")
-                self.yt_loading_status.set_markup(f"<span font='11' color='#dce2ec'>{GLib.markup_escape_text(err[:50])}</span>")
-                GLib.timeout_add(3500, self._restore_empty_or_loading_state)
-
-        # YouTube 직접 스트리밍 시 HTTP 403 차단 및 저화질 문제를 완벽 방지하기 위해 선택된 최고 화질로 고속 버퍼링 후 자동 재생 연결
-        youtube_mgr.download_async(
-            norm_url,
-            quality=quality,
-            on_progress=_on_progress,
-            on_finish=_on_finish,
-            on_error=_on_error
-        )
+    def _build_youtube_downloads_section(self, pop):
+        """팝오버 하단: 진행 중인 다운로드(취소)와 대기열(삭제) 목록"""
+        status = youtube_mgr.get_status()
+        if not status["active"] and not status["queue"]:
+            return None
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.pack_start(Gtk.Separator(), False, False, 2)
+        if status["active"]:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            lbl = Gtk.Label(label=f"⬇️ {status['percent']:.0f}%  {status['title'][:34]}", xalign=0)
+            lbl.set_ellipsize(3)
+            row.pack_start(lbl, True, True, 0)
+            cancel = Gtk.Button(label="취소")
+            cancel.get_style_context().add_class("tree-tool-btn")
+            cancel.connect("clicked", lambda _b: (youtube_mgr.cancel_current(), pop.popdown()))
+            row.pack_start(cancel, False, False, 0)
+            box.pack_start(row, False, False, 0)
+        for i, job in enumerate(status["queue"], 1):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            lbl = Gtk.Label(label=f"🕒 {i}. {job['url'].split('v=')[-1]} ({job['quality']})", xalign=0)
+            lbl.get_style_context().add_class("muted")
+            row.pack_start(lbl, True, True, 0)
+            rm = Gtk.Button(label="✕")
+            rm.get_style_context().add_class("tree-tool-btn")
+            rm.connect("clicked", lambda _b, u=job["url"]: (youtube_mgr.cancel_pending(u), pop.popdown()))
+            row.pack_start(rm, False, False, 0)
+            box.pack_start(row, False, False, 0)
+        return box
 
     def show_youtube_popover(self, parent_widget=None):
-        """유튜브 URL 입력, 화질 선택, 다운로드 및 스트리밍을 위한 팝오버 창을 표시합니다."""
+        """유튜브 URL 입력, 화질 선택, 다운로드 상태/대기열을 보여주는 팝오버를 표시합니다."""
         parent = parent_widget or getattr(self, "topbar", None) or self.play_button
         pop = Gtk.Popover(relative_to=parent)
         pop.set_position(Gtk.PositionType.BOTTOM)
@@ -222,11 +187,15 @@ class YouTubeMixin:
         box.set_border_width(12)
         box.set_size_request(350, -1)
 
-        title = Gtk.Label(label="▶️ 유튜브 영상 재생 & 다운로드", xalign=0)
+        title = Gtk.Label(label="▶️ 유튜브 영상 받아서 재생", xalign=0)
         title.get_style_context().add_class("popover-title")
         box.pack_start(title, False, False, 0)
 
-        # URL 입력창
+        hint = Gtk.Label(label="H.264로 받아 ~/Videos/YouTube 에 보관하고 HW 가속으로 재생합니다.", xalign=0)
+        hint.get_style_context().add_class("muted")
+        hint.set_line_wrap(True)
+        box.pack_start(hint, False, False, 0)
+
         url_entry = Gtk.Entry()
         url_entry.set_placeholder_text("https://www.youtube.com/watch?v=...")
         url_entry.set_width_chars(32)
@@ -238,60 +207,40 @@ class YouTubeMixin:
             yt_url = extract_youtube_url(clip_text)
             if yt_url:
                 url_entry.set_text(yt_url)
-
         box.pack_start(url_entry, False, False, 2)
 
-        # 화질 선택
         q_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         q_lbl = Gtk.Label(label="품질:")
         q_lbl.get_style_context().add_class("muted")
         q_combo = Gtk.ComboBoxText()
-        q_combo.append("best", "최고 화질 (1080p Full HD / H.264 HW 가속)")
-        q_combo.append("1080p", "1080p Full HD (H.264 NVDEC)")
-        q_combo.append("720p", "720p HD (초고속)")
+        q_combo.append("best", "최고 화질 (H.264 HW 가속)")
+        q_combo.append("1080p", "1080p Full HD (H.264)")
+        q_combo.append("720p", "720p HD (빠른 다운로드)")
         q_combo.append("audio", "오디오만 (M4A)")
         q_combo.set_active_id("best")
         q_row.pack_start(q_lbl, False, False, 0)
         q_row.pack_start(q_combo, True, True, 0)
         box.pack_start(q_row, False, False, 2)
 
-        # 액션 버튼 열
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        go_btn = Gtk.Button(label="⬇️ 받아서 재생")
+        go_btn.get_style_context().add_class("primary")
+        go_btn.set_tooltip_text("다른 영상을 받는 중이면 대기열에 추가되고, 완료 후 '다음에 재생'으로 들어갑니다.")
 
-        dl_btn = Gtk.Button(label="⬇️ 다운로드 & 재생")
-        dl_btn.get_style_context().add_class("primary")
-        dl_btn.set_tooltip_text("최고 화질로 다운로드하여 Jetson nvv4l2decoder HW 가속으로 완벽 재생 (오프라인 보관)")
-
-        def on_dl_clicked(_b):
+        def on_go(_b):
             target_url = url_entry.get_text().strip()
             if not target_url:
                 self.show_osd("⚠️ 유튜브 링크를 입력하세요.", duration_sec=2.0)
                 return
-            q = q_combo.get_active_id() or "best"
             pop.popdown()
-            self.start_youtube_download(target_url, quality=q)
+            self.start_youtube(target_url, quality=q_combo.get_active_id() or "best")
 
-        dl_btn.connect("clicked", on_dl_clicked)
-        btn_box.pack_start(dl_btn, True, True, 0)
+        go_btn.connect("clicked", on_go)
+        url_entry.connect("activate", on_go)
+        box.pack_start(go_btn, False, False, 4)
 
-        stream_btn = Gtk.Button(label="⚡ 바로 재생")
-        stream_btn.set_tooltip_text("최고 화질 초고속 버퍼링 후 즉시 HW 가속으로 끊김 없이 재생")
-
-        def on_stream_clicked(_b):
-            target_url = url_entry.get_text().strip()
-            if not target_url:
-                self.show_osd("⚠️ 유튜브 링크를 입력하세요.", duration_sec=2.0)
-                return
-            q = q_combo.get_active_id() or "best"
-            pop.popdown()
-            self.start_youtube_stream(target_url, quality=q)
-
-        stream_btn.connect("clicked", on_stream_clicked)
-        btn_box.pack_start(stream_btn, True, True, 0)
-
-        url_entry.connect("activate", on_dl_clicked)
-
-        box.pack_start(btn_box, False, False, 4)
+        downloads = self._build_youtube_downloads_section(pop)
+        if downloads:
+            box.pack_start(downloads, False, False, 0)
 
         box.show_all()
         pop.add(box)

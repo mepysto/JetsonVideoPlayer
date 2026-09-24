@@ -1,7 +1,8 @@
 """명령줄 진입점"""
+import signal
 import sys
 
-from gi.repository import Gst, Gtk
+from gi.repository import GLib, Gst, Gtk
 
 from .ui.window import JetsonSignageFlexiblePlayer
 
@@ -20,4 +21,14 @@ def main():
     user_input = sys.argv[1] if len(sys.argv) >= 2 else None
     win = JetsonSignageFlexiblePlayer(user_input)
     win.show_all()
+
+    # Ctrl+C / kill / 터미널 종료 시에도 정상 종료 경로(설정·이어보기 저장, 파이프라인 해제)를 탑니다.
+    def on_signal(signum):
+        print(f"\n⏹ 종료 신호 수신 ({signal.Signals(signum).name})")
+        win.on_destroy(win)
+        return GLib.SOURCE_REMOVE
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, on_signal, sig)
+
     Gtk.main()

@@ -109,8 +109,59 @@ def yt_dlp_js_runtimes():
     return None
 
 
+def youtube_format_for_quality(quality):
+    """화질 선택값을 yt-dlp 포맷 문자열로 변환합니다.
+
+    Jetson NVDEC(nvv4l2decoder) 하드웨어 가속을 보장하고 화면 미출력(AV1 DPB 결함)을 막기 위해
+    H.264(avc1)를 최우선으로 선택하며, AV1(av01)은 배제합니다.
+    """
+    if quality in ("1080p", "720p"):
+        h = quality[:-1]
+        return (
+            f"bestvideo[height<={h}][vcodec^=avc1]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={h}][vcodec^=avc1]+bestaudio/"
+            f"bestvideo[height<={h}][vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
+            f"best[height<={h}][vcodec^=avc1]/"
+            f"best[height<={h}][vcodec!*='av01']/"
+            f"best[height<={h}]"
+        )
+    if quality == "audio":
+        return "bestaudio[ext=m4a]/bestaudio"
+    # "best": H.264 최고 화질 우선, 없으면 AV1을 제외한 최고 화질
+    return (
+        "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/"
+        "bestvideo[vcodec^=avc1]+bestaudio/"
+        "bestvideo[vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
+        "bestvideo[vcodec!*='av01'][vcodec!*='av1']+bestaudio/"
+        "best[vcodec^=avc1]/"
+        "best[vcodec!*='av01']/"
+        "best"
+    )
+
+
+def _format_speed(speed):
+    if speed > 1024 * 1024:
+        return f"{speed / (1024 * 1024):.1f} MB/s"
+    if speed > 1024:
+        return f"{speed / 1024:.0f} KB/s"
+    return f"{speed:.0f} B/s"
+
+
+def _format_eta(eta):
+    return f"{eta}초" if eta < 60 else f"{eta // 60}분 {eta % 60}초"
+
+
+class DownloadCancelled(Exception):
+    """사용자가 진행 중인 다운로드를 취소했습니다."""
+
+
 class YouTubeManager:
-    """YouTube 영상 다운로드 및 스트리밍 메타데이터를 비동기로 관리하는 매니저 클래스"""
+    """YouTube 영상 다운로드를 대기열로 관리합니다 (한 번에 하나씩 순서대로, 취소 가능).
+
+    콜백(on_progress/on_finish/on_error)은 항상 GTK 메인 스레드에서 호출됩니다 (GLib.idle_add).
+    """
+    CANCELLED_MESSAGE = "사용자가 다운로드를 취소했습니다."
+
     def __init__(self, download_dir=None):
         self.download_dir = download_dir or os.path.expanduser("~/Videos/YouTube")
         try:
@@ -120,6 +171,7 @@ class YouTubeManager:
         self.current_download = {
             "active": False,
             "title": "",
+            "url": "",
             "percent": 0.0,
             "speed": "",
             "eta": "",
@@ -127,11 +179,15 @@ class YouTubeManager:
             "error": None,
             "completed": False,
         }
+        self.pending = []           # 대기 중인 작업 목록 [{url, quality, callbacks...}]
+        self._cancel_requested = False
         self.lock = threading.Lock()
 
     def get_status(self):
         with self.lock:
-            return dict(self.current_download)
+            status = dict(self.current_download)
+            status["queue"] = [{"url": job["url"], "quality": job["quality"]} for job in self.pending]
+            return status
 
     def find_existing_video(self, url_or_id):
         """이미 다운로드되어 보관 중인 유튜브 영상 파일이 있는지 검색합니다."""
@@ -151,199 +207,156 @@ class YouTubeManager:
             pass
         return None
 
+    @staticmethod
+    def _title_from_filename(path):
+        title = os.path.splitext(os.path.basename(path))[0]
+        if "[" in title and title.endswith("]"):
+            title = title[:title.rfind("[")].strip()
+        return title
+
     def download_async(self, url, quality="best", on_progress=None, on_finish=None, on_error=None):
-        """백그라운드 스레드에서 유튜브 영상을 다운로드하고 진행률을 콜백합니다."""
+        """다운로드를 요청합니다. 이미 받은 영상이면 즉시 완료, 다른 다운로드가 진행 중이면 대기열에 넣습니다.
+
+        반환값: ("cached" | "started" | "downloading" | "queued" | "error", 대기 순번)
+        """
         if not HAS_YT_DLP:
             if on_error:
                 GLib.idle_add(lambda: on_error("yt-dlp 모듈이 설치되어 있지 않습니다."))
-            return
+            return "error", 0
 
         # 1. 이미 다운로드 보관 중인 파일이 있으면 다운로드를 즉시 생략하고 캐시 파일 반환
         existing = self.find_existing_video(url)
         if existing:
-            base = os.path.basename(existing)
-            title = os.path.splitext(base)[0]
-            if "[" in title and title.endswith("]"):
-                title = title[:title.rfind("[")].strip()
-            with self.lock:
-                self.current_download["active"] = False
-                self.current_download["percent"] = 100.0
-                self.current_download["filepath"] = existing
-                self.current_download["completed"] = True
-                self.current_download["title"] = title
+            title = self._title_from_filename(existing)
             if on_finish:
                 GLib.idle_add(lambda: on_finish(existing, title))
-            return
+            return "cached", 0
 
+        job = {"url": url, "quality": quality, "on_progress": on_progress, "on_finish": on_finish, "on_error": on_error}
         with self.lock:
             if self.current_download["active"]:
-                if on_error:
-                    GLib.idle_add(lambda: on_error("이미 다른 유튜브 다운로드가 진행 중입니다."))
+                if self.current_download["url"] == url:
+                    return "downloading", 0          # 같은 영상을 이미 받는 중
+                if all(j["url"] != url for j in self.pending):
+                    self.pending.append(job)
+                position = next(i + 1 for i, j in enumerate(self.pending) if j["url"] == url)
+                return "queued", position
+            self._begin(job)
+        return "started", 0
+
+    def cancel_current(self):
+        """진행 중인 다운로드를 취소합니다 (다음 progress 콜백에서 중단)."""
+        with self.lock:
+            if self.current_download["active"]:
+                self._cancel_requested = True
+                return True
+        return False
+
+    def cancel_pending(self, url):
+        with self.lock:
+            before = len(self.pending)
+            self.pending = [j for j in self.pending if j["url"] != url]
+            return len(self.pending) != before
+
+    def _begin(self, job):
+        """[lock 보유 상태에서 호출] 작업을 시작합니다."""
+        self._cancel_requested = False
+        self.current_download.update({
+            "active": True, "title": "정보 확인 중...", "url": job["url"], "percent": 0.0,
+            "speed": "", "eta": "", "filepath": None, "error": None, "completed": False,
+        })
+        threading.Thread(target=self._worker, args=(job,), daemon=True).start()
+
+    def _start_next(self):
+        with self.lock:
+            while self.pending:
+                job = self.pending.pop(0)
+                existing = self.find_existing_video(job["url"])
+                if existing:
+                    title = self._title_from_filename(existing)
+                    if job["on_finish"]:
+                        GLib.idle_add(lambda cb=job["on_finish"], p=existing, t=title: cb(p, t))
+                    continue
+                self._begin(job)
                 return
-            self.current_download["active"] = True
 
-        def _worker():
-            with self.lock:
-                self.current_download["title"] = "정보 확인 중..."
-                self.current_download["percent"] = 0.0
-                self.current_download["speed"] = ""
-                self.current_download["eta"] = ""
-                self.current_download["filepath"] = None
-                self.current_download["error"] = None
-                self.current_download["completed"] = False
-
-            def _hook(d):
-                if d['status'] == 'downloading':
-                    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
-                    downloaded = d.get('downloaded_bytes') or 0
-                    pct = (downloaded / total * 100.0) if total > 0 else 0.0
-                    
-                    speed = d.get('speed') or 0
-                    if speed > 1024 * 1024:
-                        speed_str = f"{speed / (1024 * 1024):.1f} MB/s"
-                    elif speed > 1024:
-                        speed_str = f"{speed / 1024:.0f} KB/s"
-                    else:
-                        speed_str = f"{speed:.0f} B/s"
-
-                    eta = d.get('eta') or 0
-                    eta_str = f"{eta}초" if eta < 60 else f"{eta // 60}분 {eta % 60}초"
-
-                    title = d.get('info_dict', {}).get('title', 'YouTube Video')
-                    with self.lock:
-                        self.current_download["title"] = title
-                        self.current_download["percent"] = pct
-                        self.current_download["speed"] = speed_str
-                        self.current_download["eta"] = eta_str
-
-                    if on_progress:
-                        GLib.idle_add(lambda: on_progress(pct, speed_str, eta_str, title))
-
-                elif d['status'] == 'finished':
-                    filename = d.get('filename', '')
-                    with self.lock:
-                        self.current_download["percent"] = 100.0
-                        self.current_download["filepath"] = filename
-
-            # 최고 화질(1080p Full HD / 720p 등) 및 고음질 오디오 스트림 결합 (mp4 출력)
-            # Jetson NVDEC(nvv4l2decoder) 하드웨어 가속을 100% 보장하고 화면 미출력(AV1 DPB 결함)을 원천 차단하기 위해
-            # H.264(avc1)를 최우선으로 선택하며, AV1(av01)은 엄격히 배제합니다.
-            if quality == "1080p":
-                fmt = (
-                    "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/"
-                    "bestvideo[height<=1080][vcodec^=avc1]+bestaudio/"
-                    "bestvideo[height<=1080][vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
-                    "best[height<=1080][vcodec^=avc1]/"
-                    "best[height<=1080][vcodec!*='av01']/"
-                    "best[height<=1080]"
-                )
-            elif quality == "720p":
-                fmt = (
-                    "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/"
-                    "bestvideo[height<=720][vcodec^=avc1]+bestaudio/"
-                    "bestvideo[height<=720][vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
-                    "best[height<=720][vcodec^=avc1]/"
-                    "best[height<=720][vcodec!*='av01']/"
-                    "best[height<=720]"
-                )
-            elif quality == "audio":
-                fmt = "bestaudio[ext=m4a]/bestaudio"
-            else: # "best" (최고 화질: 1080p H.264 Full HD 최우선, 또는 AV1 제외 최고화질)
-                fmt = (
-                    "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/"
-                    "bestvideo[vcodec^=avc1]+bestaudio/"
-                    "bestvideo[vcodec!*='av01'][vcodec!*='av1']+bestaudio[ext=m4a]/"
-                    "bestvideo[vcodec!*='av01'][vcodec!*='av1']+bestaudio/"
-                    "best[vcodec^=avc1]/"
-                    "best[vcodec!*='av01']/"
-                    "best"
-                )
-
-            out_tmpl = os.path.join(self.download_dir, "%(title)s [%(id)s].%(ext)s")
-            ydl_opts = {
-                'format': fmt,
-                'outtmpl': out_tmpl,
-                'progress_hooks': [_hook],
-                'quiet': True,
-                'no_warnings': True,
-                'merge_output_format': 'mp4',
-                'noplaylist': True,
-                'overwrites': True,
-                'concurrent_fragment_downloads': 4,
-                'remote_components': ['ejs:github'],
-            }
-
-            js_runtimes = yt_dlp_js_runtimes()
-            if js_runtimes:
-                ydl_opts['js_runtimes'] = js_runtimes
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    final_filename = ydl.prepare_filename(info)
-                    base, _ = os.path.splitext(final_filename)
-                    if os.path.exists(f"{base}.mp4"):
-                        final_filename = f"{base}.mp4"
-                    title = info.get('title', 'YouTube Video')
-
-                with self.lock:
-                    self.current_download["active"] = False
-                    self.current_download["percent"] = 100.0
-                    self.current_download["filepath"] = final_filename
-                    self.current_download["completed"] = True
-
-                if on_finish:
-                    GLib.idle_add(lambda: on_finish(final_filename, title))
-            except Exception as e:
-                err_msg = str(e)
-                with self.lock:
-                    self.current_download["active"] = False
-                    self.current_download["error"] = err_msg
-                if on_error:
-                    GLib.idle_add(lambda: on_error(err_msg))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def extract_stream_async(self, url, on_success=None, on_error=None):
-        """즉시 스트리밍을 위한 비디오 URL 및 메타데이터 추출 (H.264 최우선)"""
-        if not HAS_YT_DLP:
-            if on_error:
-                GLib.idle_add(lambda: on_error("yt-dlp 모듈이 설치되어 있지 않습니다."))
+    def _cleanup_partial_files(self, url):
+        vid = extract_youtube_video_id(url)
+        if not vid:
             return
+        try:
+            for fname in os.listdir(self.download_dir):
+                if f"[{vid}]" in fname and (".part" in fname or ".ytdl" in fname or re.search(r"\.f\d+\.", fname)):
+                    try:
+                        os.unlink(os.path.join(self.download_dir, fname))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
-        def _worker():
-            fmt = "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/best[vcodec^=avc1]/best[ext=mp4]/best"
-            ydl_opts = {
-                'format': fmt,
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'noplaylist': True,
-                'remote_components': ['ejs:github'],
-            }
-            js_runtimes = yt_dlp_js_runtimes()
-            if js_runtimes:
-                ydl_opts['js_runtimes'] = js_runtimes
+    def _worker(self, job):
+        url, quality = job["url"], job["quality"]
+        on_progress, on_finish, on_error = job["on_progress"], job["on_finish"], job["on_error"]
 
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    stream_url = info.get('url')
-                    title = info.get('title', 'YouTube Stream')
-                    duration = info.get('duration', 0)
-                if stream_url:
-                    if on_success:
-                        GLib.idle_add(lambda: on_success(stream_url, title, duration))
-                else:
-                    if on_error:
-                        GLib.idle_add(lambda: on_error("스트림 URL을 추출할 수 없습니다."))
-            except Exception as e:
-                # except 블록이 끝나면 e가 삭제되므로, 나중에 실행되는 콜백에는 메시지를 미리 담아 둡니다.
-                err_msg = str(e)
-                if on_error:
-                    GLib.idle_add(lambda: on_error(err_msg))
+        def _hook(d):
+            if self._cancel_requested:
+                raise DownloadCancelled(self.CANCELLED_MESSAGE)
+            if d['status'] == 'downloading':
+                total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                downloaded = d.get('downloaded_bytes') or 0
+                pct = (downloaded / total * 100.0) if total > 0 else 0.0
+                speed_str = _format_speed(d.get('speed') or 0)
+                eta_str = _format_eta(d.get('eta') or 0)
+                title = d.get('info_dict', {}).get('title', 'YouTube Video')
+                with self.lock:
+                    self.current_download.update({"title": title, "percent": pct, "speed": speed_str, "eta": eta_str})
+                if on_progress:
+                    GLib.idle_add(lambda: on_progress(pct, speed_str, eta_str, title))
+            elif d['status'] == 'finished':
+                with self.lock:
+                    self.current_download["filepath"] = d.get('filename', '')
 
-        threading.Thread(target=_worker, daemon=True).start()
+        ydl_opts = {
+            'format': youtube_format_for_quality(quality),
+            'outtmpl': os.path.join(self.download_dir, "%(title)s [%(id)s].%(ext)s"),
+            'progress_hooks': [_hook],
+            'quiet': True,
+            'no_warnings': True,
+            'merge_output_format': 'mp4',
+            'noplaylist': True,
+            'overwrites': True,
+            'concurrent_fragment_downloads': 4,
+            'remote_components': ['ejs:github'],
+        }
+        js_runtimes = yt_dlp_js_runtimes()
+        if js_runtimes:
+            ydl_opts['js_runtimes'] = js_runtimes
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                final_filename = ydl.prepare_filename(info)
+                base, _ = os.path.splitext(final_filename)
+                if os.path.exists(f"{base}.mp4"):
+                    final_filename = f"{base}.mp4"
+                title = info.get('title', 'YouTube Video')
+
+            with self.lock:
+                self.current_download.update({"active": False, "percent": 100.0, "filepath": final_filename, "completed": True})
+            if on_finish:
+                GLib.idle_add(lambda: on_finish(final_filename, title))
+        except Exception as e:
+            cancelled = self._cancel_requested or isinstance(e, DownloadCancelled) or self.CANCELLED_MESSAGE in str(e)
+            err_msg = self.CANCELLED_MESSAGE if cancelled else str(e)
+            if cancelled:
+                self._cleanup_partial_files(url)
+            with self.lock:
+                self.current_download.update({"active": False, "error": err_msg})
+            if on_error:
+                GLib.idle_add(lambda: on_error(err_msg))
+        finally:
+            self._cancel_requested = False
+            self._start_next()
 
 
 youtube_mgr = YouTubeManager()

@@ -73,6 +73,27 @@ class PlaybackMixin:
         self.update_speed_button_ui()
         self.show_osd(f"⚡ 속도: {self.playback_rate:.2f}x")
 
+    def step_volume(self, delta):
+        """볼륨을 delta(%)만큼 조절합니다 (0~200%)."""
+        self.volume_scale.set_value(max(0, min(200, self.volume_scale.get_value() + delta)))
+
+    def frame_step(self, direction):
+        """일시정지 상태에서 한 프레임 이동합니다. 뒤로 가기는 GStreamer 제약상 약 1프레임(40ms) 이전 위치로 정밀 탐색합니다."""
+        if not self.pipeline:
+            return
+        if self.is_playing:
+            self.toggle_play_pause()
+        if direction > 0:
+            self.pipeline.send_event(Gst.Event.new_step(Gst.Format.BUFFERS, 1, abs(self.playback_rate), True, False))
+            self.show_osd("⏵ 다음 프레임", timeout_ms=600)
+        else:
+            ok, pos = self.pipeline.query_position(Gst.Format.TIME)
+            if ok:
+                target = max(0, pos - 40 * Gst.MSECOND)
+                self.last_known_pos_ns = target
+                self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE, target)
+                self.show_osd("⏴ 이전 프레임", timeout_ms=600)
+
     def step_playback_rate(self, delta):
         """현재 재생 속도에서 delta만큼 속도를 증감합니다."""
         new_rate = self.playback_rate + delta
@@ -253,6 +274,20 @@ class PlaybackMixin:
         video_path = self.playlist[self.current_index]
         self.rate_applied_on_preroll = False
 
+        # 삭제/이동된 파일은 건너뛰고, 존재하는 다음 영상을 재생합니다.
+        is_remote = video_path.startswith(("http://", "https://"))
+        if not is_remote and not os.path.exists(video_path):
+            print(f"⚠️ 파일을 찾을 수 없습니다: {video_path}")
+            n = len(self.playlist)
+            for step in range(1, n):
+                cand = (self.current_index + step) % n
+                if os.path.exists(self.playlist[cand]):
+                    self.show_osd(f"⚠️ 파일이 없어 건너뜁니다: {os.path.basename(video_path)[:40]}", duration_sec=3.0)
+                    self.current_index = cand
+                    return self.play_current_video()
+            self.show_osd("❌ 재생목록의 파일을 찾을 수 없습니다.", duration_sec=4.0)
+            return False
+
         # 최근 재생 기록에 추가
         history_cache.add(video_path)
 
@@ -306,6 +341,7 @@ class PlaybackMixin:
                 self.fs_position_label.set_text("00:00")
             if getattr(self, "fs_duration_label", None):
                 self.fs_duration_label.set_text("00:00")
+            self.refresh_timeline_marks()
             self.decoder_names.clear()
             self.last_dropped_frames = 0
             self.last_ui_pos_sec = -1
@@ -537,16 +573,20 @@ class PlaybackMixin:
             if not has_current:
                 return
             path = self.playlist[self.current_index]
+            name = os.path.basename(path)[:40]
             retries = self.retry_counts.get(path, 0)
             if retries < self.max_retries:
                 self.retry_counts[path] = retries + 1
                 print(f"🔄 재생 파이프라인 재시도 ({retries + 1}/{self.max_retries})")
+                self.show_osd(f"⚠️ 재생 오류 — 다시 시도 중 ({retries + 1}/{self.max_retries})", duration_sec=2.5)
                 GLib.timeout_add(250, self.play_current_video)
-            elif self.is_single_file_mode:
+            elif self.is_single_file_mode or len(self.playlist) <= 1:
                 print("⏹ 반복 오류로 재생을 중단합니다. 원본과 디코더 로그를 확인하세요.")
+                self.show_osd(f"❌ 재생할 수 없는 영상입니다: {name}", duration_sec=5.0)
                 self.pipeline.set_state(Gst.State.PAUSED)
             else:
                 print("⏭ 반복 오류 항목을 건너뜁니다.")
+                self.show_osd(f"⏭ 재생 실패로 건너뜁니다: {name}", duration_sec=3.5)
                 self.play_next_video()
 
         elif message.type == Gst.MessageType.ASYNC_DONE:

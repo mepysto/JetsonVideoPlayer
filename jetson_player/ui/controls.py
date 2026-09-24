@@ -193,13 +193,14 @@ class ControlsMixin:
         self.fs_progress_scale.connect("button-press-event", self.on_seek_start)
         self.fs_progress_scale.connect("button-release-event", self.on_fs_seek_end)
         self.fs_progress_scale.connect("change-value", self.on_scale_change_value)
+        self.setup_timeline_interactions(self.fs_progress_scale)
 
         self.fs_duration_label = Gtk.Label(label="00:00")
         self.fs_duration_label.get_style_context().add_class("muted")
 
         timeline.pack_start(self.fs_position_label, False, False, 0)
         timeline.pack_start(self.fs_progress_scale, True, True, 0)
-        timeline.pack_start(self.fs_duration_label, False, False, 0)
+        timeline.pack_start(self.make_time_toggle(self.fs_duration_label), False, False, 0)
         panel.pack_start(timeline, False, False, 0)
 
         # 액션 버튼 열
@@ -376,23 +377,23 @@ class ControlsMixin:
             self.last_ui_pos_sec = pos_sec
             time_str = self.format_time(position)
 
+            # 영상 길이는 처음 확인될 때 한 번 조회하고, 진행바 눈금(북마크/챕터)을 그립니다.
+            if self.duration_ns == 0:
+                duration_ok, duration = self.pipeline.query_duration(Gst.Format.TIME)
+                if duration_ok and duration > 0:
+                    self.duration_ns = duration
+                    self.refresh_timeline_marks()
+            self.update_duration_labels(position)
+
             # 1) 일반 모드 컨트롤 UI 갱신
             if not self.is_video_only:
                 self.position_label.set_text(time_str)
-                if self.duration_ns == 0:
-                    duration_ok, duration = self.pipeline.query_duration(Gst.Format.TIME)
-                    if duration_ok and duration > 0:
-                        self.duration_ns = duration
-                        self.duration_label.set_text(self.format_time(duration))
                 if self.duration_ns > 0 and not self.is_seeking:
                     self.progress_scale.set_value(min(100, position * 100 / self.duration_ns))
 
             # 2) 전체화면 플로팅 컨트롤 UI 갱신
             if getattr(self, "fs_position_label", None):
                 self.fs_position_label.set_text(time_str)
-            if getattr(self, "fs_duration_label", None):
-                if self.duration_ns > 0:
-                    self.fs_duration_label.set_text(self.format_time(self.duration_ns))
             if getattr(self, "fs_progress_scale", None) and self.duration_ns > 0 and not self.is_seeking:
                 self.fs_progress_scale.set_value(min(100, position * 100 / self.duration_ns))
 

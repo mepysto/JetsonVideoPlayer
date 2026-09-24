@@ -58,39 +58,11 @@ class LayoutMixin:
 
         self.topbar.pack_start(make_topbar_sep(), False, False, 2)
 
-        # 그룹 2: 북마크 / 무손실 캡처 / 스마트폰 리모컨
-        bookmark_btn = Gtk.Button(label="🔖 북마크")
-        bookmark_btn.set_tooltip_text("현재 영상 북마크 목록 보기 (Ctrl+B) / 추가 (B)")
-        bookmark_btn.connect("clicked", lambda _b: self.show_bookmarks_popover(bookmark_btn))
-        self.topbar.pack_start(bookmark_btn, False, False, 0)
-
-        screenshot_btn = Gtk.Button(label="📸 캡처")
-        screenshot_btn.set_tooltip_text("현재 프레임 무손실 스크린샷 저장 (Ctrl+S)")
-        screenshot_btn.connect("clicked", lambda _b: self.capture_screenshot())
-        self.topbar.pack_start(screenshot_btn, False, False, 0)
-
-        remote_btn = Gtk.Button(label="📱 리모컨")
-        remote_btn.set_tooltip_text("스마트폰 웹 리모컨 접속 안내")
-        remote_btn.connect("clicked", lambda _b: self.show_remote_popover(remote_btn))
-        self.topbar.pack_start(remote_btn, False, False, 0)
-
-        self.topbar.pack_start(make_topbar_sep(), False, False, 2)
-
-        # 그룹 3: 재생 모드 / 미디어 HUD / 도움말
+        # 그룹 2: 재생 모드 (자주 쓰지 않는 기능은 우측 ⋯ 메뉴로 정리)
         self.repeat_btn = Gtk.Button(label="🔁")
         self.repeat_btn.set_tooltip_text("재생 모드 (전체반복/1곡반복/정지/셔플) (Shift+R)")
         self.repeat_btn.connect("clicked", lambda _b: self.cycle_repeat_mode())
         self.topbar.pack_start(self.repeat_btn, False, False, 0)
-
-        hud_toggle_btn = Gtk.Button(label="ℹ️")
-        hud_toggle_btn.set_tooltip_text("미디어 정보 및 하드웨어 모니터링 HUD (I)")
-        hud_toggle_btn.connect("clicked", lambda _b: self.toggle_hud())
-        self.topbar.pack_start(hud_toggle_btn, False, False, 0)
-
-        help_btn = Gtk.Button(label="❓")
-        help_btn.set_tooltip_text("단축키 안내 (F1)")
-        help_btn.connect("clicked", lambda _b: self.show_help_dialog())
-        self.topbar.pack_start(help_btn, False, False, 0)
 
         self.topbar.pack_start(make_topbar_sep(), False, False, 2)
 
@@ -99,10 +71,16 @@ class LayoutMixin:
         self.now_playing_label.get_style_context().add_class("now-playing")
         self.topbar.pack_start(self.now_playing_label, True, True, 8)
 
+        self.more_button = Gtk.Button(label="⋯")
+        self.more_button.get_style_context().add_class("more-btn")
+        self.more_button.set_tooltip_text("더 보기: 북마크, 캡처, 리모컨, HUD, AI 자막, 수면 타이머, 화면 설정, 도움말")
+        self.more_button.connect("clicked", lambda b: self.show_more_menu(b))
+
         playlist_toggle = Gtk.Button(label="☷  재생목록")
         playlist_toggle.set_tooltip_text("재생목록 열기/닫기")
         playlist_toggle.connect("clicked", self.on_playlist_toggle)
         self.topbar.pack_end(playlist_toggle, False, False, 0)
+        self.topbar.pack_end(self.more_button, False, False, 0)
 
         close_button = Gtk.Button(label="✕")
         close_button.set_tooltip_text("종료 (Q / Esc)")
@@ -184,7 +162,7 @@ class LayoutMixin:
         yt_icon_lbl = Gtk.Label()
         yt_icon_lbl.set_markup("<span font='22'>📺</span>")
         yt_badge_lbl = Gtk.Label()
-        yt_badge_lbl.set_markup("<span font='14' weight='bold' color='#ff4e4e'>YouTube</span> <span font='14' weight='bold' color='#ffffff'>초고속 스트림</span>")
+        yt_badge_lbl.set_markup("<span font='14' weight='bold' color='#ff4e4e'>YouTube</span> <span font='14' weight='bold' color='#ffffff'>다운로드</span>")
         yt_header_box.pack_start(yt_icon_lbl, False, False, 0)
         yt_header_box.pack_start(yt_badge_lbl, False, False, 0)
         yt_header_box.pack_start(self.yt_spinner, False, False, 4)
@@ -200,7 +178,7 @@ class LayoutMixin:
         self.yt_loading_progress.get_style_context().add_class("yt-progress")
 
         self.yt_loading_status = Gtk.Label()
-        self.yt_loading_status.set_markup("<span font='11' color='#8f98a8'>⚡ 빠른 버퍼링 준비 중...</span>")
+        self.yt_loading_status.set_markup("<span font='11' color='#8f98a8'>⬇️ 다운로드 준비 중...</span>")
 
         self.yt_loading_box.pack_start(yt_header_box, False, False, 0)
         self.yt_loading_box.pack_start(self.yt_loading_title, False, False, 2)
@@ -260,6 +238,7 @@ class LayoutMixin:
         self.progress_scale.connect("button-press-event", self.on_seek_start)
         self.progress_scale.connect("button-release-event", self.on_seek_end)
         self.progress_scale.connect("change-value", self.on_scale_change_value)
+        self.setup_timeline_interactions(self.progress_scale)
 
         # A-B 구간 반복 상시 시각 배지
         self.ab_badge = Gtk.Button(label="")
@@ -274,7 +253,7 @@ class LayoutMixin:
         timeline.pack_start(self.position_label, False, False, 0)
         timeline.pack_start(self.progress_scale, True, True, 0)
         timeline.pack_start(self.ab_badge, False, False, 4)
-        timeline.pack_start(self.duration_label, False, False, 0)
+        timeline.pack_start(self.make_time_toggle(self.duration_label), False, False, 0)
         self.controls.pack_start(timeline, False, False, 0)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)

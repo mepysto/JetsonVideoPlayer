@@ -5,6 +5,7 @@ import threading
 from gi.repository import GLib, Gdk, Gst, Gtk
 
 from ..settings import settings
+from ..shortcuts import find_shortcut
 from ..media.gst_setup import enable_x11_compositor_bypass, optimize_gstreamer_ranks
 from ..storage import bookmark_cache, history_cache, hw_cache, resume_cache
 from ..youtube import is_youtube_url
@@ -17,6 +18,8 @@ from .controls import ControlsMixin
 from .layout import LayoutMixin
 from .playback import PlaybackMixin
 from .subtitles import SubtitlesMixin
+from .menu import MenuMixin
+from .timeline import TimelineMixin
 
 
 class JetsonSignageFlexiblePlayer(
@@ -29,6 +32,8 @@ class JetsonSignageFlexiblePlayer(
     LayoutMixin,
     PlaybackMixin,
     SubtitlesMixin,
+    MenuMixin,
+    TimelineMixin,
     Gtk.Window,
 ):
     """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""
@@ -216,6 +221,10 @@ class JetsonSignageFlexiblePlayer(
         self.video_widget.set_size_request(640, 480)
         self.video_widget.connect("realize", self.on_realize)
 
+        # 4. GStreamer 핵심 파이프라인 변수 초기화 (UI 생성/설정 복원 중 핸들러가 참조하므로 먼저 정의)
+        self.pipeline = None
+        self.bus = None
+
         # 설정 복원 중에는 OSD 알림을 띄우지 않습니다.
         self._restoring_settings = True
         self.is_maximized = False
@@ -224,10 +233,6 @@ class JetsonSignageFlexiblePlayer(
         self.build_ui()
         self._apply_saved_settings()
         self.apply_playlist_sort()
-
-        # 4. GStreamer 핵심 파이프라인 변수 초기화
-        self.pipeline = None
-        self.bus = None
 
         # 재생 위치와 UI 상태 갱신 (250ms 주기로 매끄러운 진행바 보장)
         self.position_timer_id = GLib.timeout_add(250, self.update_playback_ui)
@@ -240,7 +245,7 @@ class JetsonSignageFlexiblePlayer(
         # 스마트폰 웹 리모컨 서버 자동 기동
         self.start_web_remote_server()
 
-        # CLI 인자로 유튜브 링크가 입력된 경우 즉시 초고속 버퍼링 및 스트리밍 시작
+        # CLI 인자로 유튜브 링크가 입력된 경우 바로 받아서 재생
         if self.initial_yt_url:
             init_url = self.initial_yt_url
             GLib.idle_add(lambda: self.start_youtube_stream(init_url, quality="best"))
@@ -312,7 +317,7 @@ class JetsonSignageFlexiblePlayer(
         self.start_background_hw_checker()
 
     def on_key_press(self, widget, event):
-        """키보드 입력 이벤트 제어"""
+        """키보드 입력: 단축키 테이블(jetson_player/shortcuts.py)에서 찾아 실행합니다."""
         keyname = Gdk.keyval_name(event.keyval)
         state = event.state
 
@@ -320,160 +325,28 @@ class JetsonSignageFlexiblePlayer(
         # (Esc도 입력창의 기본 동작(검색어 지우기)에 맡겨 앱이 종료되지 않게 합니다.)
         if isinstance(self.get_focus(), Gtk.Entry):
             return False
+
         is_shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        shortcut = find_shortcut(keyname, is_shift, is_ctrl)
+        if shortcut is None:
+            return False
+        handler = getattr(self, shortcut.action, None)
+        if handler is None:
+            return False
+        handler(*shortcut.args)
+        return True
 
-        # 1. 파일 및 폴더 열기 / 스크린샷 캡처
-        if is_ctrl and keyname in ["s", "S"]:
-            self.capture_screenshot()
-            return True
-        elif is_ctrl and keyname in ["o", "O"]:
-            if is_shift:
-                self.open_folder_dialog()
-            else:
-                self.open_file_dialog()
-            return True
-        elif is_ctrl and keyname in ["b", "B"]:
-            self.show_bookmarks_popover()
-            return True
-        elif not is_ctrl and not is_shift and keyname in ["b", "B"]:
-            self.add_bookmark()
-            return True
-
-        # 2. 종료 및 전체화면 해제
-        if keyname == "Escape":
-            if self.is_fullscreen or self.is_video_only:
-                self.toggle_fullscreen()
-                return True
-            else:
-                print("⏹ 프로그램 종료.")
-                self.on_destroy(widget)
-                return True
-        elif keyname in ["q", "Q"]:
-            print("⏹ 프로그램 종료.")
-            self.on_destroy(widget)
-            return True
-
-        # 3. 재생 및 탐색
-        elif keyname == "space":
-            self.toggle_play_pause()
-            return True
-        elif keyname == "Right":
-            delta = 30 if is_shift else 10
-            self.seek_relative(delta)
-            return True
-        elif keyname == "Left":
-            delta = -30 if is_shift else -10
-            self.seek_relative(delta)
-            return True
-        elif keyname in ["l", "L"]:
-            self.seek_relative(10)
-            return True
-        elif keyname in ["j", "J"]:
-            self.seek_relative(-10)
-            return True
-
-        # 4. 볼륨 조절 및 음소거 (최대 200% 부스트 지원)
-        elif keyname in ["m", "M"]:
-            self.toggle_mute()
-            return True
-        elif keyname in ["0", "parenright"]:
-            cur_vol = self.volume_scale.get_value()
-            self.volume_scale.set_value(min(200, cur_vol + 5))
-            return True
-        elif keyname in ["9", "parenleft"]:
-            cur_vol = self.volume_scale.get_value()
-            self.volume_scale.set_value(max(0, cur_vol - 5))
-            return True
-
-        # 5. 영상 재생 속도 제어
-        elif (not is_shift and keyname in ["Up", "d", "D"]) or (is_shift and keyname in ["greater", "period"]):
-            self.step_playback_rate(0.25)
-            return True
-        elif (not is_shift and keyname in ["Down", "a", "A"]) or (is_shift and keyname in ["less", "comma"]):
-            self.step_playback_rate(-0.25)
-            return True
-        elif keyname in ["r", "R"]:
-            if is_shift or is_ctrl:
-                self.cycle_repeat_mode()
-            else:
-                self.reset_playback_rate()
-            return True
-
-        # 6. 영상 전환
-        elif keyname in ["n", "N"]:
-            self.play_next_video()
-            return True
-        elif keyname in ["p", "P"]:
-            self.play_prev_video()
-            return True
-
-        # 7. 오디오 트랙 및 AV 싱크 제어
-        elif is_shift and keyname in ["A", "a"]:
-            self.cycle_audio_track()
-            return True
-        elif is_shift and keyname in ["z", "Z"]:
-            self.adjust_av_sync(-50)
-            return True
-        elif is_shift and keyname in ["x", "X"]:
-            self.adjust_av_sync(50)
-            return True
-        elif is_shift and keyname in ["c", "C"]:
-            self.reset_av_sync()
-            return True
-
-        # 8. 구간 반복 (A-B Repeat)
-        elif is_shift and keyname in ["[", "braceleft"]:
-            self.set_ab_repeat_a()
-            return True
-        elif is_shift and keyname in ["]", "braceright"]:
-            self.set_ab_repeat_b()
-            return True
-        elif keyname in ["backslash", "bar"] or (is_shift and keyname in ["backslash", "bar"]):
-            self.clear_ab_repeat()
-            return True
-
-        # 9. 자막 제어 (자막 크기 및 자막 싱크)
-        elif not is_shift and not is_ctrl and keyname in ["s", "S"]:
-            self.toggle_subtitles()
-            return True
-        elif not is_shift and not is_ctrl and keyname in ["c", "C"]:
-            self.show_subtitle_popover()
-            return True
-        elif not is_shift and keyname in ["[", "bracketleft"]:
-            self.adjust_subtitle_scale(-0.1)
-            return True
-        elif not is_shift and keyname in ["]", "bracketright"]:
-            self.adjust_subtitle_scale(0.1)
-            return True
-        elif not is_shift and keyname in ["z", "Z"]:
-            self.adjust_subtitle_sync(-500)
-            return True
-        elif not is_shift and keyname in ["x", "X"]:
-            self.adjust_subtitle_sync(500)
-            return True
-        elif not is_shift and keyname in [",", "comma"]:
-            self.adjust_subtitle_sync(-100)
-            return True
-        elif not is_shift and keyname in [".", "period"]:
-            self.adjust_subtitle_sync(100)
-            return True
-
-        # 10. 화면 및 HUD 모드
-        elif keyname in ["f", "F"]:
+    def handle_escape(self):
+        """Esc: 전체화면이면 창 모드로, 아니면 종료합니다."""
+        if self.is_fullscreen or self.is_video_only:
             self.toggle_fullscreen()
-            return True
-        elif keyname in ["t", "T"]:
-            self.toggle_keep_above()
-            return True
-        elif keyname in ["i", "I"]:
-            self.toggle_hud()
-            return True
-        elif keyname in ["F1", "question"]:
-            self.show_help_dialog()
-            return True
+        else:
+            self.quit_player()
 
-        return False
+    def quit_player(self):
+        print("⏹ 프로그램 종료.")
+        self.on_destroy(self)
 
     def on_destroy(self, widget):
         self.is_destroyed = True

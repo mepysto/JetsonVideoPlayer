@@ -4,6 +4,7 @@ import os
 
 from gi.repository import GLib, Gdk, Gst, Gtk
 
+from ..shortcuts import help_rows
 from ..storage import bookmark_cache
 from ..system import get_jetson_hw_stats
 
@@ -22,6 +23,7 @@ class FeaturesMixin:
             t_str = self.format_time(pos)
             self.show_osd(f"🔁 구간 반복 [A] 설정: {t_str}")
             print(f"🔁 [구간 반복] A 지점 설정: {t_str}")
+            self.refresh_timeline_marks()
 
     def set_ab_repeat_b(self):
         """현재 재생 위치를 A-B 구간 반복의 종료점(B)으로 설정하고 루프를 활성화합니다."""
@@ -47,6 +49,7 @@ class FeaturesMixin:
             self.ab_badge.show()
         self.show_osd(f"🔁 [A-B] 구간 반복 활성화: {a_str} ~ {b_str}")
         print(f"🔁 [구간 반복] 활성화: {a_str} ~ {b_str}")
+        self.refresh_timeline_marks()
 
     def clear_ab_repeat(self):
         """A-B 구간 반복을 해제합니다."""
@@ -58,6 +61,7 @@ class FeaturesMixin:
                 self.ab_badge.hide()
             self.show_osd("🔁 A-B 구간 반복 해제")
             print("🔁 [구간 반복] 해제")
+            self.refresh_timeline_marks()
 
     def add_bookmark(self):
         """현재 재생 위치를 북마크에 추가합니다."""
@@ -71,6 +75,7 @@ class FeaturesMixin:
         if ok:
             self.show_osd(f"🔖 북마크 추가: {res}")
             print(f"🔖 [북마크 추가] {os.path.basename(cur_path)} @ {res}")
+            self.refresh_timeline_marks()
         else:
             self.show_osd(f"🔖 {res}")
 
@@ -111,7 +116,7 @@ class FeaturesMixin:
 
                 b_del = Gtk.Button(label="✕")
                 b_del.get_style_context().add_class("tree-tool-btn")
-                b_del.connect("clicked", lambda _b, i=idx: (bookmark_cache.remove(cur_path, i), pop.popdown(), self.show_bookmarks_popover(parent)))
+                b_del.connect("clicked", lambda _b, i=idx: (bookmark_cache.remove(cur_path, i), self.refresh_timeline_marks(), pop.popdown(), self.show_bookmarks_popover(parent)))
                 row.pack_start(b_del, False, False, 0)
 
                 list_box.pack_start(row, False, False, 0)
@@ -252,14 +257,14 @@ class FeaturesMixin:
         self.show_osd(f"📌 항상 위에 표시: {status}")
 
     def show_help_dialog(self):
-        """단축키 가이드 다이얼로그를 표시합니다."""
+        """단축키 가이드 다이얼로그를 표시합니다 (jetson_player/shortcuts.py 테이블에서 생성)."""
         dialog = Gtk.Dialog(
             title="단축키 안내",
             parent=self,
             flags=Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT
         )
         dialog.add_button(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)
-        dialog.set_default_size(520, 560)
+        dialog.set_default_size(560, 620)
 
         box = dialog.get_content_area()
         box.set_spacing(10)
@@ -276,44 +281,24 @@ class FeaturesMixin:
         grid.set_column_spacing(16)
         grid.set_row_spacing(8)
 
-        shortcuts = [
-            ("Space / 마우스 좌클릭", "재생 / 일시정지"),
-            ("Left / Right (J / L)", "10초 뒤로 / 앞으로 (Shift 조합 시 30초)"),
-            ("마우스 휠 위 / 아래", "비디오 영역 10초 앞으로 / 뒤로 Seek"),
-            ("Up / Down 또는 D / A", "재생 속도 증가 / 감소 (+0.25x / -0.25x)"),
-            ("R", "재생 속도 1.0x 기본값 복원"),
-            ("Shift+Up / Down 또는 0 / 9", "볼륨 5% 올리기 / 내리기"),
-            ("M", "음소거 (Mute) 켜기 / 끄기"),
-            ("P / N", "이전 / 다음 영상"),
-            ("F / 마우스 더블클릭", "영상 전용 전체화면 토글"),
-            ("T", "항상 위에 표시 (Always on Top) 토글"),
-            ("S", "자막 전체 켜기 / 끄기"),
-            ("C", "다중 자막 선택 및 크기/싱크 조절 창 열기"),
-            ("[ / ]", "자막 크기 축소 / 확대 (-10% / +10%)"),
-            ("Z / X", "자막 싱크 앞당김 / 늦춤 (-0.5s / +0.5s)"),
-            (", / .", "자막 싱크 미세 조절 (-0.1s / +0.1s)"),
-            ("Shift+A", "오디오 트랙 변경 (다중 음성 지원 영상)"),
-            ("Shift+Z / Shift+X", "오디오(AV) 싱크 50ms 앞당김 / 늦춤"),
-            ("Shift+C", "오디오(AV) 싱크 0ms 초기화"),
-            ("Shift+[ / Shift+]", "A-B 구간 반복 시작점(A) / 끝점(B) 설정"),
-            ("\\ (백슬래시)", "A-B 구간 반복 해제"),
-            ("Ctrl+S", "현재 프레임 무손실 스크린샷 캡처"),
-            ("B / Ctrl+B", "현재 위치 북마크 추가 / 북마크 목록 보기"),
-            ("Shift+R", "재생 모드 순환 (전체반복/1곡반복/정지/셔플)"),
-            ("I", "미디어 정보 및 실시간 하드웨어 통계 HUD"),
-            ("Ctrl+O / Ctrl+Shift+O", "파일 열기 / 폴더 열기"),
-            ("마우스 우클릭", "빠른 메뉴 (컨텍스트 메뉴)"),
-            ("F1 또는 ?", "단축키 도움말 (현재 창)"),
-            ("Esc", "전체화면 해제 (일반 창에서는 종료)"),
-            ("Q", "프로그램 종료"),
-        ]
-
-        for row, (key, desc) in enumerate(shortcuts):
+        row = 0
+        current = None
+        for category, key, desc in help_rows():
+            if category != current:
+                current = category
+                header = Gtk.Label(xalign=0)
+                header.set_markup(f"<b>{GLib.markup_escape_text(category)}</b>")
+                header.get_style_context().add_class("popover-title")
+                header.set_margin_top(6 if row else 0)
+                grid.attach(header, 0, row, 2, 1)
+                row += 1
             k_lbl = Gtk.Label(label=key, xalign=0)
             k_lbl.get_style_context().add_class("primary")
             d_lbl = Gtk.Label(label=desc, xalign=0)
+            d_lbl.set_line_wrap(True)
             grid.attach(k_lbl, 0, row, 1, 1)
             grid.attach(d_lbl, 1, row, 1, 1)
+            row += 1
 
         scrolled.add(grid)
         box.pack_start(scrolled, True, True, 0)
