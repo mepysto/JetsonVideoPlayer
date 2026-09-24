@@ -60,6 +60,7 @@ def main():
     check_python_module("numpy", "numpy (썸네일·장면 분석)", fix="python3-numpy")
     check_python_module("dbus", "dbus-python (미디어 키 · MPRIS)", required=False, fix="python3-dbus")
     check_python_module("yt_dlp", "yt-dlp (YouTube)", required=False, fix="pip:yt-dlp")
+    check_python_module("anthropic", "anthropic (Claude API 자막 번역, 선택)", required=False, fix="pip:anthropic")
 
     print("🎞️ GStreamer 요소")
     check_gst_element("nvv4l2decoder", "NVDEC 하드웨어 디코딩 불가 → 소프트웨어 디코딩으로 재생", required=False, fix="nvidia-l4t-gstreamer")

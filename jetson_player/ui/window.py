@@ -225,6 +225,8 @@ class JetsonSignageFlexiblePlayer(
         self.autoplay_timer_id = None
         self.night_elements = (None, None)
         self.ai_status = None  # (상태 문구, 진행률)
+        self.translate_job = None    # 자막 번역 작업
+        self.translate_status = None
         self.auto_ai_paths = set()  # 재생되면 AI 자막을 자동 생성할 영상 (YouTube 다운로드)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
@@ -380,7 +382,7 @@ class JetsonSignageFlexiblePlayer(
 
     def on_destroy(self, widget):
         self.is_destroyed = True
-        for job_name in ("thumb_job", "scene_job", "ai_job"):
+        for job_name in ("thumb_job", "scene_job", "ai_job", "translate_job"):
             job = getattr(self, job_name, None)
             if job:
                 job.cancel()

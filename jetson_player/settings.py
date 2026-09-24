@@ -30,6 +30,9 @@ DEFAULTS = {
     "whisper_language": "auto",
     "whisper_translate": False,
     "youtube_auto_ai_subtitles": False,
+    "translate_target": "ko",
+    "translate_backend": "auto",
+    "whisper_auto_translate": False,
 }
 
 REPEAT_MODES = ("all", "one", "none", "shuffle")
@@ -57,7 +60,8 @@ def _validate(key, value):
     if isinstance(default, str):
         if not isinstance(value, str):
             return default
-        choices = {"repeat_mode": REPEAT_MODES, "playlist_sort": PLAYLIST_SORTS}.get(key)
+        choices = {"repeat_mode": REPEAT_MODES, "playlist_sort": PLAYLIST_SORTS,
+                   "translate_target": ("ko", "en", "ja", "zh"), "translate_backend": ("auto", "local", "claude")}.get(key)
         if choices and value not in choices:
             return default
         return value

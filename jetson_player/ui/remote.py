@@ -5,6 +5,7 @@ import threading
 
 from gi.repository import GLib, Gdk, Gst, Gtk
 
+from ..ai.translate import resolve_backend
 from ..ai.whisper import whisper_available
 from ..media.thumbnails import load_thumbnail_index, thumbnail_cache_dir
 from ..remote.auth import RemoteAuth, default_token_file, generate_pin
@@ -230,6 +231,9 @@ class RemoteMixin:
             "ai": {"running": bool(ai_job and ai_job.is_running()), "text": ai_status[0] if ai_status else "",
                    "fraction": ai_status[1] if ai_status else 0.0,
                    "available": whisper_available(settings.get("whisper_model"))},
+            "translate": {"running": bool(getattr(self, "translate_job", None) and self.translate_job.is_running()),
+                          "fraction": (self.translate_status or ("", 0.0))[1],
+                          "available": resolve_backend(settings.get("translate_backend")) is not None},
             "sleep": {"minutes": self.sleep_minutes, "remaining": self.sleep_remaining_sec()},
             "night_mode": settings.get("night_mode"),
             "rotation": self.video_rotation,
@@ -249,6 +253,7 @@ class RemoteMixin:
             "ab_a": self.set_ab_repeat_a, "ab_b": self.set_ab_repeat_b, "ab_clear": self.clear_ab_repeat,
             "bookmark_add": self.add_bookmark, "audio_cycle": self.cycle_audio_track,
             "sub_sync_reset": self.reset_subtitle_sync, "ai_subtitles": self.start_ai_subtitles,
+            "translate": self.start_translation,
             "night": self.toggle_night_mode, "rotate": self.cycle_video_rotation,
             "yt_cancel": youtube_mgr.cancel_current,
         }

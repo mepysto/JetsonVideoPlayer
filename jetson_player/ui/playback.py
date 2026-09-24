@@ -357,6 +357,7 @@ class PlaybackMixin:
             self.refresh_timeline_marks()
             self.start_thumbnails(video_path)
             self.cancel_ai_subtitles()
+            self.cancel_translation()
             self.cancel_autoplay_countdown()
             if self.video_rotation != "identity" and self.gtk_sink.find_property("rotate-method"):
                 self.gtk_sink.set_property("rotate-method", "identity")

@@ -131,6 +131,8 @@
     </div>
     <button id="aiBtn" onclick="cmd('ai_subtitles')">🤖 AI 자막 생성</button>
     <div id="aiProgress" class="progress" style="display:none"><div></div></div>
+    <button id="trBtn" onclick="cmd('translate')">🌐 한국어로 번역</button>
+    <div id="trProgress" class="progress" style="display:none"><div></div></div>
   </div>
 
   <!-- 챕터 / 북마크 / 구간 -->
@@ -309,6 +311,11 @@ function renderStatus(d) {
   $('aiBtn').classList.toggle('danger', !!ai.running);
   $('aiProgress').style.display = ai.running ? 'block' : 'none';
   $('aiProgress').firstElementChild.style.width = Math.round((ai.fraction || 0) * 100) + '%';
+  const tr = d.translate || {};
+  $('trBtn').textContent = tr.running ? `⏹ 번역 취소 (${Math.round((tr.fraction || 0) * 100)}%)` : (tr.available ? '🌐 켜 둔 자막을 한국어로 번역' : '🌐 번역 (엔진 미설치)');
+  $('trBtn').classList.toggle('danger', !!tr.running);
+  $('trProgress').style.display = tr.running ? 'block' : 'none';
+  $('trProgress').firstElementChild.style.width = Math.round((tr.fraction || 0) * 100) + '%';
 
   // 챕터 + 북마크
   const marks = [...(d.chapters || []).map(c => ({ ...c, kind: '📑' })), ...(d.bookmarks || []).map(b => ({ sec: b.sec, title: b.label, kind: '🔖' }))]

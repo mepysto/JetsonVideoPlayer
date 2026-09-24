@@ -88,6 +88,7 @@ SHORTCUTS = [
     _sc({"comma"}, "plain", "adjust_subtitle_sync", (-100,), help_key=", / .", help_desc="자막 싱크 -0.1초 / +0.1초", category=SUBS),
     _sc({"period"}, "plain", "adjust_subtitle_sync", (100,)),
     _sc({"g", "G"}, "plain", "start_ai_subtitles", help_key="G", help_desc="🤖 AI 자막 생성 (Whisper, 음성 인식)", category=SUBS),
+    _sc({"g", "G"}, "shift", "start_translation", help_key="Shift + G", help_desc="🌐 켜 둔 자막을 한국어(설정 언어)로 번역", category=SUBS),
 
     # 화면
     _sc({"f", "F"}, "noctrl", "toggle_fullscreen", help_key="F / 마우스 더블클릭", help_desc="영상 전용 전체화면", category=SCREEN),
