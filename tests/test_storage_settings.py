@@ -76,3 +76,62 @@ def test_sort_video_paths(tmp_path):
     assert names(sort_video_paths(paths, "mtime")) == ["a.mp4", "c.mp4", "b.mp4"]
     assert names(sort_video_paths(paths, "size")) == ["b.mp4", "c.mp4", "a.mp4"]
     assert names(sort_video_paths(paths + [str(tmp_path / "gone.mp4")], "size"))[-1] == "gone.mp4"
+
+
+def test_bookmarks(tmp_path):
+    from jetson_player.storage import BookmarkCache
+    path = str(tmp_path / "bm.json")
+    bc = BookmarkCache(path=path)
+    assert bc.add("/v.mp4", 65 * S) == (True, "01:05")
+    assert bc.add("/v.mp4", int(65.5 * S))[0] is False          # 1초 이내 중복
+    assert bc.add("/v.mp4", 3725 * S) == (True, "01:02:05")
+    assert bc.add("/v.mp4", 10 * S, label="intro") == (True, "intro")
+    assert [b["label"] for b in bc.get("/v.mp4")] == ["intro", "01:05", "01:02:05"]   # 시간순
+    assert bc.remove("/v.mp4", 0) and not bc.remove("/v.mp4", 9)
+    assert bc.add("", 0)[0] is False
+    bc.save()
+    assert [b["label"] for b in BookmarkCache(path=path).get("/v.mp4")] == ["01:05", "01:02:05"]
+
+
+def test_history_order_dedupe_limit(tmp_path):
+    from jetson_player.storage import HISTORY_LIMIT, HistoryCache
+    hc = HistoryCache(path=str(tmp_path / "h.json"))
+    files = []
+    for i in range(HISTORY_LIMIT + 3):
+        f = tmp_path / f"v{i}.mp4"
+        f.write_bytes(b"")
+        files.append(str(f))
+        hc.add(str(f))
+    hc.add(files[5])                                          # 다시 보면 맨 앞으로
+    items = hc.get_all()
+    assert len(items) == HISTORY_LIMIT and items[0]["path"] == files[5]
+    assert len({i["path"] for i in items}) == HISTORY_LIMIT
+    hc.add(str(tmp_path / "missing.mp4"))                     # 없는 파일은 무시
+    assert hc.get_all()[0]["path"] == files[5]
+
+
+def test_hw_cache_invalidates_on_change_and_version(tmp_path):
+    import json
+    from jetson_player.storage import HWSupportCache
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"x")
+    path = str(tmp_path / "hw.json")
+    hc = HWSupportCache(path=path)
+    hc.set(str(video), True, "ok")
+    assert hc.get(str(video)) == (True, "ok")
+    video.write_bytes(b"xx")                                  # 파일이 바뀌면 다시 검사
+    assert hc.get(str(video)) is None
+    hc.set(str(video), False, "no")
+    hc.save()
+    data = json.load(open(path))
+    data[str(video)]["v"] = 1                                 # 이전 버전 판정은 무시
+    json.dump(data, open(path, "w"))
+    assert HWSupportCache(path=path).get(str(video)) is None
+
+
+def test_stores_survive_wrong_json_types(tmp_path):
+    from jetson_player.storage import BookmarkCache, HistoryCache
+    (tmp_path / "bm.json").write_text("[1, 2]")
+    (tmp_path / "h.json").write_text('{"a": 1}')
+    assert BookmarkCache(path=str(tmp_path / "bm.json")).get("/x") == []
+    assert HistoryCache(path=str(tmp_path / "h.json")).get_all() == []
