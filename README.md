@@ -11,7 +11,8 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 
 ### 1. 하드웨어 가속 재생
 - 디코딩은 NVDEC이 맡고, `nvvidconv`(VIC)가 GTK GL 화면으로 넘깁니다. 4K H.265 24fps 재생 시 CPU 사용량은 코어 약 0.9개입니다(소프트웨어 디코딩은 약 2.3개).
-- 하드웨어 경로가 특정 파일을 처리하지 못하면 해당 파일만 소프트웨어 경로로 자동 재시도합니다. 환경 변수 `JVP_HW_VIDEO=0`으로 하드웨어 경로를 끌 수 있습니다.
+- 재생 전에 코덱·색 샘플링·비트 깊이로 NVDEC 지원 여부를 판별합니다(H.264 8-bit, HEVC/VP9 최대 12-bit, AV1 최대 10-bit, 4:2:0). 지원하지 않는 형식은 처음부터 소프트웨어로 재생해 시작할 때 끊기지 않습니다.
+- 판별이 어려운 파일에서 하드웨어 경로가 실패하면 해당 파일만 소프트웨어 경로로 자동 재시도합니다. 환경 변수 `JVP_HW_VIDEO=0`으로 하드웨어 경로를 끌 수 있습니다.
 - `I` 키 HUD에 **실제로 동작 중인 디코더**, SoC 온도, GPU 부하, RAM 사용량이 표시됩니다.
 
 ### 2. 자막
@@ -20,7 +21,10 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 - **🤖 AI 자막 (`G`)**: Orin GPU에서 whisper.cpp로 음성을 인식합니다.
   - 지금 보고 있는 위치부터 먼저 인식해 약 5초 안에 첫 자막이 나오고, 11분 영상 전체는 약 45초가 걸립니다.
   - 결과는 영상 옆에 `영상이름.ai.<언어>.srt`로 저장되어 다음부터 자동으로 불러옵니다.
-  - 인식 언어(자동/한국어/영어/일본어/중국어)와 "영어로 번역"은 `⋯` 메뉴에서 설정합니다.
+  - 인식 언어(자동/한국어/영어/일본어/중국어), 인식 모델(기본 small, 더 정확한 large-v3-turbo), "YouTube 영상은 자동 생성"은 `⋯` 메뉴에서 설정합니다.
+- **🌐 자막 번역 (`Shift+G`)**: 켜 둔 자막(AI 자막이나 영어 `.srt` 등)을 한국어(또는 영어/일본어/중국어)로 번역합니다.
+  - 엔진은 **로컬 AI**(llama.cpp + Qwen2.5, 오프라인)와 **Claude API**(`anthropic` 패키지와 API 키가 있을 때) 중에서 고릅니다.
+  - 지금 보는 위치부터 번역해 바로 화면에 표시하고, 결과는 `영상이름.ai.ko.srt`로 저장합니다. "AI 자막을 만들면 자동으로 번역"도 켤 수 있습니다.
 
 ### 3. 타임라인·챕터
 - **썸네일 미리보기**: 진행바에 마우스를 올리면 해당 시각의 썸네일이 보입니다. NVDEC으로 백그라운드에서 추출해 캐시합니다.
@@ -46,7 +50,9 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 - **보안**:
   - PIN으로 로그인한 기기에만 토큰(쿠키)을 발급하고, 명령은 JSON POST로만 받아 같은 네트워크의 다른 웹페이지가 플레이어를 조작할 수 없습니다.
   - PIN을 연속으로 틀리면 5분간 잠깁니다. "새 PIN"을 누르면 모든 기기가 로그아웃됩니다.
-- **화면 구성**: 실시간 상태 반영(SSE), 진행바를 끌 때 썸네일 미리보기, 재생목록 썸네일, 자막 트랙 선택과 싱크, AI 자막, 챕터·북마크 이동, 야간 모드, 회전, 수면 타이머, YouTube 다운로드 대기열
+- **화면 구성**: 실시간 상태 반영(SSE), 진행바를 끌 때 썸네일 미리보기, 재생목록 썸네일, 자막 트랙 선택과 싱크, AI 자막과 번역, 챕터·북마크 이동, 야간 모드, 회전, 수면 타이머, YouTube 다운로드 대기열
+- **끊김 자동 복구**: 폰 화면이 꺼졌다 켜지거나 네트워크가 바뀌어도 자동으로 다시 연결하고, 실시간 연결이 계속 실패하면 1초 간격 조회로 전환합니다.
+- **홈 화면에 추가**: 브라우저 메뉴의 "홈 화면에 추가"로 앱처럼 설치할 수 있습니다.
 
 ### 7. 시스템 미디어 컨트롤 (MPRIS2)
 - 키보드 미디어 키, GNOME 상단 미디어 위젯, `playerctl`, KDE Connect(폰)로 재생·일시정지·이전/다음·탐색·볼륨을 조작할 수 있습니다.
@@ -60,9 +66,13 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 ## 설치 및 실행
 
 ```bash
-./install.sh                     # ~/.local/bin 에 jetson-player 등록 (시스템 전체: sudo ./install.sh --system)
+./install.sh                     # 실행 환경 점검 + ~/.local/bin 에 jetson-player 등록 (시스템 전체: sudo ./install.sh --system)
+./install.sh --set-default       # 영상 파일을 더블클릭하면 이 플레이어로 열리도록 기본 앱 지정 (선택)
 ./scripts/setup_whisper.sh       # (선택) AI 자막 엔진: whisper.cpp CUDA 빌드 + small 모델 (Orin Nano에서 빌드 약 1시간)
-./uninstall.sh                   # 제거
+./scripts/setup_whisper.sh large-v3-turbo-q5_0   # (선택) 더 정확한 인식 모델 추가
+./scripts/setup_translator.sh    # (선택) 자막 번역 엔진: llama.cpp CUDA 빌드 + Qwen2.5-1.5B (빌드 수 시간)
+python3 scripts/check_deps.py    # 실행 환경만 다시 점검
+./uninstall.sh                   # 제거 (설정·기록은 유지)
 ```
 
 ```bash
@@ -128,6 +138,7 @@ jetson-player "https://youtu.be/..."   # YouTube 받아서 재생
 | `Z / X` | 자막 싱크 -0.5초 / +0.5초 |
 | `, / .` | 자막 싱크 -0.1초 / +0.1초 |
 | `G` | 🤖 AI 자막 생성 (Whisper, 음성 인식) |
+| `Shift + G` | 🌐 켜 둔 자막을 한국어(설정 언어)로 번역 |
 
 #### 부가 기능
 | 조작 | 기능 |
@@ -162,6 +173,8 @@ jetson_player/
   mpris.py                  # MPRIS2 D-Bus 서비스
   system.py                 # 파일 관리자 연동, Jetson 온도/GPU/RAM, 로컬 IP
   ai/whisper.py             # AI 자막 (whisper.cpp 실행, 음성 추출, SRT 저장)
+  ai/translate.py           # 자막 번역 (llama.cpp 로컬 / Claude API)
+  media/codecs.py           # NVDEC 지원 형식 판별
   media/gst_setup.py        # NVDEC 우선순위, HW 영상 출력(nvvidconv) 구성
   media/thumbnails.py       # 썸네일 생성, 정밀 장면 분석
   media/scenes.py           # 장면 전환 검출 (중앙값/MAD 기준)
@@ -169,11 +182,14 @@ jetson_player/
   subtitles/timeline.py     # 재생 위치별 표시 대사 조회
   remote/                   # 웹 리모컨: HTTP 핸들러, PIN 인증, SSE, 정적 페이지
   ui/window.py              # 메인 창: 상태 초기화, 키 처리, 종료
-  ui/*.py                   # 기능별 mixin (playback, controls, timeline, playlist, subtitles,
+  ui/*.py                   # 기능별 mixin (state, playback, controls, timeline, playlist, subtitles,
                             #   subtitle_overlay, ai, viewing, library, features, remote, youtube, menu, layout)
   ui/style.css              # GTK 테마
   vendor/qrcodegen.py       # QR 코드 생성 (MIT, Project Nayuki)
 scripts/setup_whisper.sh    # AI 자막 엔진 설치
+scripts/setup_translator.sh # 자막 번역 엔진 설치
+scripts/check_deps.py       # 실행 환경 점검
+.github/workflows/tests.yml # CI: 정적 검사 + 테스트
 tests/                      # pytest (GTK 없이 실행되는 모듈 테스트)
 ```
 
