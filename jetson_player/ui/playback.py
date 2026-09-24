@@ -393,7 +393,9 @@ class PlaybackMixin:
                 self.fs_position_label.set_text("00:00")
             if getattr(self, "fs_duration_label", None):
                 self.fs_duration_label.set_text("00:00")
+            self.toc_chapters = None
             self.refresh_timeline_marks()
+            self.start_thumbnails(video_path)
             self.decoder_names.clear()
             self.last_dropped_frames = 0
             self.last_ui_pos_sec = -1
@@ -620,6 +622,9 @@ class PlaybackMixin:
                 print("⏭ 반복 오류 항목을 건너뜁니다.")
                 self.show_osd(f"⏭ 재생 실패로 건너뜁니다: {name}", duration_sec=3.5)
                 self.play_next_video()
+
+        elif message.type == Gst.MessageType.TOC:
+            self.handle_toc_message(message)
 
         elif message.type == Gst.MessageType.ASYNC_DONE:
             self._detect_embedded_subtitles()

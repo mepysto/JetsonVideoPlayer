@@ -353,6 +353,10 @@ class JetsonSignageFlexiblePlayer(
 
     def on_destroy(self, widget):
         self.is_destroyed = True
+        for job_name in ("thumb_job", "scene_job"):
+            job = getattr(self, job_name, None)
+            if job:
+                job.cancel()
         try:
             self.stop_web_remote_server()
             hw_cache.save()
