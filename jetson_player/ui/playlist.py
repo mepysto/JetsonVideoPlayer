@@ -3,6 +3,9 @@ import os
 
 from gi.repository import GLib, Gdk, Gtk, Pango
 
+from ..library import sort_video_paths
+from ..settings import settings
+from ..storage import resume_cache
 from ..system import open_file_location
 from ..youtube import youtube_mgr
 
@@ -17,10 +20,15 @@ class PlaylistPanelMixin:
         heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         title = Gtk.Label(label="재생목록", xalign=0)
         title.get_style_context().add_class("section-title")
-        count = Gtk.Label(label=f"{len(self.playlist)}개 영상", xalign=1)
-        count.get_style_context().add_class("muted")
+        self.playlist_count_label = Gtk.Label(label=f"{len(self.playlist)}개", xalign=1)
+        self.playlist_count_label.get_style_context().add_class("muted")
+        self.sort_button = Gtk.Button(label="↕ 이름순")
+        self.sort_button.get_style_context().add_class("tree-tool-btn")
+        self.sort_button.set_tooltip_text("재생목록 정렬 기준 변경 (이름 → 최근 수정 → 크기)")
+        self.sort_button.connect("clicked", self.cycle_playlist_sort)
         heading.pack_start(title, True, True, 0)
-        heading.pack_end(count, False, False, 0)
+        heading.pack_end(self.sort_button, False, False, 0)
+        heading.pack_end(self.playlist_count_label, False, False, 0)
         panel.pack_start(heading, False, False, 2)
 
         # 검색창
@@ -154,6 +162,14 @@ class PlaylistPanelMixin:
                     play_item = Gtk.MenuItem(label="▶️ 지금 재생")
                     play_item.connect("activate", lambda _m: self.play_index_direct(item_idx))
                     menu.append(play_item)
+
+                    if file_path in self.play_queue:
+                        q_item = Gtk.MenuItem(label="✕ 대기열에서 제거")
+                        q_item.connect("activate", lambda _m: self.unqueue(file_path))
+                    else:
+                        q_item = Gtk.MenuItem(label="⏭ 다음에 재생 (대기열 추가)")
+                        q_item.connect("activate", lambda _m: self.queue_next(file_path))
+                    menu.append(q_item)
 
                 menu.append(Gtk.SeparatorMenuItem())
 
@@ -293,12 +309,85 @@ class PlaylistPanelMixin:
             if alloc_w > 0:
                 self.main_paned.set_position(max(200, alloc_w - self.sidebar_width))
 
+    def _video_row_style(self, idx, path):
+        """재생목록 영상 행의 아이콘과 Pango 마크업: 재생 중(▶), 시청 완료(✓), 진행률, 대기열 순번, 삭제된 파일"""
+        safe_name = GLib.markup_escape_text(os.path.basename(path))
+        is_active = idx == self.current_index
+        suffix = ""
+        queue = getattr(self, "play_queue", [])
+        if path in queue:
+            suffix += f"  <span color='#111318' background='#e9ff5b' size='smaller' weight='bold'> 다음 {queue.index(path) + 1} </span>"
+        if not os.path.exists(path):
+            return "⚠", f"<span color='#5b6474' strikethrough='true'>{safe_name}</span>{suffix}"
+        ratio, watched = resume_cache.get_progress(path)
+        if ratio is not None and not is_active:
+            filled = max(1, min(5, int(round(ratio * 5))))
+            bar = "▰" * filled + "▱" * (5 - filled)
+            suffix = f"  <span color='#70798a' size='smaller'>{bar} {int(ratio * 100)}%</span>" + suffix
+        if is_active:
+            return "▶", f"<span color='#e9ff5b' weight='bold'>{safe_name}</span>{suffix}"
+        if watched and ratio is None:
+            return "✓", f"<span color='#8f98a8'>{safe_name}</span>{suffix}"
+        return "🎬", f"<span color='#dce2ec'>{safe_name}</span>{suffix}"
+
+    # ---- 정렬 / 대기열 -------------------------------------------------
+    SORT_LABELS = {"name": "이름순", "mtime": "최근 수정순", "size": "크기순"}
+
+    def cycle_playlist_sort(self, _button=None):
+        order = ["name", "mtime", "size"]
+        cur = settings.get("playlist_sort")
+        mode = order[(order.index(cur) + 1) % len(order)] if cur in order else "name"
+        settings.set("playlist_sort", mode)
+        self.apply_playlist_sort()
+        self.show_osd(f"↕ 재생목록 정렬: {self.SORT_LABELS[mode]}")
+
+    def apply_playlist_sort(self):
+        """현재 재생 중인 영상을 유지한 채 재생목록을 설정된 기준으로 다시 정렬합니다."""
+        mode = settings.get("playlist_sort")
+        if getattr(self, "sort_button", None):
+            self.sort_button.set_label(f"↕ {self.SORT_LABELS.get(mode, '이름순')}")
+        if not self.playlist:
+            return
+        current = self.playlist[self.current_index] if 0 <= self.current_index < len(self.playlist) else None
+        self.playlist = sort_video_paths(self.playlist, mode)
+        if current in self.playlist:
+            self.current_index = self.playlist.index(current)
+        self.populate_playlist_tree()
+        self.refresh_playlist_ui()
+
+    def queue_next(self, path):
+        """영상을 "다음에 재생" 대기열 끝에 추가합니다 (이미 있으면 무시)."""
+        if path not in self.play_queue:
+            self.play_queue.append(path)
+            self.show_osd(f"⏭ 다음에 재생 ({len(self.play_queue)}번째): {os.path.basename(path)[:30]}")
+            self.refresh_playlist_ui()
+
+    def unqueue(self, path):
+        if path in self.play_queue:
+            self.play_queue.remove(path)
+            self.show_osd("대기열에서 제거했습니다.")
+            self.refresh_playlist_ui()
+
+    def pop_queued_index(self):
+        """대기열에서 재생목록에 남아 있는 첫 영상의 인덱스를 꺼냅니다."""
+        while self.play_queue:
+            path = self.play_queue.pop(0)
+            if path in self.playlist:
+                return self.playlist.index(path)
+        return None
+
+    def _video_row(self, idx, path):
+        icon, markup = self._video_row_style(idx, path)
+        return [icon, markup, path, idx, False]
+
     def populate_playlist_tree(self):
         """재생목록을 디렉토리 계층 구조의 트리로 구축합니다 (검색 필터 및 유튜브 가상 폴더 지원)."""
         if not self.tree_store:
             return
         self.tree_store.clear()
         self.playlist_tree_iters.clear()
+        if getattr(self, "playlist_count_label", None):
+            self.playlist_count_label.set_text(f"{len(self.playlist)}개")
 
         if not self.playlist:
             return
@@ -314,11 +403,9 @@ class PlaylistPanelMixin:
 
         if not abs_root:
             for idx, p in filtered_items:
-                fname = os.path.basename(p)
-                safe_name = GLib.markup_escape_text(fname)
                 v_iter = self.tree_store.append(
                     None,
-                    ["🎬", f"<span>{safe_name}</span>", p, idx, False]
+                    self._video_row(idx, p)
                 )
                 self.playlist_tree_iters[idx] = v_iter
             return
@@ -379,10 +466,9 @@ class PlaylistPanelMixin:
                 else:
                     parent_iter = dir_iters[cur_p]
 
-            safe_name = GLib.markup_escape_text(fname)
             v_iter = self.tree_store.append(
                 parent_iter,
-                ["🎬", f"<span>{safe_name}</span>", p, idx, False]
+                self._video_row(idx, p)
             )
             self.playlist_tree_iters[idx] = v_iter
 
@@ -394,11 +480,9 @@ class PlaylistPanelMixin:
                 ["📁", yt_root_lbl, yt_dir, -1, True]
             )
             for idx, p in external_yt_items:
-                fname = os.path.basename(p)
-                safe_name = GLib.markup_escape_text(fname)
                 v_iter = self.tree_store.append(
                     yt_parent,
-                    ["🎬", f"<span>{safe_name}</span>", p, idx, False]
+                    self._video_row(idx, p)
                 )
                 self.playlist_tree_iters[idx] = v_iter
 
@@ -410,11 +494,9 @@ class PlaylistPanelMixin:
                 ["📁", ext_root_lbl, "", -1, True]
             )
             for idx, p in external_other_items:
-                fname = os.path.basename(p)
-                safe_name = GLib.markup_escape_text(fname)
                 v_iter = self.tree_store.append(
                     ext_parent,
-                    ["🎬", f"<span>{safe_name}</span>", p, idx, False]
+                    self._video_row(idx, p)
                 )
                 self.playlist_tree_iters[idx] = v_iter
 
@@ -487,24 +569,11 @@ class PlaylistPanelMixin:
             if not self.tree_store.iter_is_valid(tree_iter):
                 continue
             path_val = self.tree_store.get_value(tree_iter, 2)
-            fname = os.path.basename(path_val)
-            safe_name = GLib.markup_escape_text(fname)
-
+            icon, markup = self._video_row_style(idx, path_val)
+            self.tree_store.set_value(tree_iter, 0, icon)
+            self.tree_store.set_value(tree_iter, 1, markup)
             if idx == self.current_index:
                 active_iter = tree_iter
-                self.tree_store.set_value(tree_iter, 0, "▶")
-                self.tree_store.set_value(
-                    tree_iter,
-                    1,
-                    f"<span color='#e9ff5b' weight='bold'>{safe_name}</span>"
-                )
-            else:
-                self.tree_store.set_value(tree_iter, 0, "🎬")
-                self.tree_store.set_value(
-                    tree_iter,
-                    1,
-                    f"<span color='#dce2ec'>{safe_name}</span>"
-                )
 
         if active_iter and self.playlist_treeview:
             tree_path = self.tree_store.get_path(active_iter)
@@ -520,7 +589,7 @@ class PlaylistPanelMixin:
             return
         tree_iter = self.playlist_tree_iters[idx]
         if self.tree_store.iter_is_valid(tree_iter):
-            fname = os.path.basename(new_path)
-            safe_name = GLib.markup_escape_text(fname)
-            self.tree_store.set_value(tree_iter, 1, f"<span>{safe_name}</span>")
+            icon, markup = self._video_row_style(idx, new_path)
+            self.tree_store.set_value(tree_iter, 0, icon)
+            self.tree_store.set_value(tree_iter, 1, markup)
             self.tree_store.set_value(tree_iter, 2, new_path)

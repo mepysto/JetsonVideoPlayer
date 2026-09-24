@@ -9,7 +9,8 @@ from urllib.parse import unquote
 
 from gi.repository import GLib, Gst, GstPbutils, Gtk
 
-from ..library import VIDEO_EXTS, scan_video_files
+from ..library import VIDEO_EXTS, scan_video_files, sort_video_paths
+from ..settings import settings
 from ..storage import history_cache, hw_cache
 from ..subtitles.parse import get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
 from ..youtube import is_youtube_url
@@ -139,7 +140,7 @@ class LibraryMixin:
         valid_files = [f for f in files if os.path.splitext(f)[1].lower() in VIDEO_EXTS]
         if not valid_files:
             return
-        self.playlist = sorted(valid_files)
+        self.playlist = sort_video_paths(valid_files, settings.get("playlist_sort"))
         self.input_path = os.path.dirname(valid_files[0]) if len(valid_files) > 1 else valid_files[0]
         self.current_index = 0
         self.is_single_file_mode = (len(valid_files) == 1)
@@ -353,6 +354,7 @@ class LibraryMixin:
                 self.playlist.append(final_path)
                 processed_set.add(final_path)
 
+        self.playlist = sort_video_paths(self.playlist, settings.get("playlist_sort"))
         mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
         print(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 영상을 로드했습니다.")
         for idx, path in enumerate(self.playlist):

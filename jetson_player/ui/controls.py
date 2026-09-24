@@ -15,6 +15,8 @@ class ControlsMixin:
                 pass
         if not getattr(self, "osd_box", None) or not getattr(self, "osd_label", None):
             return
+        if getattr(self, "_restoring_settings", False):
+            return
         self.osd_label.set_text(text)
         self.osd_box.show_all()
         if getattr(self, "osd_timer_id", None):

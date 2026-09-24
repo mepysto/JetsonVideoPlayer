@@ -4,6 +4,7 @@ import threading
 
 from gi.repository import GLib, Gdk, Gst, Gtk
 
+from ..settings import settings
 from ..media.gst_setup import enable_x11_compositor_bypass, optimize_gstreamer_ranks
 from ..storage import bookmark_cache, history_cache, hw_cache, resume_cache
 from ..youtube import is_youtube_url
@@ -40,7 +41,7 @@ class JetsonSignageFlexiblePlayer(
 
         # 1. 플레이어 창 설정 (일반 데스크탑 창 모드로 시작, F 키로 전체화면 전환)
         self.set_decorated(True)
-        self.set_default_size(1280, 720)
+        self.set_default_size(settings.get("window_width"), settings.get("window_height"))
         self.set_position(Gtk.WindowPosition.CENTER)
         
         # 이벤트 연결 (종료, 키보드 및 마우스 감지)
@@ -76,7 +77,7 @@ class JetsonSignageFlexiblePlayer(
         self.is_keep_above = False
         self.sidebar_was_visible = True
         self.main_paned = None
-        self.sidebar_width = 360
+        self.sidebar_width = settings.get("sidebar_width")
         self.is_adjusting_paned = False
         self.is_wrap_enabled = False
         self.r_text = None
@@ -114,7 +115,7 @@ class JetsonSignageFlexiblePlayer(
         self.fs_mute_btn = None
 
         # 재생 모드 (all: 전체 반복, one: 1곡 반복, none: 순차 후 정지, shuffle: 셔플 무작위)
-        self.repeat_mode = "all"
+        self.repeat_mode = settings.get("repeat_mode")
         self.repeat_btn = None
 
         # 마우스 단일/더블 클릭 제어 타이머
@@ -158,6 +159,8 @@ class JetsonSignageFlexiblePlayer(
 
         # 검색 필터 텍스트
         self.search_text = ""
+        # "다음에 재생" 대기열 (파일 경로 목록, 정렬/목록 변경에도 유지)
+        self.play_queue = []
         self.search_entry = None
 
         # 전체화면 플로팅 컨트롤 바 및 OSD 상태 변수
@@ -186,14 +189,14 @@ class JetsonSignageFlexiblePlayer(
         self.last_known_pos_ns = 0  # 자막 전환 시 0초 튕김 방지용 백업 위치
         self.is_updating_sub_checkboxes = False  # 모두 선택/해제 일괄 변경 락
         self.sub_reload_timer_id = None  # 자막 리로드 디바운스 타이머
-        self.subtitle_font_scale = 1.0  # 자막 크기 스케일 (0.6 ~ 1.6)
+        self.subtitle_font_scale = settings.get("subtitle_font_scale")  # 자막 크기 스케일 (0.6 ~ 1.6)
         self.subtitle_offset_ms = 0  # 자막 싱크 오프셋 (ms 단위, 음수: 빠르게, 양수: 느리게)
         self.scale_label = None
         self.sync_label = None
         self.sub_popover = None
         # 컨테이너 내장 자막(MKV 등) 상태: 외부 자막이 없을 때 playbin이 자동 표시하는 트랙
         self.n_embedded_text = 0
-        self.embedded_subs_enabled = True
+        self.embedded_subs_enabled = settings.get("embedded_subs_enabled")
         self.subtitle_overlays = []  # 현재 파이프라인의 textoverlay/subtitleoverlay (silent 토글용)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
@@ -213,7 +216,14 @@ class JetsonSignageFlexiblePlayer(
         self.video_widget.set_size_request(640, 480)
         self.video_widget.connect("realize", self.on_realize)
 
+        # 설정 복원 중에는 OSD 알림을 띄우지 않습니다.
+        self._restoring_settings = True
+        self.is_maximized = False
+        self.connect("window-state-event", self._on_window_state_event)
+
         self.build_ui()
+        self._apply_saved_settings()
+        self.apply_playlist_sort()
 
         # 4. GStreamer 핵심 파이프라인 변수 초기화
         self.pipeline = None
@@ -240,7 +250,52 @@ class JetsonSignageFlexiblePlayer(
             return False
         for cache in (resume_cache, bookmark_cache, history_cache):
             cache.save()
+        self._capture_settings()
+        settings.save()
         return True
+
+    def _apply_saved_settings(self):
+        """저장된 사용자 설정을 UI와 재생 상태에 적용합니다 (build_ui 이후 호출)."""
+        self.volume_scale.set_value(settings.get("volume"))
+        if settings.get("muted"):
+            self.toggle_mute()
+        self.set_repeat_mode(self.repeat_mode)
+        if not settings.get("sidebar_visible"):
+            self.sidebar.set_visible(False)
+        if settings.get("window_maximized"):
+            self.maximize()
+        if settings.get("hud_visible"):
+            GLib.idle_add(lambda: (self.toggle_hud() if not self.is_hud_visible else None, False)[1])
+        GLib.idle_add(self._finish_restoring_settings)
+
+    def _finish_restoring_settings(self):
+        self._restoring_settings = False
+        return False
+
+    def _on_window_state_event(self, _widget, event):
+        self.is_maximized = bool(event.new_window_state & Gdk.WindowState.MAXIMIZED)
+        return False
+
+    def _capture_settings(self):
+        """현재 UI/재생 상태를 설정 객체에 기록합니다 (저장은 settings.save())."""
+        volume = self.pre_mute_volume if self.is_muted else self.volume_scale.get_value()
+        sidebar_visible = self.sidebar_was_visible if self.is_video_only else self.sidebar.get_visible()
+        values = dict(
+            volume=volume,
+            muted=self.is_muted,
+            subtitle_font_scale=self.subtitle_font_scale,
+            repeat_mode=self.repeat_mode,
+            sidebar_width=self.sidebar_width,
+            sidebar_visible=sidebar_visible,
+            hud_visible=self.is_hud_visible,
+            embedded_subs_enabled=self.embedded_subs_enabled,
+        )
+        if not self.is_video_only and not self.is_maximized:
+            width, height = self.get_size()
+            values.update(window_width=width, window_height=height)
+        if not self.is_video_only:
+            values["window_maximized"] = self.is_maximized
+        settings.update(**values)
 
     def on_realize(self, widget):
         """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작하고 백그라운드 검사기를 가동합니다."""
@@ -428,8 +483,10 @@ class JetsonSignageFlexiblePlayer(
             resume_cache.save()
             bookmark_cache.save()
             history_cache.save()
-        except Exception:
-            pass
+            self._capture_settings()
+            settings.save()
+        except Exception as e:
+            print(f"⚠️ 종료 시 저장 실패: {e}")
 
         if getattr(self, "cache_flush_timer_id", None):
             try:

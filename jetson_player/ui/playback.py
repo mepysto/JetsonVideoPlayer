@@ -502,12 +502,15 @@ class PlaybackMixin:
             if not has_current:
                 return
             self.retry_counts.pop(self.playlist[self.current_index], None)
-            # 재생 완료 시 이어보기 캐시 삭제
+            # 재생 완료: 이어보기 위치를 지우고 시청 완료(✓)로 표시
             if has_current:
-                resume_cache.clear(self.playlist[self.current_index])
+                resume_cache.mark_completed(self.playlist[self.current_index], self.duration_ns)
                 resume_cache.save()
 
-            if self.repeat_mode == "one" or self.is_single_file_mode:
+            if self.play_queue:
+                # 사용자가 지정한 "다음에 재생" 대기열이 반복 모드보다 우선합니다.
+                self.play_next_video()
+            elif self.repeat_mode == "one" or self.is_single_file_mode:
                 print("🔄 1곡 반복: 처음부터 다시 재생합니다.")
                 GLib.timeout_add(10, self.play_current_video, 0)
             elif self.repeat_mode == "shuffle" and len(self.playlist) > 1:
@@ -646,7 +649,12 @@ class PlaybackMixin:
         """다음 영상으로 전환합니다."""
         if not self.playlist:
             return
-        if self.is_single_file_mode:
+        queued_idx = self.pop_queued_index()
+        if queued_idx is not None:
+            self.current_index = queued_idx
+            print("⏭ 대기열의 다음 영상을 재생합니다.")
+            GLib.timeout_add(50, self.play_current_video, 0)
+        elif self.is_single_file_mode:
             GLib.timeout_add(10, self.play_current_video, 0)
         elif self.repeat_mode == "shuffle" and len(self.playlist) > 1:
             next_idx = self.current_index

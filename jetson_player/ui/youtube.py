@@ -39,10 +39,8 @@ class YouTubeMixin:
 
     def _restore_empty_or_loading_state(self):
         self.hide_yt_loading()
-        if not self.playlist and getattr(self, "placeholder_box", None):
-            self.placeholder_box.set_no_show_all(False)
-            self.placeholder_box.show_all()
-            self.placeholder_box.set_no_show_all(True)
+        if not self.playlist:
+            self.show_placeholder()
         return False
 
     def start_youtube_download(self, url, quality="best"):

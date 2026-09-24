@@ -20,3 +20,18 @@ def scan_video_files(dir_path):
                     found.append(full_p)
     found.sort()
     return found
+
+
+def sort_video_paths(paths, mode="name"):
+    """재생목록 정렬: name(경로 이름순), mtime(최근 수정 먼저), size(큰 파일 먼저)"""
+    def stat_or_zero(path, attr):
+        try:
+            return getattr(os.stat(path), attr)
+        except OSError:
+            return 0
+
+    if mode == "mtime":
+        return sorted(paths, key=lambda p: (-stat_or_zero(p, "st_mtime"), p))
+    if mode == "size":
+        return sorted(paths, key=lambda p: (-stat_or_zero(p, "st_size"), p))
+    return sorted(paths)

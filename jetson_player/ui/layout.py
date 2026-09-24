@@ -1,7 +1,9 @@
 """메인 창 위젯 트리 구성"""
 import os
 
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, Gtk, Pango
+
+from ..storage import resume_cache
 
 
 STYLE_CSS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style.css")
@@ -160,6 +162,11 @@ class LayoutMixin:
         self.placeholder_box.pack_start(ph_title, False, False, 0)
         self.placeholder_box.pack_start(ph_sub, False, False, 0)
         self.placeholder_box.pack_start(ph_btn_box, False, False, 4)
+
+        # 이어보기 카드 (최근 시청 중이던 영상)
+        self.resume_cards_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.resume_cards_box.set_margin_top(10)
+        self.placeholder_box.pack_start(self.resume_cards_box, False, False, 0)
         self.placeholder_box.set_no_show_all(True)
         self.video_container.add_overlay(self.placeholder_box)
 
@@ -337,7 +344,51 @@ class LayoutMixin:
         root.pack_end(self.controls, False, False, 0)
 
         if not self.playlist and not getattr(self, "initial_yt_url", None):
-            if getattr(self, "placeholder_box", None):
-                self.placeholder_box.show_all()
+            self.show_placeholder()
 
         self.refresh_playlist_ui()
+
+    def show_placeholder(self):
+        """대기 화면(열기 버튼 + 이어보기 카드)을 표시합니다."""
+        if not getattr(self, "placeholder_box", None):
+            return
+        self.refresh_resume_cards()
+        self.placeholder_box.set_no_show_all(False)
+        self.placeholder_box.show_all()
+        self.placeholder_box.set_no_show_all(True)
+
+    def refresh_resume_cards(self):
+        """최근 시청 중이던 영상을 진행률과 함께 카드로 표시합니다. 클릭하면 이어서 재생합니다."""
+        box = getattr(self, "resume_cards_box", None)
+        if box is None:
+            return
+        for child in box.get_children():
+            box.remove(child)
+        recent = resume_cache.recent_in_progress(limit=4)
+        if not recent:
+            return
+        header = Gtk.Label(label="⏱️ 이어보기", xalign=0)
+        header.get_style_context().add_class("resume-header")
+        box.pack_start(header, False, False, 0)
+        for path, pos_ns, dur_ns in recent:
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("resume-card")
+            btn.set_tooltip_text(path)
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            title = Gtk.Label(label=os.path.basename(path), xalign=0)
+            title.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+            title.set_max_width_chars(48)
+            title.get_style_context().add_class("resume-title")
+            inner.pack_start(title, False, False, 0)
+            bar = Gtk.ProgressBar()
+            bar.get_style_context().add_class("resume-progress")
+            bar.set_fraction(max(0.0, min(1.0, pos_ns / dur_ns)) if dur_ns > 0 else 0.0)
+            inner.pack_start(bar, False, False, 0)
+            folder = os.path.basename(os.path.dirname(path))
+            dur_str = f" / {self.format_time(dur_ns)}" if dur_ns > 0 else ""
+            meta = Gtk.Label(label=f"{self.format_time(pos_ns)}{dur_str}  ·  📁 {folder}", xalign=0)
+            meta.get_style_context().add_class("muted")
+            inner.pack_start(meta, False, False, 0)
+            btn.add(inner)
+            btn.connect("clicked", lambda _b, p=path: self.load_path(p))
+            box.pack_start(btn, False, False, 0)
