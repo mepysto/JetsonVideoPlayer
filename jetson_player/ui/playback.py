@@ -396,6 +396,7 @@ class PlaybackMixin:
             self.toc_chapters = None
             self.refresh_timeline_marks()
             self.start_thumbnails(video_path)
+            self.cancel_ai_subtitles()
             self.decoder_names.clear()
             self.last_dropped_frames = 0
             self.last_ui_pos_sec = -1

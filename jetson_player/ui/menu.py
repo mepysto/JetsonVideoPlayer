@@ -69,9 +69,10 @@ class MenuMixin:
     def more_menu_video_items(self):
         """현재 영상 관련 추가 항목 [(라벨, 콜백), ...]"""
         return [
+            (self.ai_menu_label(), self.start_ai_subtitles),
             ("📑 챕터 / 장면 목록 (K)", self.show_chapters_menu),
         ]
 
     def more_menu_setting_items(self):
         """재생/화면 설정 항목 [("item"|"check"|"submenu", ...)]"""
-        return []
+        return list(self.ai_setting_entries())

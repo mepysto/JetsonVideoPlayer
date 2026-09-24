@@ -97,3 +97,10 @@ def test_atomic_write_json(jp, tmp_path):
 def test_strip_markup(jp):
     assert jp.strip_markup("<i>Hello</i> &amp; <span foreground='red'>bye</span>") == "Hello & bye"
     assert jp.strip_markup("plain") == "plain"
+
+
+def test_ai_subtitle_label_and_color(jp):
+    assert jp.get_subtitle_label("/x/movie.ai.en.srt") == "🤖 AI 영어 (movie.ai.en.srt)"
+    assert jp.get_subtitle_label("/x/movie.ai.ko.srt").startswith("🤖 AI 한국어")
+    assert jp.get_subtitle_color("/x/movie.ai.en.srt") == jp.AI_SUBTITLE_COLOR
+    assert jp.get_subtitle_label("/x/movie.ai.auto.srt") == "🤖 AI 자막 (movie.ai.auto.srt)"

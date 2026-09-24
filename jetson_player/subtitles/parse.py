@@ -19,9 +19,19 @@ LANGUAGE_COLORS = {
 FALLBACK_PALETTE = ["#B388FF", "#80CBC4", "#FFF59D", "#FFAB91", "#CE93D8", "#80DEEA"]
 
 
+AI_SUBTITLE_COLOR = "#B388FF"
+
+
+def is_ai_subtitle(file_path):
+    """플레이어가 생성한 AI 자막 파일(<영상>.ai.<언어>.srt)인지"""
+    return ".ai." in os.path.basename(file_path).lower()
+
+
 def get_subtitle_color(file_path, index=0):
     """자막 파일의 언어 태그를 분석하여 언어별 최적 고대비 고유 색상을 반환합니다."""
     stem = os.path.basename(file_path).lower()
+    if is_ai_subtitle(file_path):
+        return AI_SUBTITLE_COLOR
     if any(k in stem for k in ['.ko', '.kor', '.kr', '_ko', '_kor', '_kr', '.korean', '한국어', '한글']):
         return LANGUAGE_COLORS['ko']
     elif any(k in stem for k in ['.en', '.eng', '_en', '_eng', '.english', '영어', '영문']):
@@ -191,6 +201,11 @@ def get_subtitle_label(file_path):
     base = os.path.basename(file_path)
     stem, _ext = os.path.splitext(base)
     stem_lower = stem.lower()
+    if is_ai_subtitle(file_path):
+        # AI 자막: "🤖 AI " 접두사 + 언어 (아래 규칙으로 언어 판별)
+        plain = get_subtitle_label(os.path.join(os.path.dirname(file_path), base.lower().replace(".ai.", ".")))
+        language = plain.split(" (")[0].split(" ", 1)[-1] if not plain.startswith("📄") else "자막"
+        return f"🤖 AI {language} ({base})"
     
     # 한국어
     if any(k in stem_lower for k in ['.ko', '.kor', '.kr', '_ko', '_kor', '_kr', '.korean', '한국어', '한글']):

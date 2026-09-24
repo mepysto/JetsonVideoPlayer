@@ -20,6 +20,7 @@ from .playback import PlaybackMixin
 from .subtitles import SubtitlesMixin
 from .menu import MenuMixin
 from .timeline import TimelineMixin
+from .ai import AiSubtitlesMixin
 
 
 class JetsonSignageFlexiblePlayer(
@@ -34,6 +35,7 @@ class JetsonSignageFlexiblePlayer(
     SubtitlesMixin,
     MenuMixin,
     TimelineMixin,
+    AiSubtitlesMixin,
     Gtk.Window,
 ):
     """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""
@@ -202,6 +204,8 @@ class JetsonSignageFlexiblePlayer(
         self.embedded_subs_enabled = settings.get("embedded_subs_enabled")
         self.subtitle_overlays = []  # 현재 파이프라인의 textoverlay/subtitleoverlay (silent 토글용)
         self.embedded_track = None  # 내장 자막 텍스트 (appsink로 수신, 오버레이로 표시)
+        self.ai_job = None     # AI 자막 생성 작업 (whisper.cpp)
+        self.ai_status = None  # (상태 문구, 진행률)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
         self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
@@ -353,7 +357,7 @@ class JetsonSignageFlexiblePlayer(
 
     def on_destroy(self, widget):
         self.is_destroyed = True
-        for job_name in ("thumb_job", "scene_job"):
+        for job_name in ("thumb_job", "scene_job", "ai_job"):
             job = getattr(self, job_name, None)
             if job:
                 job.cancel()

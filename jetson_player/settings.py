@@ -29,6 +29,7 @@ DEFAULTS = {
     "remote_pin": "",
     "whisper_model": "small-q5_1",
     "whisper_language": "auto",
+    "whisper_translate": False,
 }
 
 REPEAT_MODES = ("all", "one", "none", "shuffle")
