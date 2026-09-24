@@ -128,32 +128,35 @@ class ThumbnailJob:
         n = sample_count(duration)
         positions, files, signatures = [], [], []
         started = time.time()
-        for i in range(n):
-            if self.cancelled:
-                break
-            target = int(duration * (i + 0.5) / n)
-            pb.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target)
-            pb.get_state(3 * Gst.SECOND)
-            sample = sink.emit("try-pull-preroll", 2 * Gst.SECOND)
-            if sample is None:
-                continue
-            buf = sample.get_buffer()
-            pts = buf.pts if buf.pts != Gst.CLOCK_TIME_NONE else target
-            if positions and abs(pts - positions[-1]) < Gst.SECOND // 2:
-                continue  # 같은 키프레임으로 다시 탐색된 경우
-            data = buf.extract_dup(0, buf.get_size())
-            fname = f"{len(files):03d}.jpg"
-            pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(data), GdkPixbuf.Colorspace.RGB, True, 8,
-                                                     THUMB_WIDTH, thumb_h, THUMB_WIDTH * 4)
-            pixbuf.savev(os.path.join(out_dir, fname), "jpeg", ["quality"], ["80"])
-            positions.append(pts)
-            files.append(fname)
-            signatures.append(image_signature(data, THUMB_WIDTH, thumb_h))
-            if self.on_progress and len(files) % 10 == 0:
-                snapshot = {"dir": out_dir, "positions": list(positions), "files": list(files), "scenes": []}
-                GLib.idle_add(lambda s=snapshot: (self.on_progress(s), False)[1])
-            time.sleep(0.02)  # 재생 중인 영상의 디코딩/IO에 양보
-        pb.set_state(Gst.State.NULL)
+        try:
+            for i in range(n):
+                if self.cancelled:
+                    break
+                target = int(duration * (i + 0.5) / n)
+                pb.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target)
+                pb.get_state(3 * Gst.SECOND)
+                sample = sink.emit("try-pull-preroll", 2 * Gst.SECOND)
+                if sample is None:
+                    continue
+                buf = sample.get_buffer()
+                pts = buf.pts if buf.pts != Gst.CLOCK_TIME_NONE else target
+                if positions and abs(pts - positions[-1]) < Gst.SECOND // 2:
+                    continue  # 같은 키프레임으로 다시 탐색된 경우
+                data = buf.extract_dup(0, buf.get_size())
+                fname = f"{len(files):03d}.jpg"
+                pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(data), GdkPixbuf.Colorspace.RGB, True, 8,
+                                                         THUMB_WIDTH, thumb_h, THUMB_WIDTH * 4)
+                pixbuf.savev(os.path.join(out_dir, fname), "jpeg", ["quality"], ["80"])
+                positions.append(pts)
+                files.append(fname)
+                signatures.append(image_signature(data, THUMB_WIDTH, thumb_h))
+                if self.on_progress and len(files) % 10 == 0:
+                    snapshot = {"dir": out_dir, "positions": list(positions), "files": list(files), "scenes": []}
+                    GLib.idle_add(lambda s=snapshot: (self.on_progress(s), False)[1])
+                time.sleep(0.02)  # 재생 중인 영상의 디코딩/IO에 양보
+        finally:
+            # 예외가 나도 파이프라인을 정리해 NVDEC 디코더 세션을 반납합니다.
+            pb.set_state(Gst.State.NULL)
         if self.cancelled or not files:
             return
 
@@ -262,11 +265,13 @@ class SceneAnalysisJob:
                     state["duration"] = dur
         bus.connect("message", on_message)
         started = time.time()
-        pb.set_state(Gst.State.PLAYING)
-        loop.run()
-        pb.set_state(Gst.State.NULL)
-        bus.remove_signal_watch()
-        ctx.pop_thread_default()
+        try:
+            pb.set_state(Gst.State.PLAYING)
+            loop.run()
+        finally:
+            pb.set_state(Gst.State.NULL)   # 예외가 나도 NVDEC 디코더 세션 반납
+            bus.remove_signal_watch()
+            ctx.pop_thread_default()
         if self.cancelled:
             return None
         if error:

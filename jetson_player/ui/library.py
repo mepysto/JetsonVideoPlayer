@@ -387,13 +387,16 @@ class LibraryMixin:
                     name_no_ext, _ext = os.path.splitext(os.path.basename(path))
                     target_h265 = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
                     if os.path.exists(target_h265):
-                        GLib.idle_add(self._apply_background_h265_path, idx, target_h265)
+                        GLib.idle_add(self._apply_background_h265_path, path, target_h265)
                 # 현재 영상 재생 성능에 영향을 주지 않도록 파일 간 0.05초 대기
                 time.sleep(0.05)
 
         hw_cache.save()
 
-    def _apply_background_h265_path(self, idx, new_path):
-        if 0 <= idx < len(self.playlist) and os.path.exists(new_path):
+    def _apply_background_h265_path(self, original_path, new_path):
+        # 검사 도중 재생목록이 정렬/교체되었을 수 있으므로 인덱스가 아니라 원래 경로로 찾습니다.
+        if original_path in self.playlist and os.path.exists(new_path):
+            idx = self.playlist.index(original_path)
             self.playlist[idx] = new_path
             self.update_playlist_item_ui(idx, new_path)
+        return False
