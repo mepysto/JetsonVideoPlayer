@@ -149,7 +149,7 @@ def markdown_tables():
         if cat != current:
             current = cat
             out.append(f"\n### {cat}\n| 조작 | 기능 |\n| --- | --- |")
-        keys = " / ".join(f"`{k.strip()}`" for k in key.split(" / ")) if "마우스" not in key and "진행바" not in key else key
+        keys = key if ("마우스" in key or "진행바" in key) else f"`{key}`"
         out.append(f"| {keys} | {desc} |")
     return "\n".join(out).strip() + "\n"
 
