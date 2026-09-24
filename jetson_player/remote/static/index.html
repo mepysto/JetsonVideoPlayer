@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Jetson Player Remote</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
   body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
@@ -360,25 +363,67 @@ function renderPlaylist() {
   c.innerHTML = total ? html : '<div class="empty">검색 결과가 없습니다.</div>';
 }
 
-// ---- 실시간 연결 (SSE) ------------------------------------------------------
-function connect() {
-  const es = new EventSource('/api/events');
-  es.addEventListener('status', e => { renderStatus(JSON.parse(e.data)); setOnline(true); });
-  es.addEventListener('thumbs', e => { thumbs = JSON.parse(e.data); lastThumb = ''; updateNowThumb(S.position_sec || 0); });
-  es.addEventListener('playlist', e => {
-    playlistGroups = JSON.parse(e.data);
+// ---- 실시간 연결 (SSE + 자동 복구) ----------------------------------------------
+// 폰은 화면이 꺼지거나 앱이 백그라운드로 가면 연결을 조용히 끊습니다. 서버가 5초마다 ping을 보내므로
+// 12초간 아무 이벤트도 없으면 끊긴 것으로 보고 다시 연결합니다. SSE가 계속 실패하면 1초 폴링으로 전환합니다.
+let es = null, lastEvent = 0, sseFailures = 0, pollTimer = null, reconnectTimer = null;
+
+function handleEvent(name, data) {
+  lastEvent = Date.now();
+  if (name === 'status') { renderStatus(JSON.parse(data)); setOnline(true); sseFailures = 0; }
+  else if (name === 'thumbs') { thumbs = JSON.parse(data); lastThumb = ''; updateNowThumb(S.position_sec || 0); }
+  else if (name === 'playlist') {
+    playlistGroups = JSON.parse(data);
     playlistGroups.forEach(g => { if (g.has_active) openFolders.add(g.folder); });
     renderPlaylist();
-  });
+  }
+}
+
+async function pollOnce() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    if (r.status === 401) { location.reload(); return false; }
+    const d = await r.json();
+    const groups = d.playlist_groups; delete d.playlist_groups;
+    handleEvent('status', JSON.stringify(d));
+    if (groups && JSON.stringify(groups) !== JSON.stringify(playlistGroups)) handleEvent('playlist', JSON.stringify(groups));
+    return true;
+  } catch (e) { setOnline(false); return false; }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  $('statusBadge').textContent = '연결됨 (폴링)';
+  pollTimer = setInterval(pollOnce, 1000);
+}
+
+function connect() {
+  if (es) { es.close(); es = null; }
+  clearTimeout(reconnectTimer);
+  if (sseFailures >= 3) { startPolling(); return; }
+  es = new EventSource('/api/events');
+  lastEvent = Date.now();
+  ['status', 'thumbs', 'playlist', 'ping'].forEach(name => es.addEventListener(name, e => handleEvent(name, e.data)));
+  // 연결 직후 데이터가 늦으면 상태를 한 번 직접 받아 화면을 채웁니다.
+  setTimeout(() => { if (Date.now() - lastEvent >= 3000) pollOnce(); }, 3000);
   es.onerror = async () => {
+    sseFailures++;
     setOnline(false);
-    es.close();
-    const r = await fetch('/api/status').catch(() => null);
-    if (r && r.status === 401) { location.reload(); return; }
-    setTimeout(connect, 2000);
+    if (es) { es.close(); es = null; }
+    const ok = await pollOnce();          // 401이면 로그인 화면으로
+    reconnectTimer = setTimeout(connect, ok ? 1000 : 2000);
   };
 }
-function setOnline(on) { const b = $('statusBadge'); b.textContent = on ? '연결됨' : '재연결 중...'; b.className = 'badge' + (on ? ' online' : ''); }
+
+// 연결 감시: 12초 동안 아무 이벤트(ping 포함)가 없으면 재연결
+setInterval(() => { if (!pollTimer && Date.now() - lastEvent > 12000) { sseFailures++; connect(); } }, 4000);
+// 폰 화면이 다시 켜지거나 앱으로 돌아오면 즉시 재연결
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { sseFailures = 0; if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } pollOnce(); connect(); }
+});
+window.addEventListener('online', () => { sseFailures = 0; connect(); });
+
+function setOnline(on) { const b = $('statusBadge'); if (pollTimer && on) return; b.textContent = on ? '연결됨' : '재연결 중...'; b.className = 'badge' + (on ? ' online' : ''); }
 connect();
 </script>
 </body>

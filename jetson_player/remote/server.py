@@ -13,7 +13,8 @@ import urllib.parse
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 COOKIE_NAME = "jvp_token"
 MAX_BODY = 64 * 1024
-SSE_HEARTBEAT_SEC = 15
+SSE_HEARTBEAT_SEC = 5          # 폰이 연결 생존을 판단할 수 있게 자주 ping을 보냅니다.
+SSE_WRITE_TIMEOUT_SEC = 10     # 응답 없는 클라이언트가 스레드를 붙잡지 않도록
 # 원격 명령에서 받을 수 있는 인자 (그 외는 무시)
 COMMAND_FIELDS = ("action", "val", "index", "delta", "percent", "url", "quality", "sec", "minutes")
 
@@ -25,6 +26,12 @@ def _read_static(name):
 
 REMOTE_HTML = _read_static("index.html")
 LOGIN_HTML = _read_static("login.html")
+ICON_SVG = _read_static("icon.svg")
+MANIFEST_JSON = json.dumps({
+    "name": "Jetson Player Remote", "short_name": "Jetson 리모컨", "start_url": "/", "display": "standalone",
+    "background_color": "#0c1017", "theme_color": "#0c1017",
+    "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}],
+}, ensure_ascii=False)
 
 
 class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
@@ -87,6 +94,13 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
             self._send(200, page, "text/html; charset=utf-8")
             return
 
+        if path == "/manifest.json":
+            self._send(200, MANIFEST_JSON, "application/manifest+json")
+            return
+        if path == "/icon.svg":
+            self._send(200, ICON_SVG, "image/svg+xml", {"Cache-Control": "max-age=86400"})
+            return
+
         if not path.startswith("/api/"):
             self._send(404, b"not found", "text/plain")
             return
@@ -131,10 +145,14 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        self.connection.settimeout(SSE_WRITE_TIMEOUT_SEC)
         version, latest = self.broker.snapshot()
         try:
+            # retry: 끊겼을 때 브라우저가 2초 후 자동 재연결
+            self.wfile.write(b"retry: 2000\n\n")
             for name, (_ver, data) in latest.items():
                 self.wfile.write(f"event: {name}\ndata: {data}\n\n".encode("utf-8"))
+            self.wfile.write(b"event: ping\ndata: {}\n\n")
             self.wfile.flush()
             while not self.broker.closed:
                 items, version = self.broker.wait_newer(version, SSE_HEARTBEAT_SEC)
@@ -142,7 +160,7 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
                     for name, data in items:
                         self.wfile.write(f"event: {name}\ndata: {data}\n\n".encode("utf-8"))
                 else:
-                    self.wfile.write(b": ping\n\n")
+                    self.wfile.write(b"event: ping\ndata: {}\n\n")
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
             pass
