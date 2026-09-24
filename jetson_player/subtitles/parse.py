@@ -3,6 +3,8 @@ import html
 import os
 import re
 
+from ..library import VIDEO_EXTS
+
 
 LANGUAGE_COLORS = {
     'ko': '#FFFFFF',  # 🇰🇷 한국어: 화이트 (메인 기본)
@@ -251,31 +253,36 @@ def find_all_matching_subtitles(video_path):
                 seen.add(cand)
                 found_files.append(cand)
                 
-    # 2. 언어 태그 및 확장자 매칭
+    # 같은 폴더의 영상들 — 자막 파일이 어느 영상의 것인지 판단하는 데 씁니다.
     try:
-        for fname in os.listdir(dir_name):
-            cand_path = os.path.join(dir_name, fname)
-            if not os.path.isfile(cand_path) or cand_path in seen:
-                continue
-            f_lower = fname.lower()
-            if any(f_lower.endswith(ext) for ext in sub_exts):
-                if f_lower.startswith(stem_lower) or stem_lower in f_lower:
-                    seen.add(cand_path)
-                    found_files.append(cand_path)
-    except Exception:
-        pass
-        
-    # 만약 위 규칙으로 찾은 자막이 없고 디렉토리에 자막 파일이 있다면 모두 포함
+        dir_files = [f for f in os.listdir(dir_name) if os.path.isfile(os.path.join(dir_name, f))]
+    except OSError:
+        dir_files = []
+    video_stems = {os.path.splitext(f)[0].lower() for f in dir_files if os.path.splitext(f)[1].lower() in VIDEO_EXTS}
+    video_stems.add(stem_lower)
+
+    def owner(sub_name_lower):
+        """자막 이름에 가장 길게 들어맞는 영상 이름 (없으면 None).
+        ep1/ep10처럼 앞부분이 같은 영상이 있어도 더 구체적인 쪽이 자막을 가져갑니다."""
+        matches = [v for v in video_stems if sub_name_lower.startswith(v) or v in sub_name_lower]
+        return max(matches, key=len) if matches else None
+
+    subtitle_names = [f for f in dir_files if any(f.lower().endswith(ext) for ext in sub_exts)]
+
+    # 2. 언어 태그가 붙은 자막 (movie.ko.srt 등) — 이 영상이 주인인 것만
+    for fname in subtitle_names:
+        cand_path = os.path.join(dir_name, fname)
+        if cand_path not in seen and owner(fname.lower()) == stem_lower:
+            seen.add(cand_path)
+            found_files.append(cand_path)
+
+    # 3. 그래도 없으면 어느 영상에도 속하지 않는 자막만 사용 (다른 영상의 자막/AI 자막을 가져오지 않음)
     if not found_files:
-        try:
-            for fname in os.listdir(dir_name):
-                cand_path = os.path.join(dir_name, fname)
-                if os.path.isfile(cand_path) and any(fname.lower().endswith(ext) for ext in sub_exts):
-                    if cand_path not in seen:
-                        seen.add(cand_path)
-                        found_files.append(cand_path)
-        except Exception:
-            pass
+        for fname in subtitle_names:
+            cand_path = os.path.join(dir_name, fname)
+            if cand_path not in seen and owner(fname.lower()) is None:
+                seen.add(cand_path)
+                found_files.append(cand_path)
 
     # 한국어, 영어 순서가 앞으로 오도록 스마트 정렬
     def sort_key(path):

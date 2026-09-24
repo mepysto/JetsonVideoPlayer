@@ -104,3 +104,30 @@ def test_ai_subtitle_label_and_color(jp):
     assert jp.get_subtitle_label("/x/movie.ai.ko.srt").startswith("🤖 AI 한국어")
     assert jp.get_subtitle_color("/x/movie.ai.en.srt") == jp.AI_SUBTITLE_COLOR
     assert jp.get_subtitle_label("/x/movie.ai.auto.srt") == "🤖 AI 자막 (movie.ai.auto.srt)"
+
+
+def _touch(folder, *names):
+    for n in names:
+        (folder / n).write_text("x", encoding="utf-8")
+
+
+def test_other_videos_ai_subtitle_is_not_borrowed(jp, tmp_path):
+    """다음 영상에 자막이 없을 때 이전 영상의 AI 자막을 가져오면 안 됩니다 (사용자 보고 버그)."""
+    _touch(tmp_path, "a.mp4", "b.mp4", "a.ai.en.srt")
+    assert jp.find_all_matching_subtitles(str(tmp_path / "b.mp4")) == []
+    assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "a.mp4"))] == ["a.ai.en.srt"]
+
+
+def test_prefix_named_videos_get_their_own_subtitles(jp, tmp_path):
+    _touch(tmp_path, "ep1.mkv", "ep10.mkv", "ep1.ko.srt", "ep10.ko.srt")
+    assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "ep1.mkv"))] == ["ep1.ko.srt"]
+    assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "ep10.mkv"))] == ["ep10.ko.srt"]
+
+
+def test_orphan_subtitles_still_used_as_fallback(jp, tmp_path):
+    # 변환본(_h265)처럼 이름이 다른 단일 영상 폴더의 자막은 계속 자동으로 붙어야 합니다.
+    _touch(tmp_path, "movie_h265.mp4", "movie.ko.srt")
+    assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "movie_h265.mp4"))] == ["movie.ko.srt"]
+    # 다른 영상의 자막과 주인 없는 자막이 섞여 있으면 주인 없는 것만 사용
+    _touch(tmp_path, "other.mp4", "other.en.srt")
+    assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "movie_h265.mp4"))] == ["movie.ko.srt"]
