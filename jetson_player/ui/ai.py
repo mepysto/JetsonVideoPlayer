@@ -61,7 +61,12 @@ class AiSubtitlesMixin:
             self.ai_status = None
             if error:
                 self.show_osd("⏹ AI 자막 생성을 취소했습니다." if error == "취소됨" else f"❌ AI 자막 실패: {error[:50]}", duration_sec=4.0)
-                if not entry["events"] and entry in self.available_subtitles:
+                if entry["events"]:
+                    # 일부만 인식된 채 멈춤: 이미 표시된 대사는 남기고 이름만 확정합니다 (파일로는 저장하지 않음).
+                    entry["label"] = f"🤖 AI 자막 (중단, {len(entry['events'])}문장)"
+                    entry["track"].label = entry["label"]
+                    self.update_subtitle_button_ui()
+                elif entry in self.available_subtitles:
                     self.available_subtitles.remove(entry)
                     self.active_subtitle_indices = {0} if self.available_subtitles else set()
                     self.subtitles_enabled = bool(self.available_subtitles)
@@ -149,6 +154,9 @@ class AiSubtitlesMixin:
                     self.reload_and_apply_subtitles()
                 return
             if error:
+                entry["label"] = f"🌐 {target_name} 번역 (중단, {len(events)}문장)"
+                entry["track"].label = entry["label"]
+                self.update_subtitle_button_ui()
                 self.show_osd(f"⏹ 번역 중단 ({len(events)}문장까지 표시)", duration_sec=3.0)
                 return
             path = ai_subtitle_path(video_path, target)
