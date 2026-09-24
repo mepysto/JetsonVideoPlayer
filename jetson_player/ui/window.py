@@ -1,0 +1,493 @@
+"""메인 플레이어 창: 상태 초기화, 키보드 단축키, 종료 처리 (기능은 mixin 모듈에 분리)"""
+import sys
+import threading
+
+from gi.repository import GLib, Gdk, Gst, Gtk
+
+from ..media.gst_setup import enable_x11_compositor_bypass, optimize_gstreamer_ranks
+from ..storage import bookmark_cache, history_cache, hw_cache, resume_cache
+from ..youtube import is_youtube_url
+from .remote import RemoteMixin
+from .youtube import YouTubeMixin
+from .features import FeaturesMixin
+from .library import LibraryMixin
+from .playlist import PlaylistPanelMixin
+from .controls import ControlsMixin
+from .layout import LayoutMixin
+from .playback import PlaybackMixin
+from .subtitles import SubtitlesMixin
+
+
+class JetsonSignageFlexiblePlayer(
+    RemoteMixin,
+    YouTubeMixin,
+    FeaturesMixin,
+    LibraryMixin,
+    PlaylistPanelMixin,
+    ControlsMixin,
+    LayoutMixin,
+    PlaybackMixin,
+    SubtitlesMixin,
+    Gtk.Window,
+):
+    """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""
+
+    def __init__(self, input_path=None):
+        super().__init__(title="Jetson Video Player")
+        
+        # [필수] 하드웨어 가속 랭크 최적화 보장
+        optimize_gstreamer_ranks()
+
+        # 1. 플레이어 창 설정 (일반 데스크탑 창 모드로 시작, F 키로 전체화면 전환)
+        self.set_decorated(True)
+        self.set_default_size(1280, 720)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        
+        # 이벤트 연결 (종료, 키보드 및 마우스 감지)
+        self.connect("destroy", self.on_destroy)
+        self.connect("key-press-event", self.on_key_press)
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("motion-notify-event", self.on_mouse_motion)
+        self.connect("button-press-event", self.on_window_button_press)
+
+        # 드래그 앤 드롭 지원 (동영상, 폴더, 자막 파일)
+        self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+        self.drag_dest_add_uri_targets()
+        self.connect("drag-data-received", self.on_drag_data_received)
+
+        # 2. 입력 경로 타입(폴더 vs 파일 vs 유튜브 링크)을 분석하여 재생 목록 구성
+        self.input_path = input_path
+        self.playlist = []
+        self.current_index = 0
+        self.is_single_file_mode = False
+        self.xid = None
+        self.initial_yt_url = None
+        if self.input_path:
+            if is_youtube_url(self.input_path):
+                self.initial_yt_url = self.input_path
+                self.input_path = None
+            elif not self.build_playlist():
+                sys.exit(1)
+
+        # UI/재생 상태
+        self.is_playing = False
+        self.is_fullscreen = False
+        self.is_video_only = False
+        self.is_keep_above = False
+        self.sidebar_was_visible = True
+        self.main_paned = None
+        self.sidebar_width = 360
+        self.is_adjusting_paned = False
+        self.is_wrap_enabled = False
+        self.r_text = None
+        self.wrap_button = None
+        self.is_destroyed = False
+        self._bg_checker_started = False
+        self.is_seeking = False
+        self.duration_ns = 0
+        self.tree_store = None
+        self.playlist_treeview = None
+        self.playlist_tree_iters = {}
+        self.decoder_names = set()
+        self.video_sink = None
+        self.stats_ticks = 0
+        self.last_dropped_frames = 0
+        self.last_ui_pos_sec = -1
+        self.retry_counts = {}
+        self.max_retries = 2
+
+        # 마우스 커서 숨김 제어 상태
+        self.cursor_hide_timer_id = None
+        self.is_cursor_hidden = False
+
+        # 재생 속도(Playback Speed/Rate) 상태 변수
+        self.playback_rate = 1.0
+        self.rate_applied_on_preroll = False
+        self.speed_button = None
+        self.speed_popover = None
+        self.fs_speed_button = None
+
+        # 볼륨 및 음소거 상태
+        self.is_muted = False
+        self.pre_mute_volume = 100
+        self.mute_btn = None
+        self.fs_mute_btn = None
+
+        # 재생 모드 (all: 전체 반복, one: 1곡 반복, none: 순차 후 정지, shuffle: 셔플 무작위)
+        self.repeat_mode = "all"
+        self.repeat_btn = None
+
+        # 마우스 단일/더블 클릭 제어 타이머
+        self.click_timer_id = None
+
+        # 오디오 트랙 상태
+        self.current_audio_track = 0
+        self.n_audio_tracks = 0
+
+        # 미디어 정보 HUD 및 빈 화면 안내
+        self.hud_box = None
+        self.hud_label = None
+        self.is_hud_visible = False
+        self.placeholder_box = None
+
+        # YouTube 영상 버퍼링/스트리밍 오버레이 위젯 상태
+        self.yt_loading_box = None
+        self.yt_spinner = None
+        self.yt_loading_title = None
+        self.yt_loading_progress = None
+        self.yt_loading_status = None
+
+        # A-B 구간 반복 상태
+        self.ab_repeat_a = None
+        self.ab_repeat_b = None
+        self.is_ab_repeat_active = False
+        self.ab_badge = None
+
+        # 오디오/비디오(AV) 싱크 미세 조절 상태
+        self.av_sync_offset_ms = 0
+        self.current_asink = None
+
+        # 스마트폰 웹 리모컨 서버 상태
+        self.web_server = None
+        self.web_server_thread = None
+        self.web_port = 8888
+        self.remote_url = ""
+        self._remote_status_lock = threading.Lock()
+        self._remote_status = {}
+        self._remote_groups_cache = None
+
+        # 검색 필터 텍스트
+        self.search_text = ""
+        self.search_entry = None
+
+        # 전체화면 플로팅 컨트롤 바 및 OSD 상태 변수
+        self.fs_controls_box = None
+        self.is_fs_controls_visible = False
+        self.is_mouse_over_fs_controls = False
+        self.is_popover_open = False
+        self.osd_box = None
+        self.osd_label = None
+        self.osd_timer_id = None
+        self.fs_progress_scale = None
+        self.fs_position_label = None
+        self.fs_duration_label = None
+        self.fs_play_button = None
+        self.fs_sub_button = None
+        self.fs_volume_scale = None
+
+        # 다중 자막(Subtitle) 상태 변수 초기화
+        self.subtitles_enabled = True
+        self.has_subtitles = False
+        self.single_sub_mode = True  # 기본 1개(한국어 우선)만 활성화 (화면 가림 방지)
+        self.available_subtitles = []  # list of dicts: {'path', 'label', 'color', 'events'}
+        self.active_subtitle_indices = set()  # set of int indices
+        self.current_suburi = None
+        self.pending_seek_ns = 0
+        self.last_known_pos_ns = 0  # 자막 전환 시 0초 튕김 방지용 백업 위치
+        self.is_updating_sub_checkboxes = False  # 모두 선택/해제 일괄 변경 락
+        self.sub_reload_timer_id = None  # 자막 리로드 디바운스 타이머
+        self.subtitle_font_scale = 1.0  # 자막 크기 스케일 (0.6 ~ 1.6)
+        self.subtitle_offset_ms = 0  # 자막 싱크 오프셋 (ms 단위, 음수: 빠르게, 양수: 느리게)
+        self.scale_label = None
+        self.sync_label = None
+        self.sub_popover = None
+        # 컨테이너 내장 자막(MKV 등) 상태: 외부 자막이 없을 때 playbin이 자동 표시하는 트랙
+        self.n_embedded_text = 0
+        self.embedded_subs_enabled = True
+        self.subtitle_overlays = []  # 현재 파이프라인의 textoverlay/subtitleoverlay (silent 토글용)
+
+        # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
+        self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
+        if self.gtk_sink:
+            self.video_sink_bin = Gst.ElementFactory.make("glsinkbin", "glsinkbin")
+            self.video_sink_bin.set_property("sink", self.gtk_sink)
+            self.video_widget = self.gtk_sink.get_property("widget")
+            self.video_sink = self.video_sink_bin
+        else:
+            self.gtk_sink = Gst.ElementFactory.make("gtksink", "gtk_sink")
+            self.video_widget = self.gtk_sink.get_property("widget") if self.gtk_sink else Gtk.DrawingArea()
+            self.video_sink = self.gtk_sink
+
+        self.video_widget.set_hexpand(True)
+        self.video_widget.set_vexpand(True)
+        self.video_widget.set_size_request(640, 480)
+        self.video_widget.connect("realize", self.on_realize)
+
+        self.build_ui()
+
+        # 4. GStreamer 핵심 파이프라인 변수 초기화
+        self.pipeline = None
+        self.bus = None
+
+        # 재생 위치와 UI 상태 갱신 (250ms 주기로 매끄러운 진행바 보장)
+        self.position_timer_id = GLib.timeout_add(250, self.update_playback_ui)
+        # 웹 리모컨 상태 스냅샷 갱신 (HTTP 스레드는 이 스냅샷만 읽음)
+        self._refresh_remote_status()
+        self.remote_status_timer_id = GLib.timeout_add(500, self._refresh_remote_status)
+        # 이어보기/북마크/기록을 10초마다 디스크에 저장 (비정상 종료 시 유실 방지)
+        self.cache_flush_timer_id = GLib.timeout_add_seconds(10, self._flush_caches)
+
+        # 스마트폰 웹 리모컨 서버 자동 기동
+        self.start_web_remote_server()
+
+        # CLI 인자로 유튜브 링크가 입력된 경우 즉시 초고속 버퍼링 및 스트리밍 시작
+        if self.initial_yt_url:
+            init_url = self.initial_yt_url
+            GLib.idle_add(lambda: self.start_youtube_stream(init_url, quality="best"))
+
+    def _flush_caches(self):
+        if self.is_destroyed:
+            return False
+        for cache in (resume_cache, bookmark_cache, history_cache):
+            cache.save()
+        return True
+
+    def on_realize(self, widget):
+        """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작하고 백그라운드 검사기를 가동합니다."""
+        if self.pipeline is not None:
+            return
+        print("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
+        
+        top_window = self.get_window()
+        if top_window:
+            enable_x11_compositor_bypass(top_window)
+
+        if self.playlist:
+            self.play_current_video()
+        self.start_background_hw_checker()
+
+    def on_key_press(self, widget, event):
+        """키보드 입력 이벤트 제어"""
+        keyname = Gdk.keyval_name(event.keyval)
+        state = event.state
+
+        # 검색창/URL 입력창에 입력 중일 때는 단축키가 글자를 가로채지 않도록 입력창에 그대로 전달합니다.
+        # (Esc도 입력창의 기본 동작(검색어 지우기)에 맡겨 앱이 종료되지 않게 합니다.)
+        if isinstance(self.get_focus(), Gtk.Entry):
+            return False
+        is_shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+
+        # 1. 파일 및 폴더 열기 / 스크린샷 캡처
+        if is_ctrl and keyname in ["s", "S"]:
+            self.capture_screenshot()
+            return True
+        elif is_ctrl and keyname in ["o", "O"]:
+            if is_shift:
+                self.open_folder_dialog()
+            else:
+                self.open_file_dialog()
+            return True
+        elif is_ctrl and keyname in ["b", "B"]:
+            self.show_bookmarks_popover()
+            return True
+        elif not is_ctrl and not is_shift and keyname in ["b", "B"]:
+            self.add_bookmark()
+            return True
+
+        # 2. 종료 및 전체화면 해제
+        if keyname == "Escape":
+            if self.is_fullscreen or self.is_video_only:
+                self.toggle_fullscreen()
+                return True
+            else:
+                print("⏹ 프로그램 종료.")
+                self.on_destroy(widget)
+                return True
+        elif keyname in ["q", "Q"]:
+            print("⏹ 프로그램 종료.")
+            self.on_destroy(widget)
+            return True
+
+        # 3. 재생 및 탐색
+        elif keyname == "space":
+            self.toggle_play_pause()
+            return True
+        elif keyname == "Right":
+            delta = 30 if is_shift else 10
+            self.seek_relative(delta)
+            return True
+        elif keyname == "Left":
+            delta = -30 if is_shift else -10
+            self.seek_relative(delta)
+            return True
+        elif keyname in ["l", "L"]:
+            self.seek_relative(10)
+            return True
+        elif keyname in ["j", "J"]:
+            self.seek_relative(-10)
+            return True
+
+        # 4. 볼륨 조절 및 음소거 (최대 200% 부스트 지원)
+        elif keyname in ["m", "M"]:
+            self.toggle_mute()
+            return True
+        elif keyname in ["0", "parenright"]:
+            cur_vol = self.volume_scale.get_value()
+            self.volume_scale.set_value(min(200, cur_vol + 5))
+            return True
+        elif keyname in ["9", "parenleft"]:
+            cur_vol = self.volume_scale.get_value()
+            self.volume_scale.set_value(max(0, cur_vol - 5))
+            return True
+
+        # 5. 영상 재생 속도 제어
+        elif (not is_shift and keyname in ["Up", "d", "D"]) or (is_shift and keyname in ["greater", "period"]):
+            self.step_playback_rate(0.25)
+            return True
+        elif (not is_shift and keyname in ["Down", "a", "A"]) or (is_shift and keyname in ["less", "comma"]):
+            self.step_playback_rate(-0.25)
+            return True
+        elif keyname in ["r", "R"]:
+            if is_shift or is_ctrl:
+                self.cycle_repeat_mode()
+            else:
+                self.reset_playback_rate()
+            return True
+
+        # 6. 영상 전환
+        elif keyname in ["n", "N"]:
+            self.play_next_video()
+            return True
+        elif keyname in ["p", "P"]:
+            self.play_prev_video()
+            return True
+
+        # 7. 오디오 트랙 및 AV 싱크 제어
+        elif is_shift and keyname in ["A", "a"]:
+            self.cycle_audio_track()
+            return True
+        elif is_shift and keyname in ["z", "Z"]:
+            self.adjust_av_sync(-50)
+            return True
+        elif is_shift and keyname in ["x", "X"]:
+            self.adjust_av_sync(50)
+            return True
+        elif is_shift and keyname in ["c", "C"]:
+            self.reset_av_sync()
+            return True
+
+        # 8. 구간 반복 (A-B Repeat)
+        elif is_shift and keyname in ["[", "braceleft"]:
+            self.set_ab_repeat_a()
+            return True
+        elif is_shift and keyname in ["]", "braceright"]:
+            self.set_ab_repeat_b()
+            return True
+        elif keyname in ["backslash", "bar"] or (is_shift and keyname in ["backslash", "bar"]):
+            self.clear_ab_repeat()
+            return True
+
+        # 9. 자막 제어 (자막 크기 및 자막 싱크)
+        elif not is_shift and not is_ctrl and keyname in ["s", "S"]:
+            self.toggle_subtitles()
+            return True
+        elif not is_shift and not is_ctrl and keyname in ["c", "C"]:
+            self.show_subtitle_popover()
+            return True
+        elif not is_shift and keyname in ["[", "bracketleft"]:
+            self.adjust_subtitle_scale(-0.1)
+            return True
+        elif not is_shift and keyname in ["]", "bracketright"]:
+            self.adjust_subtitle_scale(0.1)
+            return True
+        elif not is_shift and keyname in ["z", "Z"]:
+            self.adjust_subtitle_sync(-500)
+            return True
+        elif not is_shift and keyname in ["x", "X"]:
+            self.adjust_subtitle_sync(500)
+            return True
+        elif not is_shift and keyname in [",", "comma"]:
+            self.adjust_subtitle_sync(-100)
+            return True
+        elif not is_shift and keyname in [".", "period"]:
+            self.adjust_subtitle_sync(100)
+            return True
+
+        # 10. 화면 및 HUD 모드
+        elif keyname in ["f", "F"]:
+            self.toggle_fullscreen()
+            return True
+        elif keyname in ["t", "T"]:
+            self.toggle_keep_above()
+            return True
+        elif keyname in ["i", "I"]:
+            self.toggle_hud()
+            return True
+        elif keyname in ["F1", "question"]:
+            self.show_help_dialog()
+            return True
+
+        return False
+
+    def on_destroy(self, widget):
+        self.is_destroyed = True
+        try:
+            self.stop_web_remote_server()
+            hw_cache.save()
+            resume_cache.save()
+            bookmark_cache.save()
+            history_cache.save()
+        except Exception:
+            pass
+
+        if getattr(self, "cache_flush_timer_id", None):
+            try:
+                GLib.source_remove(self.cache_flush_timer_id)
+            except Exception:
+                pass
+            self.cache_flush_timer_id = None
+
+        if getattr(self, "remote_status_timer_id", None):
+            try:
+                GLib.source_remove(self.remote_status_timer_id)
+            except Exception:
+                pass
+            self.remote_status_timer_id = None
+
+        if getattr(self, "click_timer_id", None):
+            try:
+                GLib.source_remove(self.click_timer_id)
+            except Exception:
+                pass
+            self.click_timer_id = None
+
+        if getattr(self, "cursor_hide_timer_id", None):
+            try:
+                GLib.source_remove(self.cursor_hide_timer_id)
+            except Exception:
+                pass
+            self.cursor_hide_timer_id = None
+        self.show_cursor()
+
+        if getattr(self, "osd_timer_id", None):
+            try:
+                GLib.source_remove(self.osd_timer_id)
+            except Exception:
+                pass
+            self.osd_timer_id = None
+
+        if getattr(self, "sub_reload_timer_id", None):
+            try:
+                GLib.source_remove(self.sub_reload_timer_id)
+            except Exception:
+                pass
+            self.sub_reload_timer_id = None
+
+        if getattr(self, "position_timer_id", None):
+            try:
+                GLib.source_remove(self.position_timer_id)
+            except Exception:
+                pass
+            self.position_timer_id = None
+        if self.bus is not None:
+            try:
+                self.bus.remove_signal_watch()
+            except Exception:
+                pass
+            self.bus = None
+        if self.pipeline:
+            self.pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
+        if Gtk.main_level() > 0:
+            Gtk.main_quit()

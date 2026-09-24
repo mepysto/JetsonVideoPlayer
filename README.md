@@ -101,6 +101,29 @@ jetson-player /path/to/video-directory
 
 ---
 
+## 프로젝트 구조 (개발자용)
+
+```
+jetson_player.py            # 실행 진입점 (bin/jetson-player가 실행). `python3 -m jetson_player`도 가능
+jetson_player/
+  __init__.py               # PATH/DISPLAY 환경 설정, gi 라이브러리 버전 고정 (GTK 로드 전에 실행)
+  app.py                    # 명령줄 처리 및 GTK 메인 루프
+  storage.py                # 이어보기/북마크/최근 기록/HW 캐시 (JSON, 원자적 저장)
+  library.py                # 영상 파일 탐색
+  system.py                 # 파일 관리자 연동, Jetson 온도/GPU/RAM, 로컬 IP
+  youtube.py                # YouTube URL 처리, yt-dlp 다운로드 매니저
+  media/gst_setup.py        # nvv4l2decoder 랭크 최적화, X11 컴포지터 우회
+  subtitles/parse.py        # SMI/SRT/VTT/ASS 탐색·파싱, 언어 감지
+  subtitles/merge.py        # 다중 자막 → 언어별 색상 SAMI 병합
+  remote/server.py          # 웹 리모컨 HTTP 핸들러 (페이지: remote/static/index.html)
+  ui/window.py              # 메인 창: 상태 초기화, 키보드 단축키, 종료 처리
+  ui/*.py                   # 기능별 mixin (playback, controls, playlist, subtitles, library, features, remote, youtube, layout)
+  ui/style.css              # GTK 테마
+tests/                      # pytest (GTK 없이 실행되는 순수 모듈 테스트)
+```
+
+테스트 실행: `python3 -m pytest tests`
+
 ## 키보드 및 마우스 단축키 일람
 
 단축키는 플레이어 실행 중 `F1` 키를 눌러 안내 대화상자로 언제든지 확인할 수 있습니다.

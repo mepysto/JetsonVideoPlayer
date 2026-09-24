@@ -15,9 +15,9 @@
 *.m2ts
 
 # Video storage directories
-media/
-videos/
-video/
+/media/
+/videos/
+/video/
 
 # Python / IDE & OS garbage
 __pycache__/
@@ -31,8 +31,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/

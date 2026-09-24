@@ -1,0 +1,109 @@
+window { background: #090b10; color: #f4f6fb; }
+.topbar, .controls { background: #11151d; }
+.topbar { border-bottom: 1px solid #252b36; }
+.topbar button { padding: 4px 8px; font-size: 12px; }
+separator.topbar-sep { background-color: #252b36; min-width: 1px; margin: 4px 3px; }
+.controls { border-top: 1px solid #252b36; }
+.brand { font-size: 15px; font-weight: 800; color: #ffffff; letter-spacing: 1px; }
+.muted { color: #8f98a8; font-size: 12px; }
+.now-playing { color: #dce2ec; font-size: 13px; font-weight: 500; }
+button { background: transparent; color: #dce2ec; border: 0; border-radius: 7px; padding: 6px 10px; font-size: 13px; }
+button:hover { background: #252b36; color: #ffffff; }
+.primary { background: #e9ff5b; color: #111318; border-radius: 20px; min-width: 28px; min-height: 28px; }
+.primary:hover { background: #f2ff91; color: #111318; }
+.ab-badge { background: #2e1065; color: #e9ff5b; border: 1px solid #7c3aed; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold; }
+.ab-badge:hover { background: #4c1d95; color: #ffffff; }
+.ph-btn-primary { background: #e9ff5b; color: #111318; font-size: 13px; font-weight: 700; padding: 9px 18px; border-radius: 8px; }
+.ph-btn-primary:hover { background: #f2ff91; }
+.ph-btn-sub { background: #1c222e; color: #f0f4fc; font-size: 13px; font-weight: 600; padding: 9px 18px; border-radius: 8px; border: 1px solid #333d4e; }
+.ph-btn-sub:hover { background: #283244; color: #ffffff; }
+.sidebar { background: #0e1117; border-left: 1px solid #252b36; }
+.section-title { font-size: 15px; font-weight: 700; color: #ffffff; }
+.playlist-row { border-radius: 8px; padding: 7px; }
+.playlist-row:hover { background: #1a1f29; }
+.playlist-row-active { background: #242b35; border-left: 3px solid #e9ff5b; }
+.track-number { color: #70798a; font-size: 12px; }
+.track-title { color: #dce2ec; font-size: 13px; }
+scale trough { background: #303744; min-height: 4px; border-radius: 3px; }
+scale highlight { background: #e9ff5b; border-radius: 3px; }
+scale slider { background: #ffffff; min-width: 13px; min-height: 13px; border-radius: 7px; }
+popover { background: #131822; border: 1px solid #2a3240; border-radius: 9px; color: #f4f6fb; padding: 6px; }
+.popover-title { font-size: 13px; font-weight: 700; color: #e9ff5b; margin-bottom: 4px; }
+.sub-btn-row button { background: #1c222e; border-radius: 5px; padding: 4px 8px; font-size: 11px; }
+.sub-btn-row button:hover { background: #2a3344; }
+checkbutton { color: #dce2ec; font-size: 12px; }
+checkbutton:hover { color: #ffffff; }
+.fs-controls { background: rgba(17, 21, 29, 0.92); border: 1px solid #303744; border-radius: 12px; padding: 8px 14px; margin: 12px; }
+.osd-box { background: rgba(14, 17, 23, 0.90); border: 1px solid #3b4455; border-radius: 9px; padding: 10px 24px; margin-top: 25px; }
+.osd-text { font-size: 19px; font-weight: 800; color: #e9ff5b; }
+.hud-box { background: rgba(10, 14, 22, 0.92); border: 1px solid #3b4455; border-radius: 10px; padding: 14px 18px; margin: 16px; }
+.hud-text { font-family: monospace; font-size: 13px; color: #e9ff5b; }
+.speed-btn { font-weight: 700; color: #e9ff5b; min-width: 48px; }
+.speed-btn:hover { background: #252b36; }
+entry { background-color: #161b24; color: #dce2ec; border: 1px solid #2a3344; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+entry:focus { border-color: #e9ff5b; }
+treeview {
+    background-color: #0e1117;
+    color: #dce2ec;
+    border: none;
+    font-size: 13px;
+}
+treeview:selected {
+    background-color: #242b35;
+    color: #ffffff;
+}
+treeview:hover {
+    background-color: #161b24;
+}
+treeview.view {
+    background-color: #0e1117;
+    color: #dce2ec;
+}
+treeview.view:selected {
+    background-color: #242b35;
+    color: #ffffff;
+}
+.tree-tool-btn {
+    background: #1a202c;
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #a0aec0;
+}
+.tree-tool-btn:hover {
+    background: #2d3748;
+    color: #ffffff;
+}
+.tree-tool-btn.active {
+    background: #e9ff5b;
+    color: #111318;
+    font-weight: bold;
+}
+.tree-tool-btn.active:hover {
+    background: #f2ff91;
+    color: #111318;
+}
+paned > separator {
+    background-color: #252b36;
+    min-width: 5px;
+    margin: 0;
+}
+paned > separator:hover {
+    background-color: #e9ff5b;
+}
+.yt-overlay-box {
+    background: rgba(14, 18, 26, 0.94);
+    border: 1px solid #3b4455;
+    border-radius: 12px;
+    padding: 24px 32px;
+}
+.yt-progress trough {
+    background-color: #1e2430;
+    border-radius: 4px;
+    min-height: 8px;
+}
+.yt-progress progress {
+    background-color: #ff3333;
+    border-radius: 4px;
+    min-height: 8px;
+}
