@@ -1,5 +1,7 @@
 # JetsonVideoPlayer
 
+[![tests](https://github.com/mepysto/JetsonVideoPlayer/actions/workflows/tests.yml/badge.svg)](https://github.com/mepysto/JetsonVideoPlayer/actions/workflows/tests.yml)
+
 NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.265/H.264/VP9/AV1 영상을 재생하는 GTK3 + GStreamer 영상 플레이어입니다.
 영상 위 자막 렌더러, GPU(Whisper) AI 자막 생성, 타임라인 썸네일·장면 챕터, 스마트폰 웹 리모컨, 시스템 미디어 키 연동을 제공합니다.
 
