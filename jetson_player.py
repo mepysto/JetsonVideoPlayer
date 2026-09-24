@@ -20,9 +20,10 @@ import gi
 
 # Deno 및 Node.js 런타임 경로 환경변수 자동 보정 (yt-dlp의 4K/1080p 고화질 디사이퍼링 완벽 지원)
 NODE_PATHS = [
-    "/home/btree/.deno/bin",
-    "/home/btree/.local/bin",
-    "/home/btree/.nvm/versions/node/v24.18.1/bin",
+    os.path.expanduser("~/.deno/bin"),
+    os.path.expanduser("~/.local/bin"),
+    # nvm으로 설치된 Node.js (버전이 높은 것부터)
+    *sorted(glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin")), reverse=True),
     "/usr/bin",
     "/usr/local/bin",
 ]
@@ -159,6 +160,14 @@ def extract_youtube_video_id(url):
     m = re.search(r'(?:v=|\/shorts\/|\/embed\/|\/live\/|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[&?]|$)', target)
     if m:
         return m.group(1)
+    return None
+
+def yt_dlp_js_runtimes():
+    """yt-dlp의 YouTube 서명 해독용 JS 런타임(Deno 우선, 없으면 Node.js)을 PATH에서 찾습니다."""
+    for name in ("deno", "node"):
+        path = shutil.which(name)
+        if path:
+            return {name: {"path": path}}
     return None
 
 class YouTubeManager:
@@ -325,12 +334,9 @@ class YouTubeManager:
                 'remote_components': ['ejs:github'],
             }
 
-            deno_bin = "/home/btree/.deno/bin/deno"
-            node_bin = "/home/btree/.nvm/versions/node/v24.18.1/bin/node"
-            if os.path.exists(deno_bin):
-                ydl_opts['js_runtimes'] = {'deno': {'path': deno_bin}}
-            elif os.path.exists(node_bin):
-                ydl_opts['js_runtimes'] = {'node': {'path': node_bin}}
+            js_runtimes = yt_dlp_js_runtimes()
+            if js_runtimes:
+                ydl_opts['js_runtimes'] = js_runtimes
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -376,12 +382,9 @@ class YouTubeManager:
                 'noplaylist': True,
                 'remote_components': ['ejs:github'],
             }
-            deno_bin = "/home/btree/.deno/bin/deno"
-            node_bin = "/home/btree/.nvm/versions/node/v24.18.1/bin/node"
-            if os.path.exists(deno_bin):
-                ydl_opts['js_runtimes'] = {'deno': {'path': deno_bin}}
-            elif os.path.exists(node_bin):
-                ydl_opts['js_runtimes'] = {'node': {'path': node_bin}}
+            js_runtimes = yt_dlp_js_runtimes()
+            if js_runtimes:
+                ydl_opts['js_runtimes'] = js_runtimes
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -480,6 +483,32 @@ def optimize_gstreamer_ranks():
     else:
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
+def atomic_write_json(path, data):
+    """임시 파일에 먼저 쓴 뒤 교체하여, 저장 도중 전원이 꺼져도 기존 JSON이 손상되지 않게 합니다."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+VIDEO_EXTS = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
+
+def scan_video_files(dir_path):
+    """디렉토리(하위 폴더 포함)의 재생 가능한 영상 파일 목록을 정렬하여 반환합니다.
+    백업 폴더(unsupported_originals)와 숨김 파일/폴더는 제외합니다."""
+    found = []
+    for root, dirs, files in os.walk(dir_path, followlinks=True):
+        dirs[:] = sorted([d for d in dirs if d != "unsupported_originals" and not d.startswith('.')])
+        for fname in sorted(files):
+            if fname.startswith('.'):
+                continue
+            if os.path.splitext(fname)[1].lower() in VIDEO_EXTS:
+                full_p = os.path.join(root, fname)
+                if os.path.isfile(full_p):
+                    found.append(full_p)
+    found.sort()
+    return found
+
 CACHE_DIR = os.path.expanduser("~/.cache/jetson_video_player")
 CACHE_FILE = os.path.join(CACHE_DIR, "hw_cache.json")
 
@@ -504,9 +533,7 @@ class HWSupportCache:
             if not self.is_dirty:
                 return
             try:
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                atomic_write_json(CACHE_FILE, self.cache)
                 self.is_dirty = False
             except Exception:
                 pass
@@ -568,9 +595,11 @@ class ResumeCache:
             if not self.is_dirty:
                 return
             try:
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                with open(RESUME_FILE, "w", encoding="utf-8") as f:
-                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                # 최대 200개 유지 (가장 오래된 항목부터 정리)
+                if len(self.cache) > 200:
+                    keep = sorted(self.cache, key=lambda k: self.cache[k].get("updated_at", 0))[-200:]
+                    self.cache = {k: self.cache[k] for k in keep}
+                atomic_write_json(RESUME_FILE, self.cache)
                 self.is_dirty = False
             except Exception:
                 pass
@@ -596,10 +625,6 @@ class ResumeCache:
                 "duration_ns": duration_ns,
                 "updated_at": time.time()
             }
-            # 최대 200개 유지
-            if len(self.cache) > 200:
-                oldest = sorted(self.cache.keys(), key=lambda k: self.cache[k].get("updated_at", 0))[0]
-                self.cache.pop(oldest, None)
             self.is_dirty = True
 
     def clear(self, file_path):
@@ -633,9 +658,7 @@ class BookmarkCache:
             if not self.is_dirty:
                 return
             try:
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                with open(BOOKMARKS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                atomic_write_json(BOOKMARKS_FILE, self.cache)
                 self.is_dirty = False
             except Exception:
                 pass
@@ -701,9 +724,7 @@ class HistoryCache:
             if not self.is_dirty:
                 return
             try:
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-                    json.dump(self.history, f, ensure_ascii=False, indent=2)
+                atomic_write_json(HISTORY_FILE, self.history)
                 self.is_dirty = False
             except Exception:
                 pass
@@ -1181,8 +1202,8 @@ function updateStatus() {
       else if (Math.abs(curSpeed - 2.0) < 0.02) document.getElementById('sp_20').className = 'active-speed';
 
       let repeatLabel = '전체반복';
-      if (data.repeat_mode === 'repeat_one') repeatLabel = '한곡반복';
-      else if (data.repeat_mode === 'stop_after_finish') repeatLabel = '순차정지';
+      if (data.repeat_mode === 'one') repeatLabel = '한곡반복';
+      else if (data.repeat_mode === 'none') repeatLabel = '순차정지';
       else if (data.repeat_mode === 'shuffle') repeatLabel = '무작위';
       document.getElementById('repeatModeText').innerText = repeatLabel;
 
@@ -1263,7 +1284,6 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             status = self.player.get_remote_status() if self.player else {}
             self.wfile.write(json.dumps(status).encode("utf-8"))
@@ -1281,7 +1301,6 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
         else:
@@ -1719,8 +1738,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             if is_youtube_url(self.input_path):
                 self.initial_yt_url = self.input_path
                 self.input_path = None
-            else:
-                self.build_playlist()
+            elif not self.build_playlist():
+                sys.exit(1)
 
         # UI/재생 상태
         self.is_playing = False
@@ -1805,6 +1824,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.web_server_thread = None
         self.web_port = 8888
         self.remote_url = ""
+        self._remote_status_lock = threading.Lock()
+        self._remote_status = {}
+        self._remote_groups_cache = None
 
         # 검색 필터 텍스트
         self.search_text = ""
@@ -1841,6 +1863,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.scale_label = None
         self.sync_label = None
         self.sub_popover = None
+        # 컨테이너 내장 자막(MKV 등) 상태: 외부 자막이 없을 때 playbin이 자동 표시하는 트랙
+        self.n_embedded_text = 0
+        self.embedded_subs_enabled = True
+        self.subtitle_overlays = []  # 현재 파이프라인의 textoverlay/subtitleoverlay (silent 토글용)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
         self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
@@ -1867,6 +1893,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
         # 재생 위치와 UI 상태 갱신 (250ms 주기로 매끄러운 진행바 보장)
         self.position_timer_id = GLib.timeout_add(250, self.update_playback_ui)
+        # 웹 리모컨 상태 스냅샷 갱신 (HTTP 스레드는 이 스냅샷만 읽음)
+        self._refresh_remote_status()
+        self.remote_status_timer_id = GLib.timeout_add(500, self._refresh_remote_status)
+        # 이어보기/북마크/기록을 10초마다 디스크에 저장 (비정상 종료 시 유실 방지)
+        self.cache_flush_timer_id = GLib.timeout_add_seconds(10, self._flush_caches)
 
         # 스마트폰 웹 리모컨 서버 자동 기동
         self.start_web_remote_server()
@@ -1905,25 +1936,39 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.web_server = None
 
     def get_remote_status(self):
-        """웹 리모컨 클라이언트에게 현재 재생 상태를 반환합니다."""
-        pos_sec = 0
-        dur_sec = 0
-        if self.pipeline:
-            try:
-                succ, p = self.pipeline.query_position(Gst.Format.TIME)
-                if succ and p > 0:
-                    pos_sec = p / Gst.SECOND
-                succ, d = self.pipeline.query_duration(Gst.Format.TIME)
-                if succ and d > 0:
-                    dur_sec = d / Gst.SECOND
-            except Exception:
-                pass
+        """웹 리모컨 클라이언트에게 현재 재생 상태를 반환합니다.
+        HTTP 스레드에서 호출되므로 메인 루프가 만든 스냅샷만 읽습니다 (GTK/GStreamer 직접 접근 금지)."""
+        with self._remote_status_lock:
+            status = dict(self._remote_status)
+        status["yt_download"] = youtube_mgr.get_status()
+        return status
 
-        cur_title = ""
-        if self.playlist and 0 <= self.current_index < len(self.playlist):
-            cur_title = os.path.basename(self.playlist[self.current_index])
+    def _flush_caches(self):
+        if self.is_destroyed:
+            return False
+        for cache in (resume_cache, bookmark_cache, history_cache):
+            cache.save()
+        return True
 
-        # 폴더별 그룹화된 재생목록 생성
+    def _refresh_remote_status(self):
+        """[메인 스레드] 웹 리모컨용 재생 상태 스냅샷을 주기적으로 갱신합니다."""
+        if self.is_destroyed:
+            return False
+        try:
+            status = self._build_remote_status()
+        except Exception as e:
+            print(f"⚠️ 리모컨 상태 갱신 실패: {e}")
+            return True
+        with self._remote_status_lock:
+            self._remote_status = status
+        return True
+
+    def _build_remote_playlist_groups(self):
+        """폴더별 그룹화된 재생목록을 생성합니다 (재생목록/현재 항목이 바뀔 때만 재계산)."""
+        cache_key = (tuple(self.playlist), self.current_index, self.input_path)
+        if self._remote_groups_cache is not None and self._remote_groups_cache[0] == cache_key:
+            return self._remote_groups_cache[1]
+
         abs_root = os.path.abspath(self.input_path) if (self.input_path and os.path.isdir(self.input_path)) else None
         groups_map = {}
         for idx, fpath in enumerate(self.playlist):
@@ -1952,6 +1997,28 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 "count": len(items),
                 "items": items
             })
+        self._remote_groups_cache = (cache_key, playlist_groups)
+        return playlist_groups
+
+    def _build_remote_status(self):
+        pos_sec = 0
+        dur_sec = 0
+        if self.pipeline:
+            try:
+                succ, p = self.pipeline.query_position(Gst.Format.TIME)
+                if succ and p > 0:
+                    pos_sec = p / Gst.SECOND
+                succ, d = self.pipeline.query_duration(Gst.Format.TIME)
+                if succ and d > 0:
+                    dur_sec = d / Gst.SECOND
+            except Exception:
+                pass
+
+        cur_title = ""
+        if self.playlist and 0 <= self.current_index < len(self.playlist):
+            cur_title = os.path.basename(self.playlist[self.current_index])
+
+        playlist_groups = self._build_remote_playlist_groups()
 
         vol = int(self.volume_scale.get_value()) if getattr(self, "volume_scale", None) else 100
 
@@ -1968,7 +2035,6 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             "repeat_mode": self.repeat_mode,
             "playlist_groups": playlist_groups,
             "total_videos": len(self.playlist),
-            "yt_download": youtube_mgr.get_status()
         }
 
     def handle_remote_command(self, action, val=None, index=None, delta=None, percent=None, url=None, quality=None):
@@ -2042,7 +2108,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         elif action == "yt_stream" and url:
             GLib.idle_add(lambda: self.start_youtube_stream(url, quality=quality or "best"))
         elif action == "open_location":
-            idx = int(index) if index is not None else None
+            try:
+                idx = int(index) if index is not None else None
+            except (TypeError, ValueError):
+                idx = None
             GLib.idle_add(lambda: self.open_selected_or_current_location_by_index(idx))
 
     def seek_to_percent(self, pct):
@@ -2627,24 +2696,12 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target_ns)
 
     def load_target_path(self, path):
-        """파일 또는 폴더 경로를 로드하여 즉시 재생합니다."""
+        """파일 또는 폴더 경로를 로드하여 즉시 재생합니다 (최근 재생 목록에서 사용)."""
         if not path or not os.path.exists(path):
             self.show_osd("경로가 존재하지 않습니다.")
             return
-        if os.path.isfile(path):
-            self.playlist = [os.path.abspath(path)]
-            self.current_index = 0
-            self.populate_playlist_tree()
-            self.play_current_video()
-        elif os.path.isdir(path):
-            files = self.find_video_files(path)
-            if files:
-                self.playlist = files
-                self.current_index = 0
-                self.populate_playlist_tree()
-                self.play_current_video()
-            else:
-                self.show_osd("폴더 내에 동영상이 없습니다.")
+        # load_path가 input_path/단일 파일 모드/재생목록 UI를 일관되게 갱신합니다.
+        self.load_path(os.path.abspath(path))
 
     def show_osd(self, text, timeout_ms=1200, duration_sec=None):
         """화면 상단 중앙에 설정 변경 상태(속도, 탐색 등)를 알려주는 OSD 박스를 표시합니다."""
@@ -3179,8 +3236,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
     def load_path(self, input_path):
         """새로운 파일 또는 폴더 경로를 로드하여 즉시 재생을 시작합니다."""
+        prev_input, prev_single = self.input_path, self.is_single_file_mode
         self.input_path = input_path
-        self.build_playlist()
+        if not self.build_playlist():
+            # 기존 재생목록을 유지하고 앱을 종료하지 않습니다.
+            self.input_path, self.is_single_file_mode = prev_input, prev_single
+            self.show_osd("⚠️ 재생 가능한 영상이 없는 폴더입니다.", duration_sec=2.5)
+            return
         self.populate_playlist_tree()
         self.refresh_playlist_ui()
         if self.playlist:
@@ -3193,8 +3255,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         """다중 파일 목록을 재생목록에 추가하고 재생을 시작합니다."""
         if not files:
             return
-        video_exts = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
-        valid_files = [f for f in files if os.path.splitext(f)[1].lower() in video_exts]
+        valid_files = [f for f in files if os.path.splitext(f)[1].lower() in VIDEO_EXTS]
         if not valid_files:
             return
         self.playlist = sorted(valid_files)
@@ -3275,8 +3336,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             return
 
         # 동영상 파일들이 드롭된 경우
-        video_exts = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
-        video_files = [p for p in paths if os.path.splitext(p)[1].lower() in video_exts]
+        video_files = [p for p in paths if os.path.splitext(p)[1].lower() in VIDEO_EXTS]
         if video_files:
             self.load_files(video_files)
             context.finish(True, False, time)
@@ -3997,6 +4057,9 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_placeholder_text("영상 검색...")
         self.search_entry.connect("search-changed", self.on_search_changed)
+        self.search_entry.connect("activate", self.on_search_activate)
+        # Esc: 검색어를 지우고 포커스를 해제 (단축키 다시 활성화)
+        self.search_entry.connect("stop-search", lambda e: (e.set_text(""), self.set_focus(None)))
         panel.pack_start(self.search_entry, False, False, 2)
 
         tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -4150,6 +4213,14 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def on_search_changed(self, entry):
         self.search_text = entry.get_text().strip().lower()
         self.populate_playlist_tree()
+
+    def on_search_activate(self, _entry):
+        """검색창에서 Enter: 첫 번째 검색 결과를 재생하고 포커스를 해제해 단축키를 다시 사용할 수 있게 합니다."""
+        if self.playlist_tree_iters:
+            first_idx = min(self.playlist_tree_iters.keys())
+            if first_idx != self.current_index:
+                self.play_index_direct(first_idx)
+        self.set_focus(None)
 
     def on_paned_notify_position(self, paned, _gparam):
         """사용자가 스플리터 핸들을 드래그할 때 사이드바 너비를 기억합니다."""
@@ -4769,6 +4840,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         if any(k in fname or k in ename for k in ["textoverlay", "subtitleoverlay", "textrender", "playsink"]):
             if "textoverlay" in fname or "textoverlay" in ename or "subtitleoverlay" in fname or "subtitleoverlay" in ename:
                 self.subtitle_overlay_element = element
+                if element not in self.subtitle_overlays:
+                    self.subtitle_overlays.append(element)
             if element.find_property("font-desc"):
                 element.set_property("font-desc", self.get_current_subtitle_font_desc())
             if element.find_property("subtitle-font-desc"):
@@ -4877,140 +4950,29 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             res = (False, f"코덱 분석 실패 ({e})")
             return res
 
-    def probe_video(self, file_path):
-        """변환 품질 결정을 위해 이름 순서에 의존하지 않는 ffprobe 정보를 반환합니다."""
-        cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries",
-            "stream=codec_name,pix_fmt,profile,color_space,color_transfer,color_primaries",
-            "-of", "json", file_path,
-        ]
-        data = json.loads(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True))
-        if not data.get("streams"):
-            raise ValueError("비디오 스트림이 없습니다")
-        return data["streams"][0]
-
-    def auto_convert_to_h265(self, file_path):
-        """
-        하드웨어 디코딩 미지원 영상을 H.265 (HEVC) MP4 포맷으로 자동 변환하고,
-        원래 영상 파일은 'unsupported_originals' 백업 폴더로 안전하게 이동합니다.
-        """
-        dir_name = os.path.dirname(file_path)
-        base_name = os.path.basename(file_path)
-        name_no_ext, _ext = os.path.splitext(base_name)
-
-        # 1. 백업 폴더 생성 (unsupported_originals)
-        backup_dir = os.path.join(dir_name, "unsupported_originals")
-        os.makedirs(backup_dir, exist_ok=True)
-        backup_path = os.path.join(backup_dir, base_name)
-
-        # 2. H.265 변환 목표 파일 경로 생성 (.mp4)
-        target_mp4_path = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
-        if os.path.exists(target_mp4_path):
-            supported, _reason = self.check_video_hw_support(target_mp4_path)
-            if supported:
-                print(f"ℹ️ 기존 H.265 변환본을 사용합니다: {target_mp4_path}")
-                hw_cache.set(file_path, True, "기존 H.265 변환본")
-                hw_cache.save()
-                return target_mp4_path
-
-        # 3. 비트 심도 검사 (10-bit 소스는 H.265 10-bit 유지)
-        _is_supported, reason = self.check_video_hw_support(file_path)
-        try:
-            stream = self.probe_video(file_path)
-        except Exception as error:
-            print(f"❌ 변환용 영상 정보 확인 실패: {error}")
-            return file_path
-        source_pix_fmt = stream.get("pix_fmt", "").lower()
-        is_10bit = "10" in source_pix_fmt or "p10" in source_pix_fmt
-        pix_fmt = "yuv420p10le" if is_10bit else "yuv420p"
-        profile = "main10" if is_10bit else "main"
-        temp_output = os.path.join(dir_name, f".{name_no_ext}_h265.part.mp4")
-
-        print(f"\n🔄 [자동 코덱 변환 개시] {base_name}")
-        print(f"   - 감지된 사유: {reason}")
-        print(f"   - 타겟 코덱: H.265 / HEVC MP4 ({pix_fmt})")
-        print(f"   - 백업 이동 경로: {backup_path}")
-
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", file_path,
-            "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?",
-            "-map_metadata", "0", "-map_chapters", "0",
-            "-pix_fmt", pix_fmt,
-            "-c:v", "libx265",
-            "-profile:v", profile,
-            "-preset", "fast",
-            "-crf", "18",
-            "-threads", "6",
-            "-c:a", "aac",
-            "-b:a", "256k",
-            "-c:s", "mov_text",
-            "-movflags", "+faststart",
-            "-tag:v", "hvc1",
-            temp_output
-        ]
-
-        try:
-            subprocess.run(ffmpeg_cmd, check=True)
-            os.replace(temp_output, target_mp4_path)
-            hw_cache.set(target_mp4_path, True, f"HEVC 변환 완료 ({pix_fmt})")
-            hw_cache.set(file_path, True, "H.265 변환 완료")
-            hw_cache.save()
-            print(f"✅ [H.265 변환 완료] {os.path.basename(target_mp4_path)}")
-
-            if os.path.exists(file_path) and file_path != target_mp4_path:
-                if os.path.exists(backup_path):
-                    base, suffix = os.path.splitext(base_name)
-                    counter = 1
-                    while os.path.exists(backup_path):
-                        backup_path = os.path.join(backup_dir, f"{base}_{counter}{suffix}")
-                        counter += 1
-                shutil.move(file_path, backup_path)
-                print(f"📦 [원본 파일 백업 이동 완료] {backup_path}")
-
-            return target_mp4_path
-        except Exception as e:
-            print(f"❌ [변환 실패] {file_path}: {e}")
-            if os.path.exists(temp_output):
-                os.unlink(temp_output)
-            return file_path
-
     def build_playlist(self):
-        """입력값을 분석하여 재생 목록을 동적으로 구성하고, 하드웨어 미지원 코덱은 H.265로 자동 변환 및 백업합니다."""
+        """입력값을 분석하여 재생 목록을 구성합니다 (같은 폴더의 _h265.mp4 변환본이 있으면 우선 사용).
+        성공하면 True, 경로가 잘못되었거나 영상이 없으면 False를 반환합니다."""
         abs_path = os.path.abspath(self.input_path)
         
         raw_playlist = []
         if os.path.isdir(abs_path):
             self.is_single_file_mode = False
-            video_exts = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
             try:
-                for root, dirs, files in os.walk(abs_path, followlinks=True):
-                    # 백업 디렉토리(unsupported_originals) 및 숨김 폴더는 탐색에서 제외
-                    dirs[:] = sorted([d for d in dirs if d != "unsupported_originals" and not d.startswith('.')])
-                    files.sort()
-                    for fname in files:
-                        if fname.startswith('.'):
-                            continue
-                        _stem, ext = os.path.splitext(fname)
-                        if ext.lower() in video_exts:
-                            full_p = os.path.join(root, fname)
-                            if os.path.isfile(full_p):
-                                raw_playlist.append(full_p)
+                raw_playlist = scan_video_files(abs_path)
             except Exception as e:
                 print(f"❌ 디렉토리 읽기 실패 ({abs_path}): {e}")
-                sys.exit(1)
-            raw_playlist.sort()
-            
+                return False
             if not raw_playlist:
                 print(f"❌ 에러: [{self.input_path}] 폴더 내에 재생 가능한 영상 파일이 없습니다.")
-                sys.exit(1)
+                return False
 
         elif os.path.isfile(abs_path):
             self.is_single_file_mode = True
             raw_playlist.append(abs_path)
         else:
             print(f"❌ 에러: [{self.input_path}] 존재하지 않는 파일이거나 올바르지 않은 경로입니다.")
-            sys.exit(1)
+            return False
 
         # [초고속 시작 최적화] 시작 시 모든 파일에 대한 무거운 ffprobe 검사를 건너뛰고,
         # 기존 H.265 변환본이 있는 경우에만 빠르게 우선 매핑하여 0.05초 만에 재생목록을 완성합니다.
@@ -5044,6 +5006,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         for idx, path in enumerate(self.playlist):
             disp = os.path.relpath(path, abs_path) if not self.is_single_file_mode else os.path.basename(path)
             print(f"   [{idx}] {disp}")
+        return True
 
     def on_realize(self, widget):
         """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작하고 백그라운드 검사기를 가동합니다."""
@@ -5227,6 +5190,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             self.pipeline = None
 
         # 신규 playbin 파이프라인 생성
+        self.subtitle_overlays = []
+        self.n_embedded_text = 0
         self.pipeline = Gst.ElementFactory.make("playbin", "player")
 
         # 젯슨 HW 디코더 동적 속성 설정을 위한 deep-element-added 시그널 연결
@@ -5361,10 +5326,13 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
 
     def on_bus_message(self, bus, message):
         """재생 완료(EOS) 및 에러 메시지 처리"""
+        has_current = bool(self.playlist) and 0 <= self.current_index < len(self.playlist)
         if message.type == Gst.MessageType.EOS:
+            if not has_current:
+                return
             self.retry_counts.pop(self.playlist[self.current_index], None)
             # 재생 완료 시 이어보기 캐시 삭제
-            if 0 <= self.current_index < len(self.playlist):
+            if has_current:
                 resume_cache.clear(self.playlist[self.current_index])
                 resume_cache.save()
 
@@ -5393,6 +5361,8 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             print(f"❌ 재생 중 에러 발생: {err}")
             if debug:
                 print(f"   GStreamer: {debug}")
+            if not has_current:
+                return
             path = self.playlist[self.current_index]
             retries = self.retry_counts.get(path, 0)
             if retries < self.max_retries:
@@ -5407,6 +5377,7 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
                 self.play_next_video()
 
         elif message.type == Gst.MessageType.ASYNC_DONE:
+            self._detect_embedded_subtitles()
             if getattr(self, "pending_seek_ns", 0) > 0 and self.pipeline:
                 seek_ns = self.pending_seek_ns
                 self.pending_seek_ns = 0
@@ -5736,9 +5707,80 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         self.sub_popover.show_all()
         self.sub_popover.popup()
 
+    def _detect_embedded_subtitles(self):
+        """외부 자막이 없을 때 컨테이너 내장 자막 트랙 수를 감지하고 표시 여부를 적용합니다."""
+        if not self.pipeline or self.available_subtitles:
+            return
+        try:
+            n_text = self.pipeline.get_property("n-text")
+        except Exception:
+            return
+        if n_text != self.n_embedded_text:
+            self.n_embedded_text = n_text
+            if n_text > 0:
+                print(f"💬 [내장 자막 감지] {n_text}개 트랙")
+        if self.n_embedded_text > 0:
+            self._apply_embedded_subs_visibility()
+        self.update_subtitle_button_ui()
+
+    def _apply_embedded_subs_visibility(self):
+        for ov in self.subtitle_overlays:
+            try:
+                if ov.find_property("silent"):
+                    ov.set_property("silent", not self.embedded_subs_enabled)
+            except Exception:
+                pass
+
+    def _embedded_track_label(self, idx):
+        """내장 자막 트랙의 언어 태그를 읽어 표시용 이름을 만듭니다."""
+        lang = ""
+        try:
+            tags = self.pipeline.emit("get-text-tags", idx) if self.pipeline else None
+            if tags:
+                ok, val = tags.get_string(Gst.TAG_LANGUAGE_CODE)
+                if ok and val:
+                    lang = f" ({val})"
+        except Exception:
+            pass
+        return f"내장 자막 {idx + 1}/{self.n_embedded_text}{lang}"
+
+    def toggle_embedded_subtitles(self):
+        self.embedded_subs_enabled = not self.embedded_subs_enabled
+        self._apply_embedded_subs_visibility()
+        cur = self.pipeline.get_property("current-text") if self.pipeline else 0
+        name = self._embedded_track_label(max(0, cur))
+        self.show_osd(f"💬 {name} {'ON' if self.embedded_subs_enabled else 'OFF'}")
+        self.update_subtitle_button_ui()
+
+    def cycle_embedded_subtitles(self):
+        """내장 자막 트랙 순환: 트랙1 → 트랙2 → … → 끄기 → 트랙1"""
+        if not self.pipeline or self.n_embedded_text <= 0:
+            return
+        if not self.embedded_subs_enabled:
+            self.embedded_subs_enabled = True
+            self.pipeline.set_property("current-text", 0)
+            nxt = 0
+        else:
+            cur = max(0, self.pipeline.get_property("current-text"))
+            nxt = cur + 1
+            if nxt >= self.n_embedded_text:
+                self.embedded_subs_enabled = False
+            else:
+                self.pipeline.set_property("current-text", nxt)
+        self._apply_embedded_subs_visibility()
+        if self.embedded_subs_enabled:
+            self.show_osd(f"💬 {self._embedded_track_label(nxt)}")
+        else:
+            self.show_osd("💬 내장 자막 OFF")
+        self.update_subtitle_button_ui()
+
     def on_sub_button_clicked(self, widget):
         """자막 버튼 클릭 시 단일 자막은 토글, 다중 자막은 팝오버 메뉴를 표시합니다."""
         if not self.available_subtitles:
+            if self.n_embedded_text > 1:
+                self.cycle_embedded_subtitles()
+            elif self.n_embedded_text == 1:
+                self.toggle_embedded_subtitles()
             return
         if len(self.available_subtitles) == 1:
             self.toggle_subtitles()
@@ -5852,7 +5894,15 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             return
             
         total = len(self.available_subtitles)
-        if total == 0:
+        if total == 0 and self.n_embedded_text > 0:
+            state = "ON" if self.embedded_subs_enabled else "OFF"
+            count = f" ({self.n_embedded_text})" if self.n_embedded_text > 1 else ""
+            tip = "내장 자막 켜기/끄기 (S)" if self.n_embedded_text == 1 else "클릭: 내장 자막 트랙 순환 / S: 켜기·끄기"
+            for b in btns:
+                b.set_label(f"💬 내장{count} {state}")
+                b.set_sensitive(True)
+                b.set_tooltip_text(tip)
+        elif total == 0:
             for b in btns:
                 b.set_label("💬 자막 없음")
                 b.set_sensitive(False)
@@ -5874,7 +5924,10 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
     def toggle_subtitles(self):
         """자막 켜기/끄기 상태를 토글합니다."""
         if not self.available_subtitles:
-            print("ℹ️ 현재 영상에 로드된 자막이 없습니다.")
+            if self.n_embedded_text > 0:
+                self.toggle_embedded_subtitles()
+            else:
+                print("ℹ️ 현재 영상에 로드된 자막이 없습니다.")
             return
 
         self.subtitles_enabled = not self.subtitles_enabled
@@ -5889,6 +5942,11 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
         """키보드 입력 이벤트 제어"""
         keyname = Gdk.keyval_name(event.keyval)
         state = event.state
+
+        # 검색창/URL 입력창에 입력 중일 때는 단축키가 글자를 가로채지 않도록 입력창에 그대로 전달합니다.
+        # (Esc도 입력창의 기본 동작(검색어 지우기)에 맡겨 앱이 종료되지 않게 합니다.)
+        if isinstance(self.get_focus(), Gtk.Entry):
+            return False
         is_shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         is_ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
 
@@ -6054,8 +6112,20 @@ class JetsonSignageFlexiblePlayer(Gtk.Window):
             history_cache.save()
         except Exception:
             pass
-        except Exception:
-            pass
+
+        if getattr(self, "cache_flush_timer_id", None):
+            try:
+                GLib.source_remove(self.cache_flush_timer_id)
+            except Exception:
+                pass
+            self.cache_flush_timer_id = None
+
+        if getattr(self, "remote_status_timer_id", None):
+            try:
+                GLib.source_remove(self.remote_status_timer_id)
+            except Exception:
+                pass
+            self.remote_status_timer_id = None
 
         if getattr(self, "click_timer_id", None):
             try:

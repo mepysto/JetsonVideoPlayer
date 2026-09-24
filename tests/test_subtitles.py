@@ -79,3 +79,30 @@ def test_find_all_matching_subtitles(jp, tmp_path):
     assert "Other.srt" not in found
     assert found[0] == "Movie.ko.srt"
     assert set(found) == {"Movie.en.srt", "Movie.ko.srt", "Movie.smi"}
+
+
+def test_scan_video_files(jp, tmp_path):
+    (tmp_path / "b.mp4").write_bytes(b"")
+    (tmp_path / "A.MKV").write_bytes(b"")
+    (tmp_path / "note.txt").write_text("x")
+    (tmp_path / ".hidden.mp4").write_bytes(b"")
+    sub = tmp_path / "season1"
+    sub.mkdir()
+    (sub / "ep1.webm").write_bytes(b"")
+    backup = tmp_path / "unsupported_originals"
+    backup.mkdir()
+    (backup / "old.avi").write_bytes(b"")
+    found = [os.path.relpath(p, tmp_path) for p in jp.scan_video_files(str(tmp_path))]
+    assert found == ["A.MKV", "b.mp4", os.path.join("season1", "ep1.webm")]
+
+
+def test_scan_video_files_empty(jp, tmp_path):
+    assert jp.scan_video_files(str(tmp_path)) == []
+
+
+def test_atomic_write_json(jp, tmp_path):
+    import json
+    target = tmp_path / "sub" / "data.json"
+    jp.atomic_write_json(str(target), {"한글": 1})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"한글": 1}
+    assert not (tmp_path / "sub" / "data.json.tmp").exists()
