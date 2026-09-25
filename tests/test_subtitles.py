@@ -131,3 +131,12 @@ def test_orphan_subtitles_still_used_as_fallback(jp, tmp_path):
     # 다른 영상의 자막과 주인 없는 자막이 섞여 있으면 주인 없는 것만 사용
     _touch(tmp_path, "other.mp4", "other.en.srt")
     assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "movie_h265.mp4"))] == ["movie.ko.srt"]
+
+
+def test_subtitle_owner_prefers_prefix_over_substring(jp, tmp_path):
+    """b.ai.ko.srt 안의 'a'(.ai.) 때문에 영상 a의 자막으로 잡히면 안 됩니다."""
+    for name in ("a.mkv", "b.mkv", "a.ko.srt", "b.ai.ko.srt"):
+        (tmp_path / name).write_text("x")
+    for _ in range(20):   # 예전에는 집합 순서에 따라 결과가 달라졌습니다
+        assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "a.mkv"))] == ["a.ko.srt"]
+        assert [os.path.basename(p) for p in jp.find_all_matching_subtitles(str(tmp_path / "b.mkv"))] == ["b.ai.ko.srt"]

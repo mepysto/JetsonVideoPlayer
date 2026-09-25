@@ -28,6 +28,9 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
   - NLLB-200 모델 라이선스는 **CC-BY-NC 4.0(비상업적 이용만 허용)**입니다.
   - 지금 보는 위치부터 번역해 바로 화면에 표시하고, 결과는 `영상이름.ai.ko.srt`로 저장합니다. "AI 자막을 만들면 자동으로 번역"도 켤 수 있습니다.
 
+- **🔎 대사 검색 (`Ctrl+F`)**: 재생목록에 있는 모든 영상의 자막(AI 자막·번역 포함)에서 대사를 찾아, 고르면 그 영상의 해당 장면으로 이동합니다. 지금 보는 영상의 결과가 먼저 나오며, 리모컨에서도 검색할 수 있습니다.
+- 영상 폴더에 쓸 수 없으면(읽기 전용 공유 등) AI 자막·번역은 `~/.cache/jetson_video_player/ai_subtitles/`에 저장되고, 다음 재생 때 자동으로 불러옵니다.
+
 ### 3. 타임라인·챕터
 - **썸네일 미리보기**: 진행바에 마우스를 올리면 해당 시각의 썸네일이 보입니다. NVDEC으로 백그라운드에서 추출해 캐시합니다.
 - **챕터 (`K`)**: MKV/MP4 챕터를 우선 사용합니다. 챕터가 없으면 자동 장면 분석으로 만듭니다.
@@ -53,7 +56,7 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 - **보안**:
   - PIN으로 로그인한 기기에만 토큰(쿠키)을 발급하고, 명령은 JSON POST로만 받아 같은 네트워크의 다른 웹페이지가 플레이어를 조작할 수 없습니다.
   - PIN을 연속으로 틀리면 5분간 잠깁니다. "새 PIN"을 누르면 모든 기기가 로그아웃됩니다.
-- **화면 구성**: 실시간 상태 반영(SSE), 진행바를 끌 때 썸네일 미리보기, 재생목록 썸네일, 자막 트랙 선택과 싱크, AI 자막과 번역, 챕터·북마크 이동, 야간 모드, 회전, 수면 타이머, YouTube 다운로드 대기열
+- **화면 구성**: 실시간 상태 반영(SSE), 대사 검색, 진행바를 끌 때 썸네일 미리보기, 재생목록 썸네일, 자막 트랙 선택과 싱크, AI 자막과 번역, 챕터·북마크 이동, 야간 모드, 회전, 수면 타이머, YouTube 다운로드 대기열
 - **끊김 자동 복구**: 폰 화면이 꺼졌다 켜지거나 네트워크가 바뀌어도 자동으로 다시 연결하고, 실시간 연결이 계속 실패하면 1초 간격 조회로 전환합니다.
 - **홈 화면에 추가**: 브라우저 메뉴의 "홈 화면에 추가"로 앱처럼 설치할 수 있습니다.
 - **링크 보내기**: 리모컨의 YouTube 입력칸에 링크를 붙여넣으면 바로 보냅니다. 폰 브라우저에서 보던 페이지는 리모컨의 "다른 앱에서 바로 보내는 방법"에 있는 북마클릿으로 `http://<Jetson-IP>:8888/share?url=…` 페이지를 열어 한 번 눌러 보낼 수 있습니다(다른 사이트가 몰래 보내지 못하도록 자동 전송은 하지 않습니다).
@@ -144,6 +147,7 @@ jetson-player "https://youtu.be/..."   # YouTube 받아서 재생
 | `, / .` | 자막 싱크 -0.1초 / +0.1초 |
 | `G` | 🤖 AI 자막 생성 (Whisper, 음성 인식) |
 | `Shift + G` | 🌐 켜 둔 자막을 한국어(설정 언어)로 번역 |
+| `Ctrl + F` | 🔎 대사 검색 (재생목록 전체 자막에서 찾아 그 장면으로 이동) |
 
 #### 부가 기능
 | 조작 | 기능 |
@@ -188,7 +192,8 @@ jetson_player/
   subtitles/timeline.py     # 재생 위치별 표시 대사 조회
   remote/                   # 웹 리모컨: HTTP 핸들러, PIN 인증, SSE, 정적 페이지
   ui/window.py              # 메인 창: 상태 초기화, 키 처리, 종료
-  ui/*.py                   # 기능별 mixin (state, playback, controls, timeline, playlist, subtitles,
+  subtitles/search.py       # 대사 검색 색인 (재생목록 전체 자막)
+  ui/*.py                   # 기능별 mixin (state, playback, search, controls, timeline, playlist, subtitles,
                             #   subtitle_overlay, ai, viewing, library, features, remote, youtube, menu, layout)
   ui/style.css              # GTK 테마
   vendor/qrcodegen.py       # QR 코드 생성 (MIT, Project Nayuki)

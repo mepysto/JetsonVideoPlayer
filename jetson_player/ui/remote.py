@@ -137,6 +137,25 @@ class RemoteMixin:
             return os.path.join(folder, files[i])
         return None
 
+    def remote_search(self, query, limit=100):
+        """[HTTP 스레드] 대사 검색. 색인이 오래됐으면 메인 스레드에 갱신을 요청하고 지금 색인으로 답합니다."""
+        with self._remote_status_lock:
+            paths = list(self._remote_playlist_paths)
+            cur_index = self._remote_status.get("current_index", -1)
+        current = paths[cur_index] if 0 <= cur_index < len(paths) else None
+        index = getattr(self, "dialogue_index", None)
+        indexing = index is None or getattr(self, "_dialogue_index_thread", None) is not None
+        if index is None or getattr(self, "_remote_search_indexed_for", None) != paths:
+            self._remote_search_indexed_for = paths
+            GLib.idle_add(lambda: (self.refresh_dialogue_index(), False)[1])
+            indexing = True
+        positions = {p: i for i, p in enumerate(paths)}
+        hits = index.search(query, limit=limit, first_video=current) if index else []
+        results = [{"index": positions[h.video], "sec": round(h.start_ms / 1000, 2), "name": os.path.basename(h.video),
+                    "text": " ".join(h.text.split()), "label": h.label, "current": h.video == current}
+                   for h in hits if h.video in positions]
+        return {"indexing": indexing, "results": results}
+
     def remote_playlist_thumbnail_path(self, playlist_index):
         """[HTTP 스레드] 재생목록 항목의 대표 썸네일 (캐시가 있을 때만)"""
         with self._remote_status_lock:
@@ -273,6 +292,9 @@ class RemoteMixin:
             run(self.seek_direct, int(max(0.0, _to_float(sec)) * Gst.SECOND))
         elif action == "volume" and _to_float(val) is not None:
             run(self.set_volume, _to_float(val))
+        elif action == "play_at" and _to_int(index) is not None and _to_float(sec) is not None:
+            i, start_ms = _to_int(index), int(max(0.0, _to_float(sec)) * 1000)
+            run(lambda: self.jump_to_dialogue(self.playlist[i], start_ms) if 0 <= i < len(self.playlist) else None)
         elif action == "play_index" and _to_int(index) is not None:
             run(self.play_index_direct, _to_int(index))
         elif action == "queue_next" and _to_int(index) is not None:

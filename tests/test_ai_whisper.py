@@ -48,3 +48,25 @@ def test_list_whisper_models_ignores_test_fixtures(tmp_path, monkeypatch):
     assert whisper.list_whisper_models() == ["large-v3-turbo-q5_0", "small-q5_1"]
     assert whisper.find_whisper_model("large-v3-turbo-q5_0").endswith("ggml-large-v3-turbo-q5_0.bin")
     assert whisper.find_whisper_model("medium").endswith(".bin")          # 없는 모델이면 설치된 것 사용
+
+
+def test_read_only_folder_saves_to_cache_and_is_found_again(tmp_path, monkeypatch):
+    from jetson_player.ai import whisper
+    from jetson_player.subtitles import parse
+
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(whisper, "AI_SUBTITLE_CACHE_DIR", str(cache))
+    monkeypatch.setattr(parse, "AI_SUBTITLE_CACHE_DIR", str(cache))
+    shows = []
+    for show in ("showA", "showB"):
+        folder = tmp_path / show
+        folder.mkdir()
+        (folder / "ep1.mkv").write_bytes(b"x")
+        shows.append(folder / "ep1.mkv")
+    monkeypatch.setattr(whisper.os, "access", lambda p, mode: False)   # 두 폴더 모두 쓰기 불가
+    path_a = ai_subtitle_path(str(shows[0]), "ko")
+    path_b = ai_subtitle_path(str(shows[1]), "ko")
+    assert os.path.dirname(path_a) == str(cache) and path_a != path_b
+    open(path_a, "w").write("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+    assert parse.find_all_matching_subtitles(str(shows[0])) == [path_a]
+    assert parse.find_all_matching_subtitles(str(shows[1])) == []   # 같은 이름의 다른 폴더 영상과 섞이지 않음

@@ -14,6 +14,7 @@ from jetson_player.remote.events import EventBroker
 class FakePlayer:
     def __init__(self):
         self.commands = []
+        self.searches = []
 
     def get_remote_status(self):
         return {"title": "t", "is_playing": True}
@@ -26,6 +27,10 @@ class FakePlayer:
 
     def remote_playlist_thumbnail_path(self, i):
         return None
+
+    def remote_search(self, q):
+        self.searches.append(q)
+        return {"indexing": False, "results": [{"index": 0, "sec": 1.5, "name": "a.mkv", "text": q}]}
 
 
 @pytest.fixture
@@ -134,3 +139,13 @@ def test_non_lan_clients_are_rejected(remote, monkeypatch):
 ])
 def test_is_lan_client(addr, expected):
     assert srv.is_lan_client(addr) is expected
+
+
+def test_dialogue_search_api(remote):
+    port, player, _ = remote
+    assert request(port, "GET", "/api/search?q=hi")[0].status == 401
+    cookie = login(port)
+    r, body = request(port, "GET", "/api/search?q=%EC%95%88%EB%85%95", cookie=cookie)
+    assert r.status == 200 and json.loads(body)["results"][0]["text"] == "안녕"
+    r, _ = request(port, "POST", "/api/cmd", {"action": "play_at", "index": 0, "sec": 1.5}, cookie=cookie)
+    assert r.status == 200 and player.commands[-1] == {"action": "play_at", "index": 0, "sec": 1.5}

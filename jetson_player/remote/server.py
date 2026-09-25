@@ -156,6 +156,9 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
             self._serve_events()
         elif path == "/api/thumb":
             self._serve_thumbnail(query)
+        elif path == "/api/search":
+            q = query.get("q", [""])[0][:200]
+            self._json(200, self.player.remote_search(q) if self.player else {"indexing": False, "results": []})
         else:
             self._send(404, b"not found", "text/plain")
 

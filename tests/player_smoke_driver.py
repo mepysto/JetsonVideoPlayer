@@ -59,6 +59,20 @@ def main(folder):
         wall_ns = (GLib.get_monotonic_time() - t0) * 1000
         result["measured_rate"] = round((position_ns() - p0) / wall_ns, 2)
         result["ui_rate"] = win.playback_rate
+        win.set_playback_rate(1.0)
+        win.show_dialogue_search()
+        win._search_entry.set_text("aaa")   # 다른 영상(a.mkv)의 대사
+
+    def search_ready():
+        return win._search_results.get_row_at_index(0) is not None
+
+    def activate_hit():
+        rows = win._search_results.get_children()
+        result["search_rows"] = [(r.hit.video.rsplit("/", 1)[-1], r.hit.start_ms) for r in rows]
+        win._activate_first_search_result()
+
+    def record_jump():
+        result["after_search"] = {"file": playing_file(), "subs": subtitle_texts()}
 
     started = {}
     steps += [
@@ -67,6 +81,8 @@ def main(folder):
         ("rate", lambda: playing_file() == "b.mkv", seek_after_rate),
         ("seeked", lambda: playing_file() and 0.3 * Gst.SECOND <= position_ns() < 0.8 * Gst.SECOND, mark_position),
         ("measure", lambda: GLib.get_monotonic_time() - started["measure_at"][0] > 600_000, record_rate),
+        ("search", search_ready, activate_hit),
+        ("jump", lambda: playing_file() == "a.mkv", record_jump),
     ]
 
     def tick():

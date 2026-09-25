@@ -26,6 +26,7 @@ from .timeline import TimelineMixin
 from .ai import AiSubtitlesMixin
 from .viewing import ViewingMixin
 from .state import ControlStateMixin
+from .search import DialogueSearchMixin
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class JetsonSignageFlexiblePlayer(
     TimelineMixin,
     AiSubtitlesMixin,
     ViewingMixin,
+    DialogueSearchMixin,
     Gtk.Window,
 ):
     """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""

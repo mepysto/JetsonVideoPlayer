@@ -37,3 +37,5 @@ def test_player_plays_folder_and_switches_subtitles(smoke_result):
     assert r["second"] == {"file": "b.mkv", "subs": ["BBB line"]}
     assert 1.5 <= r["measured_rate"] <= 2.5   # 탐색 후에도 2배속 유지
     assert r["ui_rate"] == pytest.approx(2.0)
+    assert r["search_rows"] == [["a.mkv", 0]]
+    assert r["after_search"] == {"file": "a.mkv", "subs": ["AAA line"]}

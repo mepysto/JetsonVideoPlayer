@@ -18,6 +18,8 @@ import time
 
 from gi.repository import GLib, Gst
 
+from ..subtitles.parse import AI_SUBTITLE_CACHE_DIR, cached_ai_subtitle_stem
+
 log = logging.getLogger(__name__)
 
 WHISPER_HOME = os.environ.get("JVP_WHISPER_DIR", os.path.expanduser("~/.local/share/jetson_video_player/whisper.cpp"))
@@ -122,12 +124,11 @@ def ai_subtitle_path(video_path, language, translate=False):
     """영상 옆 저장 경로 (쓰기 불가 폴더면 캐시 폴더)"""
     stem = os.path.splitext(os.path.basename(video_path))[0]
     lang = "en" if translate else (language or "auto")
-    name = f"{stem}.ai.{lang}.srt"
     folder = os.path.dirname(os.path.abspath(video_path))
-    if not os.access(folder, os.W_OK):
-        folder = os.path.expanduser("~/.cache/jetson_video_player/ai_subtitles")
-        os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, name)
+    if os.access(folder, os.W_OK):
+        return os.path.join(folder, f"{stem}.ai.{lang}.srt")
+    os.makedirs(AI_SUBTITLE_CACHE_DIR, exist_ok=True)
+    return os.path.join(AI_SUBTITLE_CACHE_DIR, f"{cached_ai_subtitle_stem(video_path)}.ai.{lang}.srt")
 
 
 def extract_audio_wav(video_path, wav_path, cancelled=lambda: False):

@@ -280,8 +280,12 @@ class PlaybackMixin:
             if element.find_property("subtitle-encoding"):
                 element.set_property("subtitle-encoding", "UTF-8")
 
-    def play_current_video(self, start_position_ns=0):
-        """[성능 최적화] 영상 전환 및 다중 자막 변경 시 파이프라인 자원을 완전 세척 후 신규 구축합니다."""
+    def play_current_video(self, start_position_ns=0, open_at_ns=None):
+        """[성능 최적화] 영상 전환 및 다중 자막 변경 시 파이프라인 자원을 완전 세척 후 신규 구축합니다.
+
+        start_position_ns > 0: 같은 영상을 그 위치에서 다시 구성 (자막·썸네일 등 영상 상태 유지)
+        open_at_ns: 새 영상으로 열되 이어보기 위치 대신 이 위치부터 재생 (대사 검색 등)
+        """
         if not self.playlist or self.current_index < 0 or self.current_index >= len(self.playlist):
             return
 
@@ -330,7 +334,9 @@ class PlaybackMixin:
         if start_position_ns == 0:
             # 이어보기 체크 (이전 시청 위치가 있으면 복원)
             saved_pos_ns, saved_dur_ns = resume_cache.get(video_path)
-            if saved_pos_ns > 0:
+            if open_at_ns is not None:
+                start_position_ns = max(0, int(open_at_ns))
+            elif saved_pos_ns > 0:
                 start_position_ns = saved_pos_ns
                 self.show_osd(f"⏱️ 이어서 재생: {self.format_time(saved_pos_ns)}")
                 log.info(f"⏱️ [이어보기] {self.format_time(saved_pos_ns)} 지점부터 재생합니다.")
@@ -396,6 +402,9 @@ class PlaybackMixin:
                 self.has_subtitles = False
 
         self.pending_seek_ns = start_position_ns
+        # 이전 영상의 위치가 남아 있으면 HW 경로 실패 시 엉뚱한 위치에서 다시 시작합니다.
+        self.last_known_pos_ns = start_position_ns
+        self._restart_scheduled = False
         is_net_stream = video_path.startswith("http://") or video_path.startswith("https://")
         if is_net_stream:
             video_uri = video_path
@@ -546,20 +555,27 @@ class PlaybackMixin:
                 log.error(f"   GStreamer: {debug}")
             if not has_current:
                 return
+            if getattr(self, "_restart_scheduled", False):
+                # 같은 파이프라인이 연달아 내는 후속 오류(not-negotiated 등): 이미 다시 시작하도록 예약됨
+                return
             path = self.playlist[self.current_index]
             name = os.path.basename(path)[:40]
             if self.using_hw_video_output and path not in self.hw_output_disabled:
                 # HW 출력 경로(nvvidconv)가 이 영상 포맷을 처리하지 못함 → 기존(소프트웨어 변환) 경로로 즉시 재시도
                 log.info("↩️ HW 영상 출력 경로 실패 — 호환 경로로 다시 재생합니다.")
                 self.hw_output_disabled.add(path)
-                GLib.timeout_add(100, self.play_current_video, self.last_known_pos_ns)
+                # 아직 첫 탐색(이어보기·대사 검색 위치)을 하기 전에 실패했으면 그 위치에서 다시 시작합니다.
+                restart_ns = self.pending_seek_ns or self.last_known_pos_ns
+                self._restart_scheduled = True
+                GLib.timeout_add(100, lambda: (self.play_current_video(restart_ns), False)[1])
                 return
             retries = self.retry_counts.get(path, 0)
             if retries < self.max_retries:
                 self.retry_counts[path] = retries + 1
                 log.info(f"🔄 재생 파이프라인 재시도 ({retries + 1}/{self.max_retries})")
                 self.show_osd(f"⚠️ 재생 오류 — 다시 시도 중 ({retries + 1}/{self.max_retries})", duration_sec=2.5)
-                GLib.timeout_add(250, self.play_current_video)
+                self._restart_scheduled = True
+                GLib.timeout_add(250, lambda: (self.play_current_video(), False)[1])
             elif self.is_single_file_mode or len(self.playlist) <= 1:
                 log.info("⏹ 반복 오류로 재생을 중단합니다. 원본과 디코더 로그를 확인하세요.")
                 self.show_osd(f"❌ 재생할 수 없는 영상입니다: {name}", duration_sec=5.0)

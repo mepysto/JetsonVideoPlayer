@@ -191,6 +191,13 @@
     </div>
   </div>
 
+  <!-- 대사 검색 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">🔎 대사 검색</span><span id="lineSearchInfo" class="muted"></span></div>
+    <input type="search" id="lineSearch" class="search-input" placeholder="자막 대사로 장면 찾기 (재생목록 전체)" oninput="onLineSearch(this.value)">
+    <div id="lineResults" class="list" style="display:none"></div>
+  </div>
+
   <!-- 재생목록 -->
   <div class="card">
     <div class="card-title-row"><span class="card-title">📂 재생목록</span><span id="playlistTotalCount" class="muted"></span></div>
@@ -365,6 +372,31 @@ function renderStatus(d) {
 }
 
 // ---- 재생목록 ---------------------------------------------------------------
+// ---- 대사 검색 --------------------------------------------------------------
+let lineSearchTimer = null, lineSearchSeq = 0;
+function onLineSearch(q) {
+  clearTimeout(lineSearchTimer);
+  lineSearchTimer = setTimeout(() => runLineSearch(q.trim()), 250);
+}
+async function runLineSearch(q, retry = 0) {
+  const box = $('lineResults'), info = $('lineSearchInfo'), seq = ++lineSearchSeq;
+  if (!q) { box.style.display = 'none'; info.textContent = ''; return; }
+  let d;
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+    if (r.status === 401) { location.reload(); return; }
+    d = await r.json();
+  } catch (e) { toast('연결이 끊어졌습니다'); return; }
+  if (seq !== lineSearchSeq) return;   // 더 새 검색이 있음
+  info.textContent = d.indexing ? '색인 중…' : (d.results.length ? d.results.length + '개' : '');
+  box.style.display = 'flex';
+  box.innerHTML = d.results.length ? d.results.map(h =>
+    `<div class="row" onclick="cmd('play_at', {index: ${h.index}, sec: ${h.sec}}); toast('▶ ${fmt(h.sec)}')">
+       <span style="min-width:0"><span class="t">${fmt(h.sec)}</span> <small class="muted">${esc(h.name)}${h.current ? ' · 지금 영상' : ''}</small><br>${esc(h.text)}</span></div>`).join('')
+    : `<div class="empty">${d.indexing ? '자막을 색인하는 중입니다…' : '찾은 대사가 없습니다.'}</div>`;
+  if (d.indexing && retry < 5) setTimeout(() => { if (seq === lineSearchSeq) runLineSearch(q, retry + 1); }, 1200);
+}
+
 function onSearch(q) { searchQuery = (q || '').trim().toLowerCase(); renderPlaylist(); }
 function toggleFolder(name) { openFolders.has(name) ? openFolders.delete(name) : openFolders.add(name); renderPlaylist(); }
 function renderPlaylist() {

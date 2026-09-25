@@ -1,10 +1,12 @@
 """자막 파일(SMI/SRT/VTT/ASS) 탐색·파싱과 언어 감지"""
+import hashlib
 import html
 import logging
 import os
 import re
 
 from ..library import VIDEO_EXTS
+from ..storage import CACHE_DIR
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +27,30 @@ FALLBACK_PALETTE = ["#B388FF", "#80CBC4", "#FFF59D", "#FFAB91", "#CE93D8", "#80D
 
 
 AI_SUBTITLE_COLOR = "#B388FF"
+
+# 영상 폴더에 쓸 수 없을 때(읽기 전용 공유 등) AI 자막·번역을 저장하는 곳
+AI_SUBTITLE_CACHE_DIR = os.path.join(CACHE_DIR, "ai_subtitles")
+SUBTITLE_EXTS = ('.srt', '.smi', '.vtt', '.ass', '.ssa', '.sub')
+
+
+def cached_ai_subtitle_stem(video_path):
+    """캐시 폴더용 이름: <영상 이름>.<폴더 해시 8자> — 다른 폴더의 같은 이름 영상과 섞이지 않게 합니다."""
+    stem = os.path.splitext(os.path.basename(video_path))[0]
+    folder = os.path.dirname(os.path.abspath(video_path))
+    return f"{stem}.{hashlib.sha1(folder.encode('utf-8')).hexdigest()[:8]}"
+
+
+def find_cached_ai_subtitles(video_path, cache_dir=None):
+    """캐시 폴더에 저장된 이 영상의 AI 자막 (예전 버전이 해시 없이 저장한 <영상>.ai.<언어>.srt 포함)"""
+    cache_dir = cache_dir or AI_SUBTITLE_CACHE_DIR
+    stem = os.path.splitext(os.path.basename(video_path))[0]
+    prefixes = (cached_ai_subtitle_stem(video_path) + ".ai.", stem + ".ai.")
+    try:
+        names = sorted(os.listdir(cache_dir))
+    except OSError:
+        return []
+    return [os.path.join(cache_dir, n) for n in names
+            if n.startswith(prefixes) and n.lower().endswith(SUBTITLE_EXTS)]
 
 
 def is_ai_subtitle(file_path):
@@ -243,7 +269,7 @@ def find_all_matching_subtitles(video_path):
     base_name = os.path.basename(video_path)
     stem, _ = os.path.splitext(base_name)
     stem_lower = stem.lower()
-    sub_exts = ['.srt', '.smi', '.vtt', '.ass', '.ssa', '.sub']
+    sub_exts = list(SUBTITLE_EXTS)
     
     found_files = []
     seen = set()
@@ -267,8 +293,11 @@ def find_all_matching_subtitles(video_path):
     def owner(sub_name_lower):
         """자막 이름에 가장 길게 들어맞는 영상 이름 (없으면 None).
         ep1/ep10처럼 앞부분이 같은 영상이 있어도 더 구체적인 쪽이 자막을 가져갑니다."""
-        matches = [v for v in video_stems if sub_name_lower.startswith(v) or v in sub_name_lower]
-        return max(matches, key=len) if matches else None
+        # 이름이 영상 이름으로 시작하는 경우를 우선합니다. "포함"만 보면 b.ai.ko.srt가 영상 "a"에도 걸립니다.
+        matches = [v for v in video_stems if sub_name_lower.startswith(v)]
+        if not matches:
+            matches = [v for v in video_stems if v in sub_name_lower]
+        return max(matches, key=lambda v: (len(v), v)) if matches else None
 
     subtitle_names = [f for f in dir_files if any(f.lower().endswith(ext) for ext in sub_exts)]
 
@@ -286,6 +315,12 @@ def find_all_matching_subtitles(video_path):
             if cand_path not in seen and owner(fname.lower()) is None:
                 seen.add(cand_path)
                 found_files.append(cand_path)
+
+    # 영상 폴더에 쓸 수 없어 캐시에 저장된 AI 자막
+    for cand_path in find_cached_ai_subtitles(video_path):
+        if cand_path not in seen:
+            seen.add(cand_path)
+            found_files.append(cand_path)
 
     # 한국어, 영어 순서가 앞으로 오도록 스마트 정렬
     def sort_key(path):

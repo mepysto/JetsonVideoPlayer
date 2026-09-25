@@ -76,6 +76,7 @@ class MenuMixin:
             (self.ai_menu_label(), self.start_ai_subtitles),
             (self.translation_menu_label(), self.start_translation),
             ("📑 챕터 / 장면 목록 (K)", self.show_chapters_menu),
+            ("🔎 대사 검색 (Ctrl+F)", self.show_dialogue_search),
         ]
 
     def more_menu_setting_items(self):
