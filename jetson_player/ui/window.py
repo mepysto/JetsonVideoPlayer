@@ -59,9 +59,11 @@ class JetsonSignageFlexiblePlayer(
         # 이벤트 연결 (종료, 키보드 및 마우스 감지)
         self.connect("destroy", self.on_destroy)
         self.connect("key-press-event", self.on_key_press)
-        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
         self.connect("motion-notify-event", self.on_mouse_motion)
         self.connect("button-press-event", self.on_window_button_press)
+        # 진행바 밖에서 버튼을 놓아도 드래그 상태가 남지 않도록 창 전체에서 한 번 더 받습니다.
+        self.connect("button-release-event", lambda _w, e: self.on_seek_end(self._seek_scale, e) if self.is_seeking else False)
 
         # 드래그 앤 드롭 지원 (동영상, 폴더, 자막 파일)
         self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
@@ -97,6 +99,7 @@ class JetsonSignageFlexiblePlayer(
         self.is_destroyed = False
         self._bg_checker_started = False
         self.is_seeking = False
+        self._seek_scale = None
         self.duration_ns = 0
         self.tree_store = None
         self.playlist_treeview = None

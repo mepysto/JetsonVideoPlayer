@@ -5,6 +5,7 @@ from urllib.request import pathname2url
 
 from gi.repository import GLib, GdkX11, Gst, GstVideo
 
+from ..media.gst_setup import seek_flags
 from ..storage import history_cache, resume_cache
 from ..subtitles.parse import find_all_matching_subtitles, get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
 
@@ -15,11 +16,21 @@ class PlaybackMixin:
             self.current_index = idx
             self.play_current_video()
 
+    def seek_to(self, target_ns, mode="accurate"):
+        """현재 배속을 유지한 채 target_ns로 이동합니다. mode: "fast"(키프레임) / "accurate"(정확한 시각).
+
+        seek_simple은 배속을 1.0으로 되돌리므로 모든 탐색은 이 함수를 거칩니다.
+        """
+        if not self.pipeline or target_ns < 0:
+            return False
+        self.last_known_pos_ns = target_ns
+        return self.pipeline.seek(
+            self.playback_rate, Gst.Format.TIME, seek_flags(mode),
+            Gst.SeekType.SET, target_ns, Gst.SeekType.NONE, -1)
+
     def seek_direct(self, target_ns):
-        """지정된 나노초 위치로 즉각 Seek합니다."""
-        if self.pipeline and target_ns >= 0:
-            self.last_known_pos_ns = target_ns
-            self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, target_ns)
+        """지정된 나노초 위치로 정확히 이동합니다 (챕터·북마크·리모컨·MPRIS)."""
+        self.seek_to(target_ns, "accurate")
 
     def set_playback_rate(self, new_rate):
         """GStreamer 파이프라인에 재생 속도(Playback Rate)를 적용합니다."""
@@ -34,16 +45,7 @@ class PlaybackMixin:
                 pos = q_pos
                 self.last_known_pos_ns = q_pos
 
-            flags = Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT
-            res = self.pipeline.seek(
-                self.playback_rate,
-                Gst.Format.TIME,
-                flags,
-                Gst.SeekType.SET,
-                pos,
-                Gst.SeekType.NONE,
-                -1
-            )
+            res = self.seek_to(pos, "accurate")
             if not res:
                 print(f"⚠️ 재생 속도 {new_rate:.2f}x 설정 실패")
             else:
@@ -128,9 +130,7 @@ class PlaybackMixin:
         else:
             ok, pos = self.pipeline.query_position(Gst.Format.TIME)
             if ok:
-                target = max(0, pos - 40 * Gst.MSECOND)
-                self.last_known_pos_ns = target
-                self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE, target)
+                self.seek_to(max(0, pos - 40 * Gst.MSECOND), "accurate")
                 self.show_osd("⏴ 이전 프레임", timeout_ms=600)
 
     def step_playback_rate(self, delta):
@@ -610,27 +610,11 @@ class PlaybackMixin:
                 seek_ns = self.pending_seek_ns
                 self.pending_seek_ns = 0
                 self.rate_applied_on_preroll = True
-                self.pipeline.seek(
-                    self.playback_rate,
-                    Gst.Format.TIME,
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                    Gst.SeekType.SET,
-                    seek_ns,
-                    Gst.SeekType.NONE,
-                    -1
-                )
+                self.seek_to(seek_ns, "accurate")
                 self.pipeline.set_state(Gst.State.PLAYING)
             elif not getattr(self, "rate_applied_on_preroll", False) and getattr(self, "playback_rate", 1.0) != 1.0 and self.pipeline:
                 self.rate_applied_on_preroll = True
-                self.pipeline.seek(
-                    self.playback_rate,
-                    Gst.Format.TIME,
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                    Gst.SeekType.SET,
-                    0,
-                    Gst.SeekType.NONE,
-                    -1
-                )
+                self.seek_to(0, "fast")
 
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             _old_state, new_state, _pending = message.parse_state_changed()
@@ -652,16 +636,7 @@ class PlaybackMixin:
         if self.duration_ns > 0 and target_ns > self.duration_ns:
             target_ns = self.duration_ns
 
-        self.last_known_pos_ns = target_ns
-        res = self.pipeline.seek(
-            self.playback_rate,
-            Gst.Format.TIME,
-            Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-            Gst.SeekType.SET,
-            target_ns,
-            Gst.SeekType.NONE,
-            -1
-        )
+        res = self.seek_to(target_ns, "accurate")
         if not res:
             print("⚠️ 탐색 실패로 파이프라인을 재구축합니다.")
             self.play_current_video(start_position_ns=target_ns)

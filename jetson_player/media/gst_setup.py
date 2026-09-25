@@ -65,6 +65,19 @@ def optimize_gstreamer_ranks():
         print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
 
+def seek_flags(mode):
+    """탐색 종류별 GStreamer 플래그.
+
+    fast: 가장 가까운 키프레임으로 즉시 이동 (방향키·휠·드래그 중 미리보기)
+    accurate: 정확한 시각으로 이동 (A-B 반복, 북마크, 챕터, 진행바 놓기, 이어보기)
+    """
+    if mode == "fast":
+        return Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT | Gst.SeekFlags.SNAP_NEAREST
+    if mode == "accurate":
+        return Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE
+    raise ValueError(f"unknown seek mode: {mode}")
+
+
 def build_hw_video_output(sink, fmt="NV12"):
     """NVDEC 출력(NVMM 메모리)을 GTK GL 싱크가 받을 수 있도록 nvvidconv 변환을 앞에 붙인 출력 bin을 만듭니다.
 

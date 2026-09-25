@@ -4,6 +4,8 @@ from gi.repository import GLib, Gdk, Gst, Gtk
 
 from ..storage import resume_cache
 
+SCRUB_INTERVAL_MS = 150  # 진행바 드래그 중 미리보기 탐색 간격
+
 
 class ControlsMixin:
     def show_osd(self, text, timeout_ms=1200, duration_sec=None):
@@ -171,10 +173,11 @@ class ControlsMixin:
     def on_scale_change_value(self, scale, scroll_type, value):
         """슬라이더 드래그 중 실시간으로 위치 라벨을 업데이트합니다."""
         if self.is_seeking and self.duration_ns > 0:
-            target = int(self.duration_ns * value / 100)
+            target = int(self.duration_ns * max(0.0, min(100.0, value)) / 100)
             self.position_label.set_text(self.format_time(target))
             if getattr(self, "fs_position_label", None):
                 self.fs_position_label.set_text(self.format_time(target))
+            self._schedule_scrub(target)
         return False
 
     def build_fs_controls(self):
@@ -191,7 +194,7 @@ class ControlsMixin:
         self.fs_progress_scale.set_draw_value(False)
         self.fs_progress_scale.set_hexpand(True)
         self.fs_progress_scale.connect("button-press-event", self.on_seek_start)
-        self.fs_progress_scale.connect("button-release-event", self.on_fs_seek_end)
+        self.fs_progress_scale.connect("button-release-event", self.on_seek_end)
         self.fs_progress_scale.connect("change-value", self.on_scale_change_value)
         self.setup_timeline_interactions(self.fs_progress_scale)
 
@@ -316,23 +319,6 @@ class ControlsMixin:
             self.cursor_hide_timer_id = GLib.timeout_add(2500, self._on_hide_timer_tick)
         return False
 
-    def on_fs_seek_end(self, scale, _event):
-        if self.pipeline and self.duration_ns > 0:
-            target = int(self.duration_ns * scale.get_value() / 100)
-            self.last_known_pos_ns = target
-            self.pipeline.seek(
-                self.playback_rate,
-                Gst.Format.TIME,
-                Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                Gst.SeekType.SET,
-                target,
-                Gst.SeekType.NONE,
-                -1
-            )
-            self.show_osd(f"⏱️ {self.format_time(target)} / {self.format_time(self.duration_ns)}")
-        self.is_seeking = False
-        return False
-
     @staticmethod
     def format_time(nanoseconds):
         total_seconds = max(0, int(nanoseconds / Gst.SECOND))
@@ -350,7 +336,7 @@ class ControlsMixin:
             # A-B 구간 반복 루프 검사
             if getattr(self, "is_ab_repeat_active", False) and self.ab_repeat_a is not None and self.ab_repeat_b is not None:
                 if position >= self.ab_repeat_b:
-                    self.pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, self.ab_repeat_a)
+                    self.seek_to(self.ab_repeat_a, "accurate")
                     return True
 
             # 5초 이상 재생 시 이어보기 캐시 갱신
@@ -403,35 +389,55 @@ class ControlsMixin:
         return True
 
     def on_seek_start(self, scale, event):
+        if event.button != 1:
+            return False
         self.is_seeking = True
-        if event.button == 1:
-            alloc = scale.get_allocation()
-            if alloc.width > 0:
-                click_ratio = max(0.0, min(1.0, event.x / alloc.width))
-                scale.set_value(click_ratio * 100)
-                if self.duration_ns > 0:
-                    target = int(self.duration_ns * click_ratio)
-                    self.position_label.set_text(self.format_time(target))
-                    if getattr(self, "fs_position_label", None):
-                        self.fs_position_label.set_text(self.format_time(target))
+        self._seek_scale = scale
+        self._scrub_last_ns = None
+        alloc = scale.get_allocation()
+        if alloc.width > 0:
+            click_ratio = max(0.0, min(1.0, event.x / alloc.width))
+            scale.set_value(click_ratio * 100)
+            if self.duration_ns > 0:
+                target = int(self.duration_ns * click_ratio)
+                self.position_label.set_text(self.format_time(target))
+                if getattr(self, "fs_position_label", None):
+                    self.fs_position_label.set_text(self.format_time(target))
         return False
 
-    def on_seek_end(self, scale, _event):
+    def on_seek_end(self, scale, event):
+        """진행바에서 손을 떼면 정확한 위치로 이동합니다 (일반·전체화면 진행바 공용)."""
+        if event is not None and event.button != 1:
+            return False
+        if not self.is_seeking:
+            return False
+        self.is_seeking = False
+        self._cancel_scrub_timer()
         if self.pipeline and self.duration_ns > 0:
             target = int(self.duration_ns * scale.get_value() / 100)
-            self.last_known_pos_ns = target
-            self.pipeline.seek(
-                self.playback_rate,
-                Gst.Format.TIME,
-                Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                Gst.SeekType.SET,
-                target,
-                Gst.SeekType.NONE,
-                -1
-            )
+            self.seek_to(target, "accurate")
             self.show_osd(f"⏱️ {self.format_time(target)} / {self.format_time(self.duration_ns)}")
-        self.is_seeking = False
         return False
+
+    def _schedule_scrub(self, target_ns):
+        """드래그 중 미리보기 탐색: 150ms마다 한 번 가장 가까운 키프레임으로 이동합니다."""
+        self._scrub_target_ns = target_ns
+        if getattr(self, "_scrub_timer_id", None) is None:
+            self._scrub_timer_id = GLib.timeout_add(SCRUB_INTERVAL_MS, self._on_scrub_tick)
+
+    def _on_scrub_tick(self):
+        self._scrub_timer_id = None
+        target = getattr(self, "_scrub_target_ns", None)
+        if self.is_seeking and target is not None and target != getattr(self, "_scrub_last_ns", None):
+            self._scrub_last_ns = target
+            self.seek_to(target, "fast")
+        return False
+
+    def _cancel_scrub_timer(self):
+        timer_id = getattr(self, "_scrub_timer_id", None)
+        if timer_id is not None:
+            GLib.source_remove(timer_id)
+            self._scrub_timer_id = None
 
     def hide_cursor(self):
         """마우스 커서를 투명(숨김) 커서로 설정합니다."""
