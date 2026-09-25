@@ -65,6 +65,7 @@ class MenuMixin:
         add("📱 스마트폰 웹 리모컨...", lambda: self.show_remote_popover(anchor))
         add_check("ℹ️ 미디어 정보 HUD (I)", self.is_hud_visible, self.toggle_hud)
         add_check("📌 항상 위에 표시 (T)", self.is_keep_above, self.toggle_keep_above)
+        add("🗗 미니 플레이어 (W)", self.toggle_mini_player)
         add("❓ 단축키 안내 (F1)", self.show_help_dialog)
         add("📄 로그 파일 보기", lambda: open_file_location(LOG_FILE))
 

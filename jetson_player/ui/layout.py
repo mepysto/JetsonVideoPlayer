@@ -97,21 +97,28 @@ class LayoutMixin:
 
         # 비디오 이벤트 박스 (마우스 휠 Scroll Seek 및 화면 클릭 격리)
         self.video_event_box = Gtk.EventBox()
-        self.video_event_box.set_visible_window(False)
+        self.video_event_box.set_visible_window(True)
         self.video_event_box.add_events(
             Gdk.EventMask.SCROLL_MASK |
             Gdk.EventMask.BUTTON_PRESS_MASK |
+            Gdk.EventMask.BUTTON_RELEASE_MASK |
             Gdk.EventMask.POINTER_MOTION_MASK
         )
         self.video_event_box.connect("scroll-event", self.on_video_scroll_event)
         self.video_event_box.connect("button-press-event", self.on_video_button_press)
-        self.video_event_box.add(self.video_widget)
-        self.video_container.add(self.video_event_box)
-
-        # 외부/AI 자막 오버레이 (클릭은 아래 영상 영역으로 통과)
+        # 미니 플레이어 창 끌기 (누른 채 움직임 · 놓기)
+        self.video_event_box.connect("motion-notify-event", lambda _w, e: self.mini_drag_motion(e))
+        self.video_event_box.connect("button-release-event", lambda _w, e: (self.end_mini_drag(), False)[1])
+        # 영상과 외부/AI 자막 오버레이를 이벤트 박스 안에 두고, 이벤트 박스의 입력 창을 그 위에 둡니다.
+        # (자막 오버레이를 바깥 Overlay에 두면 pass-through 이벤트가 부모 창으로 가 버려 영상 클릭·휠이 먹히지 않음)
+        self.video_event_box.set_above_child(True)
+        video_layers = Gtk.Overlay()
+        video_layers.add(self.video_widget)
         self.subtitle_overlay = SubtitleOverlay(self._subtitle_position_ms)
-        self.video_container.add_overlay(self.subtitle_overlay)
-        self.video_container.set_overlay_pass_through(self.subtitle_overlay, True)
+        video_layers.add_overlay(self.subtitle_overlay)
+        video_layers.set_overlay_pass_through(self.subtitle_overlay, True)
+        self.video_event_box.add(video_layers)
+        self.video_container.add(self.video_event_box)
 
         # 0) 플레이스홀더 (빈 화면 안내)
         self.placeholder_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)

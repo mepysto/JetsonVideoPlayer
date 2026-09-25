@@ -117,6 +117,8 @@ class ControlsMixin:
         """
         if getattr(self, "is_mouse_over_fs_controls", False) or getattr(self, "is_popover_open", False):
             return False
+        if self.handle_mini_scroll(event):
+            return True
 
         if event.direction == Gdk.ScrollDirection.UP:
             self.seek_relative(10)
@@ -142,6 +144,8 @@ class ControlsMixin:
         """
         if getattr(self, "is_mouse_over_fs_controls", False) or getattr(self, "is_popover_open", False):
             return False
+        if self.handle_mini_button_press(event):
+            return True
 
         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
             if self.click_timer_id is not None:
@@ -474,11 +478,17 @@ class ControlsMixin:
 
     def on_mouse_motion(self, widget, event):
         """마우스 움직임 감지 시 커서를 표시하고 전체화면일 때 컨트롤 바를 띄운 후 2.5초 후 자동 숨김 타이머를 재설정합니다."""
+        if self.mini_drag_motion(event):
+            return True
         if self.is_video_only:
             if self.is_cursor_hidden:
                 self.show_cursor()
-            if getattr(self, "fs_controls_box", None) and not self.is_fs_controls_visible:
-                self.fs_controls_box.show_all()
+            box = self.floating_controls()
+            if box is not None and not self.is_fs_controls_visible:
+                # no-show-all 위젯은 show_all()이 건너뛰므로 잠시 풀고 보여 줍니다.
+                box.set_no_show_all(False)
+                box.show_all()
+                box.set_no_show_all(True)
                 self.is_fs_controls_visible = True
 
             if getattr(self, "cursor_hide_timer_id", None):
@@ -489,20 +499,36 @@ class ControlsMixin:
             self.cursor_hide_timer_id = GLib.timeout_add(2500, self._on_hide_timer_tick)
         return False
 
+    def floating_controls(self):
+        """영상 위에 떠 있는 컨트롤: 미니 플레이어면 작은 것, 전체화면이면 전체 컨트롤"""
+        if getattr(self, "is_mini", False):
+            return self.ensure_mini_controls()
+        return getattr(self, "fs_controls_box", None)
+
     def _on_hide_timer_tick(self):
         """2.5초 동안 마우스 조작이 없을 때 전체화면 컨트롤 바와 커서를 숨깁니다."""
         if self.is_video_only:
             if getattr(self, "is_mouse_over_fs_controls", False) or getattr(self, "is_popover_open", False):
                 return True
-            if getattr(self, "fs_controls_box", None) and self.is_fs_controls_visible:
-                self.fs_controls_box.hide()
+            box = self.floating_controls()
+            if box is not None and self.is_fs_controls_visible:
+                box.hide()
                 self.is_fs_controls_visible = False
             self.hide_cursor()
         self.cursor_hide_timer_id = None
         return False
 
+    def on_window_button_release(self, widget, event):
+        """창 어디에서 버튼을 놓아도 끌기 상태(진행바 드래그·미니 창 이동)가 남지 않게 합니다."""
+        self.end_mini_drag()
+        if self.is_seeking:
+            return self.on_seek_end(self._seek_scale, event)
+        return False
+
     def on_window_button_press(self, widget, event):
         """더블클릭 시 전체화면 전환 및 마우스 조작 감지"""
+        if getattr(self, "is_mini", False):
+            return False
         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
             self.toggle_fullscreen()
             return True
@@ -512,6 +538,8 @@ class ControlsMixin:
 
     def toggle_fullscreen(self):
         """상단바, 재생목록, 컨트롤을 숨긴 영상 전용 전체화면을 전환합니다."""
+        if getattr(self, "is_mini", False):
+            self.exit_mini_player()
         if not self.is_video_only:
             self.sidebar_was_visible = self.sidebar.get_visible()
             self.topbar.hide()

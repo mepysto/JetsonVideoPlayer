@@ -119,3 +119,5 @@ paned > separator:hover {
 scale mark indicator { color: #e9ff5b; min-height: 5px; min-width: 2px; }
 .autoplay-card { background: rgba(14, 18, 26, 0.94); border: 1px solid #3b4455; border-radius: 12px; padding: 14px 16px; min-width: 300px; }
 .autoplay-title { color: #f0f4fc; font-size: 14px; font-weight: 700; }
+.mini-controls { padding: 2px 8px; margin: 8px; }
+.mini-controls button { font-size: 16px; padding: 2px 8px; min-height: 0; }

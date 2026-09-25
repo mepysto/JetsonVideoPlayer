@@ -93,6 +93,7 @@ SHORTCUTS = [
 
     # 화면
     _sc({"f", "F"}, "noctrl", "toggle_fullscreen", help_key="F / 마우스 더블클릭", help_desc="영상 전용 전체화면", category=SCREEN),
+    _sc({"w", "W"}, "plain", "toggle_mini_player", help_key="W", help_desc="🗗 미니 플레이어 (작은 창 항상 위 · 드래그 이동 · 더블클릭 복귀)", category=SCREEN),
     _sc({"t", "T"}, "noctrl", "toggle_keep_above", help_key="T", help_desc="항상 위에 표시", category=SCREEN),
     _sc({"i", "I"}, "noctrl", "toggle_hud", help_key="I", help_desc="Jetson 하드웨어 & 미디어 정보 HUD", category=SCREEN),
     _sc({"v", "V"}, "plain", "cycle_video_rotation", help_key="V", help_desc="화면 회전 (90° 단위 / 좌우·상하 반전)", category=SCREEN),

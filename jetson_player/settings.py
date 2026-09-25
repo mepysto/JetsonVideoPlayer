@@ -30,6 +30,9 @@ DEFAULTS = {
     "night_mode": False,
     "remote_pin": "",
     "remote_lan_only": True,
+    "mini_width": 480,
+    "mini_x": -1,               # -1: 화면 오른쪽 아래
+    "mini_y": -1,
     "network_locations": [],   # [{"uri": "smb://…", "path": "/run/user/…/gvfs/…", "name": …}]
     "whisper_model": "small-q5_1",
     "whisper_language": "auto",
@@ -58,6 +61,9 @@ def _validate(key, value):
             "sidebar_width": (200, 2000),
             "window_width": (480, 10000),
             "window_height": (320, 10000),
+            "mini_width": (240, 1280),
+            "mini_x": (-1, 20000),
+            "mini_y": (-1, 20000),
         }
         lo, hi = limits.get(key, (float("-inf"), float("inf")))
         value = max(lo, min(hi, value))

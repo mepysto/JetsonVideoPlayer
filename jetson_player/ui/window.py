@@ -30,6 +30,7 @@ from .state import ControlStateMixin
 from .search import DialogueSearchMixin
 from .network import NetworkMixin
 from .watch import FolderWatchMixin
+from .mini import MiniPlayerMixin
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class JetsonSignageFlexiblePlayer(
     DialogueSearchMixin,
     NetworkMixin,
     FolderWatchMixin,
+    MiniPlayerMixin,
     Gtk.Window,
 ):
     """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""
@@ -74,7 +76,7 @@ class JetsonSignageFlexiblePlayer(
         self.connect("motion-notify-event", self.on_mouse_motion)
         self.connect("button-press-event", self.on_window_button_press)
         # 진행바 밖에서 버튼을 놓아도 드래그 상태가 남지 않도록 창 전체에서 한 번 더 받습니다.
-        self.connect("button-release-event", lambda _w, e: self.on_seek_end(self._seek_scale, e) if self.is_seeking else False)
+        self.connect("button-release-event", self.on_window_button_release)
 
         # 드래그 앤 드롭 지원 (동영상, 폴더, 자막 파일)
         self.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
@@ -99,6 +101,7 @@ class JetsonSignageFlexiblePlayer(
         self.is_playing = False
         self.is_fullscreen = False
         self.is_video_only = False
+        self.is_mini = False
         self.is_keep_above = False
         self.sidebar_was_visible = True
         self.main_paned = None
@@ -389,7 +392,9 @@ class JetsonSignageFlexiblePlayer(
 
     def handle_escape(self):
         """Esc: 전체화면이면 창 모드로, 아니면 종료합니다."""
-        if self.is_fullscreen or self.is_video_only:
+        if getattr(self, "is_mini", False):
+            self.exit_mini_player()
+        elif self.is_fullscreen or self.is_video_only:
             self.toggle_fullscreen()
         else:
             self.quit_player()
