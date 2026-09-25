@@ -238,4 +238,5 @@ class ViewingMixin:
             ("submenu", "🔄 화면 회전 (V)", [(label, (lambda m=m: self.set_video_rotation(m)), m == rot) for m, label in ROTATIONS]),
             ("check", "⏭ 다음 영상 5초 카운트다운", settings.get("autoplay_countdown"),
              lambda: settings.set("autoplay_countdown", not settings.get("autoplay_countdown"))),
+            ("check", "🎨 ASS 자막을 원래 글꼴·색·위치로", settings.get("subtitle_ass_styles"), self.toggle_ass_styles),
         ]

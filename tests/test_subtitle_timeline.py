@@ -47,3 +47,11 @@ def test_short_badge():
     assert short_badge("🇯🇵 일본어 (x.ja.srt)") == "[JP] "
     assert short_badge("🤖 AI 자막 (auto)") == "[AI] "
     assert short_badge("📄 x.srt") == ""
+
+
+def test_duplicate_events_are_added_once():
+    from jetson_player.subtitles.timeline import SubtitleTrack
+    track = SubtitleTrack("내장", "#fff")
+    track.add_events([(0, 1000, "a"), (0, 1000, "a")])
+    track.add_events([(0, 1000, "a"), (500, 1500, "b")])   # 탐색 후 다시 도착
+    assert len(track) == 2 and track.active_at(700) == ["a", "b"]

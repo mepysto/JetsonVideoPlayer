@@ -2,10 +2,21 @@
 import logging
 from gi.repository import Gst, Gtk
 
-from ..subtitles.parse import strip_markup
+from ..settings import settings
+from ..subtitles.ass import matroska_block_to_event, parse_ass
+from ..subtitles.parse import load_ass_script, strip_markup
 from ..subtitles.timeline import SubtitleTrack
 
 log = logging.getLogger(__name__)
+
+
+
+def _codec_data_text(structure):
+    """caps의 codec_data(ASS 스크립트 헤더) → 문자열"""
+    buf = structure.get_value("codec_data") if structure.has_field("codec_data") else None
+    if not isinstance(buf, Gst.Buffer):
+        return ""
+    return buf.extract_dup(0, buf.get_size()).decode("utf-8", errors="replace")
 
 
 class SubtitlesMixin:
@@ -246,13 +257,26 @@ class SubtitlesMixin:
         except Exception:
             return Gst.FlowReturn.OK
         caps = sample.get_caps()
-        fmt = caps.get_structure(0).get_string("format") if caps and caps.get_size() else None
-        text = strip_markup(raw) if fmt != "utf8" else raw
+        st = caps.get_structure(0) if caps and caps.get_size() else None
         start_ms = buf.pts // Gst.MSECOND
         dur_ms = buf.duration // Gst.MSECOND if buf.duration != Gst.CLOCK_TIME_NONE else 4000
+        end_ms = start_ms + max(200, dur_ms)
         track = getattr(self, "embedded_track", None)
-        if track is not None and text.strip():
-            track.add_events([(start_ms, start_ms + max(200, dur_ms), text)])
+        if track is None:
+            return Gst.FlowReturn.OK
+        if st is not None and st.get_name() in ("application/x-ass", "application/x-ssa"):
+            # 원본 ASS 블록: 스크립트 헤더(스타일)는 caps의 codec_data에 있습니다.
+            if track.ass is None:
+                track.ass = parse_ass(_codec_data_text(st))
+            ev = matroska_block_to_event(raw, track.ass.styles, start_ms, end_ms)
+            if ev is not None:
+                track.ass.add_events([ev])
+                track.add_events([(start_ms, end_ms, ev.plain_text)])   # 검색·리모컨용 글자
+            return Gst.FlowReturn.OK
+        fmt = st.get_string("format") if st is not None else None
+        text = strip_markup(raw) if fmt != "utf8" else raw
+        if text.strip():
+            track.add_events([(start_ms, end_ms, text)])
         return Gst.FlowReturn.OK
 
     def _detect_embedded_subtitles(self):
@@ -376,8 +400,18 @@ class SubtitlesMixin:
 
     def make_subtitle_entry(self, path, label, color, events):
         """available_subtitles 항목 생성 (오버레이용 SubtitleTrack 포함)"""
+        ass = load_ass_script(path) if path and settings.get("subtitle_ass_styles") else None
         return {"path": path, "label": label, "color": color, "events": events,
-                "track": SubtitleTrack(label, color, events)}
+                "track": SubtitleTrack(label, color, events, ass=ass)}
+
+    def toggle_ass_styles(self):
+        """ASS/SSA 자막을 원래 스타일로 그릴지 전환합니다 (외부 자막은 바로, MKV 내장 자막은 다음 재생부터)."""
+        on = not settings.get("subtitle_ass_styles")
+        settings.set("subtitle_ass_styles", on)
+        for entry in self.available_subtitles:
+            entry["track"].ass = load_ass_script(entry.get("path")) if on and entry.get("path") else None
+        self.reload_and_apply_subtitles()
+        self.show_osd("🎨 ASS 자막: 원래 스타일" if on else "🎨 ASS 자막: 통일된 자막 모양")
 
     def _subtitle_position_ms(self):
         """오버레이가 사용할 현재 재생 위치(ms)"""

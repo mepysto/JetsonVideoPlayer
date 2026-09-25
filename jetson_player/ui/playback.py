@@ -7,6 +7,7 @@ from urllib.request import pathname2url
 from gi.repository import GLib, GdkX11, Gst, GstVideo
 
 from ..media.gst_setup import build_audio_sink_bin, make_audio_output, seek_flags
+from ..settings import settings
 from ..storage import history_cache, resume_cache
 from ..subtitles.parse import find_all_matching_subtitles, get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
 
@@ -200,6 +201,13 @@ class PlaybackMixin:
         if source.find_property("ssl-strict"):
             source.set_property("ssl-strict", False)
 
+    def _on_autoplug_continue(self, _decodebin, _pad, caps):
+        """[스트리밍 스레드] ASS/SSA 자막 스트림은 더 디코딩하지 않고 그대로 내보냅니다 (스타일 유지)."""
+        if caps and caps.get_size() and settings.get("subtitle_ass_styles"):
+            if caps.get_structure(0).get_name() in ("application/x-ass", "application/x-ssa"):
+                return False
+        return True
+
     def on_deep_element_added(self, bin_elem, sub_bin, element):
         """
         GStreamer 하위 요소 생성 시 젯슨 HW 디코더(nvv4l2decoder) 및 비디오 싱크(nveglglessink)를 감지하여 
@@ -214,6 +222,10 @@ class PlaybackMixin:
             self.decoder_names.add(fname)
             acceleration = "NVDEC 하드웨어" if fname == "nvv4l2decoder" else "소프트웨어 fallback"
             log.info(f"🎬 [선택된 비디오 디코더] {fname} ({acceleration})")
+
+        if fname == "decodebin" and element.find_property("caps") is not None:
+            # 내장 ASS 자막을 ssaparse가 텍스트로 바꾸기 전에 받아, 원래 스타일·위치로 그립니다.
+            element.connect("autoplug-continue", self._on_autoplug_continue)
 
         if "dav1d" in fname or "dav1d" in ename:
             if element.find_property("max-threads"):

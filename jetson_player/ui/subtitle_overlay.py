@@ -5,7 +5,8 @@ GStreamer의 suburi/textoverlay 대신 이 위젯을 쓰면 트랙 선택, 싱�
 """
 from gi.repository import GLib, Gtk, Pango, PangoCairo
 
-from ..subtitles.timeline import active_lines
+from ..subtitles.ass import anchor_point
+from ..subtitles.timeline import active_ass_events, active_lines
 
 FONT_FAMILY = "Noto Sans CJK KR, Noto Sans CJK TC, Noto Sans CJK SC, Noto Sans CJK JP, Sans"
 TICK_MS = 40
@@ -30,6 +31,7 @@ class SubtitleOverlay(Gtk.DrawingArea):
         self.enabled = True
         self.video_size = None       # (width, height) — 레터박스 계산용 (픽셀 종횡비 반영)
         self._lines = []
+        self._ass = []               # [(AssScript, AssEvent)] — ASS 원래 스타일로 그릴 대사
         self._timer_id = None
         self.set_halign(Gtk.Align.FILL)
         self.set_valign(Gtk.Align.FILL)
@@ -78,13 +80,15 @@ class SubtitleOverlay(Gtk.DrawingArea):
         return True
 
     def refresh(self, force=False):
-        lines = []
+        lines, ass = [], []
         if self.enabled and self.tracks:
             pos = self.position_provider()
             if pos is not None:
                 lines = active_lines(self.tracks, pos, self.offset_ms)
-        if force or lines != self._lines:
+                ass = active_ass_events(self.tracks, pos, self.offset_ms)
+        if force or lines != self._lines or [id(e) for _s, e in ass] != [id(e) for _s, e in self._ass]:
             self._lines = lines
+            self._ass = ass
             self.queue_draw()
 
     def current_lines(self):
@@ -101,10 +105,14 @@ class SubtitleOverlay(Gtk.DrawingArea):
         return (width - w) / 2, (height - h) / 2, w, h
 
     def _on_draw(self, widget, cr):
-        if not self._lines:
+        if not self._lines and not self._ass:
             return False
         width, height = widget.get_allocated_width(), widget.get_allocated_height()
         vx, vy, vw, vh = self._video_rect(width, height)
+        if self._ass:
+            self._draw_ass(cr, (vx, vy, vw, vh))
+        if not self._lines:
+            return False
 
         n_tracks = max(1, len(self.tracks))
         factor = 0.052 if n_tracks == 1 else (0.042 if n_tracks == 2 else 0.035)
@@ -141,3 +149,91 @@ class SubtitleOverlay(Gtk.DrawingArea):
             cr.fill()
             y -= line_gap
         return False
+
+    # ---- ASS 원래 스타일 ---------------------------------------------------
+    def _draw_ass(self, cr, video_rect):
+        """ASS 대사를 스크립트 좌표(PlayRes)에서 영상 영역으로 옮겨 원래 글꼴·색·위치로 그립니다."""
+        vx, vy, vw, vh = video_rect
+        stacked = {}   # 정렬 위치별로 이미 쓴 높이 (\pos 없는 대사가 겹치지 않게 쌓음)
+        for script, ev in self._ass:
+            px, py = script.play_res
+            sx, sy = vw / px, vh / py
+            layout = PangoCairo.create_layout(cr)
+            layout.set_markup(_ass_markup(ev, sy * self.font_scale), -1)
+            col = (ev.alignment - 1) % 3
+            layout.set_alignment((Pango.Alignment.LEFT, Pango.Alignment.CENTER, Pango.Alignment.RIGHT)[col])
+            ax, ay, h_align, v_align = anchor_point(ev, script.play_res)
+            if ev.pos is None:
+                # 여백 사이 상자 안에서 줄바꿈하고 정렬합니다.
+                box_w = max(1.0, (px - ev.margin_l - ev.margin_r) * sx)
+                layout.set_width(int(box_w * Pango.SCALE))
+                layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+                _ink, logical = layout.get_pixel_extents()
+                x = vx + ev.margin_l * sx
+                row = (ev.alignment - 1) // 3
+                used = stacked.get(ev.alignment, 0.0)
+                y = vy + ay * sy - v_align * logical.height + (-used if row == 0 else used if row == 2 else 0)
+                stacked[ev.alignment] = used + logical.height
+            else:
+                _ink, logical = layout.get_pixel_extents()
+                x = vx + ax * sx - h_align * logical.width - logical.x
+                y = vy + ay * sy - v_align * logical.height
+            self._paint_ass_layout(cr, layout, ev, x, y, sy, logical)
+
+    def _paint_ass_layout(self, cr, layout, ev, x, y, sy, logical):
+        outline = max(0.0, ev.outline * sy * self.font_scale)
+        shadow = max(0.0, ev.shadow * sy * self.font_scale)
+        cr.save()
+        if ev.style.border_style == 3:
+            # 불투명 상자: 외곽선 색으로 글자 뒤를 채움
+            pad = max(outline, 2.0)
+            r, g, b, a = ev.outline_color
+            cr.set_source_rgba(r, g, b, a)
+            cr.rectangle(x + logical.x - pad, y + logical.y - pad, logical.width + 2 * pad, logical.height + 2 * pad)
+            cr.fill()
+        else:
+            if shadow > 0:
+                r, g, b, a = ev.back_color
+                cr.move_to(x + shadow, y + shadow)
+                PangoCairo.layout_path(cr, layout)
+                cr.set_source_rgba(r, g, b, a)
+                if outline > 0:
+                    cr.set_line_width(outline * 2)
+                    cr.set_line_join(1)
+                    cr.stroke_preserve()
+                cr.fill()
+                cr.new_path()
+            if outline > 0:
+                r, g, b, a = ev.outline_color
+                cr.move_to(x, y)
+                PangoCairo.layout_path(cr, layout)
+                cr.set_source_rgba(r, g, b, a)
+                cr.set_line_width(outline * 2)
+                cr.set_line_join(1)
+                cr.stroke()
+        cr.move_to(x, y)
+        PangoCairo.show_layout(cr, layout)   # 글자 색은 마크업(런별 색·투명도)으로
+        cr.restore()
+
+
+def _ass_markup(event, scale):
+    """AssEvent의 런들을 Pango 마크업으로 (글꼴 크기는 화면 픽셀로 환산)"""
+    parts = []
+    for run in event.runs:
+        r, g, b, a = run.color
+        size_px = max(6.0, run.size * scale)
+        attrs = [f"font_family='{GLib.markup_escape_text(run.font or 'Sans')}, {FONT_FAMILY}'",
+                 f"size='{int(size_px * 0.85 * Pango.SCALE * 72 / 96)}'",
+                 f"foreground='#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}'",
+                 f"fgalpha='{max(1, int(round(a * 100)))}%'"]
+        if run.bold:
+            attrs.append("weight='bold'")
+        if run.italic:
+            attrs.append("style='italic'")
+        if run.underline:
+            attrs.append("underline='single'")
+        if run.strikeout:
+            attrs.append("strikethrough='true'")
+        parts.append(f"<span {' '.join(attrs)}>{GLib.markup_escape_text(run.text)}</span>")
+    return "".join(parts)
+

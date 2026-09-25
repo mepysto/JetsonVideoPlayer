@@ -17,6 +17,7 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 
 ### 2. 자막
 - **외부 자막**(SMI/SRT/VTT/ASS), **MKV 내장 자막**, **AI 자막**을 모두 영상 위 오버레이로 직접 그립니다(외곽선, 언어별 색상, 레터박스 인식).
+- **ASS/SSA 스타일**: 외부 `.ass`/`.ssa` 파일과 MKV 내장 ASS 자막을 원래 글꼴·색·외곽선·그림자·위치(`\pos`, `\an`, 여백)·불투명 상자로 그립니다. 애니메이션 효과(`\t`, `\fad`, 노래방 `\k`)와 그림(`\p`)은 지원하지 않습니다. `⋯` 메뉴에서 끄면 다른 자막과 같은 모양으로 표시합니다.
 - 여러 언어를 동시에 표시할 수 있고(언어 뱃지 `[KR]`, `[EN]` 등), 싱크·크기 조절이 파이프라인 재시작 없이 **즉시** 반영됩니다.
 - **🤖 AI 자막 (`G`)**: Orin GPU에서 whisper.cpp로 음성을 인식합니다.
   - 지금 보고 있는 위치부터 먼저 인식해 약 5초 안에 첫 자막이 나오고, 11분 영상 전체는 약 45초가 걸립니다.
@@ -200,6 +201,7 @@ jetson_player/
   media/thumbnails.py       # 썸네일 생성, 정밀 장면 분석
   media/scenes.py           # 장면 전환 검출 (중앙값/MAD 기준)
   subtitles/parse.py        # 자막 파일 탐색 · 파싱 · 언어 감지
+  subtitles/ass.py          # ASS/SSA 스타일·재정의 태그·위치 해석
   subtitles/timeline.py     # 재생 위치별 표시 대사 조회
   remote/                   # 웹 리모컨: HTTP 핸들러, PIN 인증, SSE, 정적 페이지
   ui/window.py              # 메인 창: 상태 초기화, 키 처리, 종료

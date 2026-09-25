@@ -24,6 +24,7 @@ DEFAULTS = {
     "window_maximized": False,
     "hud_visible": False,
     "embedded_subs_enabled": True,
+    "subtitle_ass_styles": True,   # ASS/SSA 자막을 원래 글꼴·색·위치로 그림 (끄면 통일된 자막 모양)
     "time_display_remaining": False,
     "playlist_sort": "name",
     "autoplay_countdown": True,

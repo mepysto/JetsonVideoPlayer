@@ -32,11 +32,13 @@ def short_badge(label):
 class SubtitleTrack:
     """시작 시각으로 정렬된 자막 이벤트 [(start_ms, end_ms, text), ...] 목록"""
 
-    def __init__(self, label, color, events=()):
+    def __init__(self, label, color, events=(), ass=None):
         self.label = label
         self.color = color
+        self.ass = ass          # AssScript: ASS 원래 스타일·위치로 그릴 때 (없으면 통일된 자막 모양)
         self._lock = threading.Lock()
         self.events = []
+        self._seen = set()      # 같은 대사가 다시 들어와도 한 번만 (탐색 후 내장 자막이 다시 전달됨)
         self.starts = []
         self.max_duration = 0
         self.add_events(events)
@@ -44,9 +46,11 @@ class SubtitleTrack:
     def add_events(self, events):
         """이벤트를 추가합니다 (AI 자막 생성처럼 백그라운드에서 조금씩 추가되어도 안전)."""
         events = [(int(s), int(e), t) for s, e, t in events if e > s and t and not t.isspace()]
-        if not events:
-            return
         with self._lock:
+            events = [ev for ev in dict.fromkeys(events) if ev not in self._seen]
+            if not events:
+                return
+            self._seen.update(events)
             self.events.extend(events)
             self.events.sort(key=lambda ev: (ev[0], ev[1]))
             self.starts = [ev[0] for ev in self.events]
@@ -94,9 +98,18 @@ def active_lines(tracks, position_ms, offset_ms=0):
     multi = len(tracks) > 1
     lines = []
     for track in tracks:
+        if getattr(track, "ass", None) is not None:
+            continue   # ASS 스타일 트랙은 active_ass_events()로 따로 그립니다
         badge = short_badge(track.label) if multi else ""
         for text in track.active_at(t):
             parts = [p.strip() for p in text.splitlines() if p.strip()]
             for n, part in enumerate(parts):
                 lines.append(((badge if n == 0 else "") + part, track.color or "#FFFFFF"))
     return lines
+
+
+def active_ass_events(tracks, position_ms, offset_ms=0):
+    """ASS 스타일로 그릴 트랙들의 지금 보이는 이벤트 [(AssScript, AssEvent), ...]"""
+    t = position_ms - offset_ms
+    return [(track.ass, ev) for track in tracks if getattr(track, "ass", None) is not None
+            for ev in track.ass.active_at(t)]

@@ -7,6 +7,7 @@ import re
 
 from ..library import VIDEO_EXTS
 from ..storage import CACHE_DIR
+from .ass import events_as_plain, parse_ass
 
 log = logging.getLogger(__name__)
 
@@ -192,23 +193,20 @@ def parse_srt_or_vtt_to_events(content):
 
 
 def parse_ass_to_events(content):
-    """ASS / SSA 자막 텍스트를 [(start_ms, end_ms, text), ...] 목록으로 파싱합니다."""
-    tag_cleaner = re.compile(r'\{.*?\}')
-    events = []
-    for line in content.splitlines():
-        line = line.strip()
-        if not line.startswith("Dialogue:"):
-            continue
-        parts = line.split(",", 9)
-        if len(parts) >= 10:
-            start_ms = srt_time_to_ms(parts[1])
-            end_ms = srt_time_to_ms(parts[2])
-            raw_text = parts[9]
-            clean = tag_cleaner.sub('', raw_text)
-            clean = clean.replace('\\N', '\n').replace('\\n', '\n').strip()
-            if clean and end_ms > start_ms:
-                events.append((start_ms, end_ms, clean))
-    return events
+    """ASS / SSA 자막 텍스트를 [(start_ms, end_ms, text), ...] 목록으로 파싱합니다 (스타일은 버리고 글자만)."""
+    return events_as_plain(parse_ass(content))
+
+
+def load_ass_script(file_path):
+    """ASS/SSA 파일의 스타일·위치 정보까지 담은 AssScript (ASS가 아니거나 읽지 못하면 None)"""
+    if os.path.splitext(file_path or "")[1].lower() not in ('.ass', '.ssa'):
+        return None
+    try:
+        content, _enc = read_subtitle_text(file_path)
+        return parse_ass(content) if content else None
+    except Exception as e:
+        log.warning(f"⚠️ ASS 스타일 해석 실패 ({file_path}): {e}")
+        return None
 
 
 def parse_subtitle_file_events(file_path):
