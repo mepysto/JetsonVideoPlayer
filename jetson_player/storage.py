@@ -184,14 +184,16 @@ class ResumeCache(JsonStore):
                 self.data.pop(file_path, None)
                 self.is_dirty = True
 
-    def recent_in_progress(self, limit=5):
-        """이어볼 수 있는(진행 중인) 최근 영상 목록: [(path, position_ns, duration_ns), ...]"""
+    def recent_in_progress(self, limit=5, available=os.path.isfile):
+        """이어볼 수 있는(진행 중인) 최근 영상 목록: [(path, position_ns, duration_ns), ...]
+
+        available(path): 목록에 넣을지 판단 (기본: 파일이 있을 때. 끊긴 네트워크 폴더도 넣으려면 바꿔서 전달)"""
         with self.lock:
             items = [(k, v) for k, v in self.data.items() if v.get("position_ns", 0) > 0]
         items.sort(key=lambda kv: kv[1].get("updated_at", 0), reverse=True)
         result = []
         for path, entry in items:
-            if os.path.isfile(path):
+            if available(path):
                 result.append((path, entry["position_ns"], entry.get("duration_ns", 0)))
             if len(result) >= limit:
                 break

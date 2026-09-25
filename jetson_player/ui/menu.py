@@ -61,6 +61,7 @@ class MenuMixin:
         menu.append(Gtk.SeparatorMenuItem())
 
         # 3) 도구 / 정보
+        add("🌐 네트워크 폴더 열기 (SMB/NFS)...", self.show_network_dialog)
         add("📱 스마트폰 웹 리모컨...", lambda: self.show_remote_popover(anchor))
         add_check("ℹ️ 미디어 정보 HUD (I)", self.is_hud_visible, self.toggle_hud)
         add_check("📌 항상 위에 표시 (T)", self.is_keep_above, self.toggle_keep_above)

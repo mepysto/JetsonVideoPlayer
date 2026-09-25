@@ -3,6 +3,7 @@ import os
 
 from gi.repository import Gdk, Gtk, Pango
 
+from ..network import is_gvfs_path
 from ..storage import resume_cache
 from .subtitle_overlay import SubtitleOverlay
 
@@ -140,7 +141,12 @@ class LayoutMixin:
 
         ph_btn_box.pack_start(ph_open_file, False, False, 0)
         ph_btn_box.pack_start(ph_open_dir, False, False, 0)
+        ph_open_net = Gtk.Button(label="🌐 네트워크 폴더")
+        ph_open_net.get_style_context().add_class("ph-btn-sub")
+        ph_open_net.connect("clicked", lambda _b: self.show_network_dialog())
+
         ph_btn_box.pack_start(ph_open_yt, False, False, 0)
+        ph_btn_box.pack_start(ph_open_net, False, False, 0)
 
         self.placeholder_box.pack_start(ph_icon, False, False, 0)
         self.placeholder_box.pack_start(ph_title, False, False, 0)
@@ -352,7 +358,9 @@ class LayoutMixin:
             return
         for child in box.get_children():
             box.remove(child)
-        recent = resume_cache.recent_in_progress(limit=4)
+        # 연결이 끊긴 네트워크 폴더의 영상도 보여 주고, 누르면 다시 연결합니다.
+        recent = resume_cache.recent_in_progress(
+            limit=4, available=lambda p: os.path.isfile(p) or (is_gvfs_path(p) and self.is_known_network_path(p)))
         if not recent:
             return
         header = Gtk.Label(label="⏱️ 이어보기", xalign=0)
@@ -378,5 +386,5 @@ class LayoutMixin:
             meta.get_style_context().add_class("muted")
             inner.pack_start(meta, False, False, 0)
             btn.add(inner)
-            btn.connect("clicked", lambda _b, p=path: self.load_path(p))
+            btn.connect("clicked", lambda _b, p=path: self.load_target_path(p))
             box.pack_start(btn, False, False, 0)

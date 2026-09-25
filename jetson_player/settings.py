@@ -30,6 +30,7 @@ DEFAULTS = {
     "night_mode": False,
     "remote_pin": "",
     "remote_lan_only": True,
+    "network_locations": [],   # [{"uri": "smb://…", "path": "/run/user/…/gvfs/…", "name": …}]
     "whisper_model": "small-q5_1",
     "whisper_language": "auto",
     "whisper_translate": False,
@@ -61,6 +62,8 @@ def _validate(key, value):
         lo, hi = limits.get(key, (float("-inf"), float("inf")))
         value = max(lo, min(hi, value))
         return type(default)(value)
+    if isinstance(default, list):
+        return copy.deepcopy(value) if isinstance(value, list) else copy.deepcopy(default)
     if isinstance(default, str):
         if not isinstance(value, str):
             return default
@@ -96,7 +99,8 @@ class Settings:
 
     def get(self, key):
         with self.lock:
-            return self.values[key]
+            value = self.values[key]
+            return copy.deepcopy(value) if isinstance(value, list) else value
 
     def set(self, key, value):
         if key not in DEFAULTS:

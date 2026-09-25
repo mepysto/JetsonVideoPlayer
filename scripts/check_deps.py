@@ -72,6 +72,13 @@ def main():
 
     print("🧰 외부 도구")
     report(OK if shutil.which("ffprobe") else WARN, "ffprobe", "" if shutil.which("ffprobe") else "코덱 판별이 GStreamer로 대체됨 (느림)", False, "ffmpeg")
+    # 네트워크 폴더(SMB/NFS): GVfs 백엔드 + 마운트를 일반 경로로 보여 주는 gvfs-fuse
+    gvfs_backends = any(os.path.exists(os.path.join(d, "gvfsd-smb")) for d in ("/usr/libexec", "/usr/lib/gvfs"))
+    report(OK if gvfs_backends else WARN, "네트워크 폴더 (GVfs SMB/NFS)",
+           "" if gvfs_backends else "SMB/NFS 폴더 열기 불가", False, "gvfs-backends")
+    gvfs_fuse = any(os.path.exists(os.path.join(d, "gvfsd-fuse")) for d in ("/usr/libexec", "/usr/lib/gvfs"))
+    report(OK if gvfs_fuse else WARN, "네트워크 폴더 로컬 경로 (gvfs-fuse)",
+           "" if gvfs_fuse else "네트워크 폴더를 재생 경로로 열 수 없음", False, "gvfs-fuse")
     whisper = os.path.expanduser("~/.local/share/jetson_video_player/whisper.cpp/build/bin/whisper-cli")
     report(OK if os.path.exists(whisper) else WARN, "AI 자막 엔진 (whisper.cpp)",
            "" if os.path.exists(whisper) else "선택 설치: ./scripts/setup_whisper.sh", False)

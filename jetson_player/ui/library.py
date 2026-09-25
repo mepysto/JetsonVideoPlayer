@@ -15,6 +15,7 @@ from ..library import VIDEO_EXTS, scan_video_files, sort_video_paths
 from ..settings import settings
 from ..storage import history_cache, hw_cache
 from ..subtitles.parse import get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
+from ..network import is_gvfs_path, is_network_uri
 from ..youtube import is_youtube_url
 
 log = logging.getLogger(__name__)
@@ -59,7 +60,11 @@ class LibraryMixin:
         pop.popup()
 
     def load_target_path(self, path):
-        """파일 또는 폴더 경로를 로드하여 즉시 재생합니다 (최근 재생 목록에서 사용)."""
+        """파일 또는 폴더 경로를 로드하여 즉시 재생합니다 (최근 재생 목록·이어보기 카드에서 사용).
+        연결이 끊긴 네트워크 폴더의 경로면 다시 연결한 뒤 엽니다."""
+        if path and not os.path.exists(path) and is_gvfs_path(path):
+            self.reconnect_network_path(path)
+            return
         if not path or not os.path.exists(path):
             self.show_osd("경로가 존재하지 않습니다.")
             return
@@ -111,20 +116,30 @@ class LibraryMixin:
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
             Gtk.STOCK_OPEN, Gtk.ResponseType.OK
         )
+        # "다른 위치"에서 네트워크 공유도 고를 수 있게 합니다 (마운트 후 로컬 gvfs 경로로 엽니다).
+        dialog.set_local_only(False)
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            folder = dialog.get_filename()
+            folder, uri = dialog.get_filename(), dialog.get_uri()
             dialog.destroy()
             if folder:
                 self.load_path(folder)
+            elif uri and is_network_uri(uri):
+                self.open_network_uri(uri)
         else:
             dialog.destroy()
 
-    def load_path(self, input_path):
-        """새로운 파일 또는 폴더 경로를 로드하여 즉시 재생을 시작합니다."""
+    def load_path(self, input_path, scanned=None):
+        """새로운 파일 또는 폴더 경로를 로드하여 즉시 재생을 시작합니다.
+
+        네트워크 폴더는 파일 목록을 읽는 데 오래 걸릴 수 있어 백그라운드에서 읽은 뒤(scanned) 이어서 진행합니다.
+        """
+        if scanned is None and is_gvfs_path(input_path) and os.path.isdir(input_path):
+            self._scan_network_folder_then_load(input_path)
+            return
         prev_input, prev_single = self.input_path, self.is_single_file_mode
         self.input_path = input_path
-        if not self.build_playlist():
+        if not self.build_playlist(scanned):
             # 기존 재생목록을 유지하고 앱을 종료하지 않습니다.
             self.input_path, self.is_single_file_mode = prev_input, prev_single
             self.show_osd("⚠️ 재생 가능한 영상이 없는 폴더입니다.", duration_sec=2.5)
@@ -266,8 +281,9 @@ class LibraryMixin:
         hw_cache.set(file_path, res[0], res[1])
         return res
 
-    def build_playlist(self):
+    def build_playlist(self, scanned=None):
         """입력값을 분석하여 재생 목록을 구성합니다 (같은 폴더의 _h265.mp4 변환본이 있으면 우선 사용).
+        scanned: 미리 읽어 둔 폴더의 영상 목록 (네트워크 폴더).
         성공하면 True, 경로가 잘못되었거나 영상이 없으면 False를 반환합니다."""
         abs_path = os.path.abspath(self.input_path)
         
@@ -275,7 +291,7 @@ class LibraryMixin:
         if os.path.isdir(abs_path):
             self.is_single_file_mode = False
             try:
-                raw_playlist = scan_video_files(abs_path)
+                raw_playlist = scanned if scanned is not None else scan_video_files(abs_path)
             except Exception as e:
                 log.error(f"❌ 디렉토리 읽기 실패 ({abs_path}): {e}")
                 return False
