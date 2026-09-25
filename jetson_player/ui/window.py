@@ -9,7 +9,8 @@ from gi.repository import GLib, Gdk, Gst, Gtk
 from ..mpris import start_mpris
 from ..settings import settings
 from ..shortcuts import find_shortcut
-from ..media.gst_setup import build_hw_video_output, enable_x11_compositor_bypass, optimize_gstreamer_ranks
+from ..media.gst_setup import (build_gl_shader_stage, build_hw_video_output, enable_x11_compositor_bypass,
+                               optimize_gstreamer_ranks)
 from ..storage import bookmark_cache, history_cache, hw_cache, loudness_cache, resume_cache
 from ..library import is_playlist_file
 from ..youtube import is_youtube_url
@@ -256,7 +257,9 @@ class JetsonSignageFlexiblePlayer(
         self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink") if use_gl else None
         if self.gtk_sink:
             self.video_sink_bin = Gst.ElementFactory.make("glsinkbin", "glsinkbin")
-            self.video_sink_bin.set_property("sink", self.gtk_sink)
+            # HDR 톤매핑 셰이더를 GL 싱크 앞에 둡니다 (SDR 영상은 그대로 통과하는 셰이더)
+            self.hdr_shader = build_gl_shader_stage(self.gtk_sink)
+            self.video_sink_bin.set_property("sink", self.hdr_shader[0] if self.hdr_shader else self.gtk_sink)
             self.video_widget = self.gtk_sink.get_property("widget")
             self.video_sink = self.video_sink_bin
         else:

@@ -33,6 +33,7 @@ DEFAULTS = {
     "eq_preset": "flat",
     "opensubtitles_languages": "ko,en",
     "audio_passthrough": False,
+    "hdr_tonemap": True,
     "remote_pin": "",
     "remote_lan_only": True,
     "mini_width": 480,

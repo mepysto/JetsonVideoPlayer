@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 
-from gi.repository import GdkX11, Gst, GstPbutils
+from gi.repository import GdkX11, GObject, Gst, GstPbutils
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +146,66 @@ def build_audio_sink_bin(asink, filters=()):
     ghost_pad.set_active(True)
     audio_bin.add_pad(ghost_pad)
     return audio_bin
+
+
+def hdr_uniforms(kind, fix_matrix):
+    """glshader uniforms 구조체. GLSL float에는 GFloat 값이어야 합니다 (파이썬 float는 double로 넘어가 무시됨)."""
+    from .hdr import uniforms_for
+    st = Gst.Structure.new_empty("uniforms")
+    for key, value in uniforms_for(kind, fix_matrix).items():
+        v = GObject.Value()
+        v.init(GObject.TYPE_FLOAT)
+        v.set_float(float(value))
+        st.set_value(key, v)
+    return st
+
+
+def _new_hdr_shader():
+    shader = Gst.ElementFactory.make("glshader", None)
+    if shader is None:
+        return None
+    from .hdr import fragment_shader
+    shader.set_property("fragment", fragment_shader())
+    shader.set_property("uniforms", hdr_uniforms(None, False))
+    return shader
+
+
+def build_gl_shader_stage(gl_sink):
+    """[bin, glshader]: glshader → gl_sink 를 묶은 bin. glshader가 없으면 None (싱크를 그대로 씀)"""
+    shader = _new_hdr_shader()
+    if shader is None:
+        return None
+    stage = Gst.Bin.new("gl_shader_stage")
+    stage.add(shader)
+    stage.add(gl_sink)
+    if not shader.link(gl_sink):
+        stage.remove(shader)
+        stage.remove(gl_sink)
+        return None
+    ghost = Gst.GhostPad.new("sink", shader.get_static_pad("sink"))
+    ghost.set_active(True)
+    stage.add_pad(ghost)
+    return [stage, shader]
+
+
+def renew_gl_shader(stage_info, gl_sink):
+    """파이프라인을 새로 만들 때 glshader를 새 요소로 바꿉니다 (NULL 상태에서만).
+
+    재사용하는 GL 싱크 안의 glshader는 이전 GL 컨텍스트의 셰이더를 붙잡고 있어 다음 영상에서 흐름 오류가 나고,
+    속성만 바꾸면 GL 작업을 기다리다 메인 루프가 멈춥니다. 요소를 통째로 바꾸는 것이 안전합니다.
+    """
+    stage, old = stage_info
+    new = _new_hdr_shader()
+    if new is None:
+        return
+    ghost = stage.get_static_pad("sink")
+    old.unlink(gl_sink)
+    old.set_state(Gst.State.NULL)
+    stage.remove(old)
+    stage.add(new)
+    new.link(gl_sink)
+    ghost.set_target(new.get_static_pad("sink"))
+    stage_info[1] = new
 
 
 def build_hw_video_output(sink, fmt="NV12"):

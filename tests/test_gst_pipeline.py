@@ -100,3 +100,28 @@ def test_passthrough_helpers(media_dir):
     assert sink_passthrough_formats("fakesink") == set()          # 원음을 받는다고 알리지 않는 싱크
     assert sink_passthrough_formats("no-such-sink") == set()
     assert "audio/x-ac3" in PASSTHROUGH_CAPS
+
+
+def test_hdr_shader_on_gl_matches_reference():
+    """톤매핑 셰이더를 실제 GL에서 돌려 파이썬 참조 계산과 비교 (uniform은 GFloat여야 적용됨)"""
+    import numpy as np
+    from jetson_player.media.gst_setup import hdr_uniforms
+    from jetson_player.media.hdr import fragment_shader, reference
+    if not all(Gst.ElementFactory.find(n) for n in ("glupload", "glshader", "gldownload")):
+        pytest.skip("GL 요소 없음")
+    p = Gst.parse_launch("videotestsrc num-buffers=3 pattern=solid-color foreground-color=0xffc83c28 "
+                         "! video/x-raw,format=RGBA,width=16,height=16 ! glupload ! glshader name=sh "
+                         "! gldownload ! video/x-raw,format=RGBA ! appsink name=s")
+    sh = p.get_by_name("sh")
+    sh.set_property("fragment", fragment_shader())
+    sh.set_property("uniforms", hdr_uniforms("pq", True))
+    p.set_state(Gst.State.PLAYING)
+    sample = p.get_by_name("s").emit("try-pull-sample", 10 * Gst.SECOND)
+    err = p.get_bus().pop_filtered(Gst.MessageType.ERROR)
+    p.set_state(Gst.State.NULL)
+    if sample is None or err is not None:
+        pytest.skip(f"GL을 쓸 수 없습니다: {err.parse_error()[0].message if err else 'no sample'}")
+    buf = sample.get_buffer()
+    gpu = np.frombuffer(buf.extract_dup(0, buf.get_size()), dtype=np.uint8)[:3].astype(int)
+    ref = np.round(reference(np.array([200, 60, 40]) / 255, "pq", True) * 255).astype(int)
+    assert np.max(np.abs(gpu - ref)) <= 2, (gpu, ref)

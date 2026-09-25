@@ -13,6 +13,7 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 - 디코딩은 NVDEC이 맡고, `nvvidconv`(VIC)가 GTK GL 화면으로 넘깁니다. 4K H.265 24fps 재생 시 CPU 사용량은 코어 약 0.9개입니다(소프트웨어 디코딩은 약 2.3개).
 - 재생 전에 코덱·색 샘플링·비트 깊이로 NVDEC 지원 여부를 판별합니다(H.264 8-bit, HEVC/VP9 최대 12-bit, AV1 최대 10-bit, 4:2:0). 지원하지 않는 형식은 처음부터 소프트웨어로 재생해 시작할 때 끊기지 않습니다.
 - 판별이 어려운 파일에서 하드웨어 경로가 실패하면 해당 파일만 소프트웨어 경로로 자동 재시도합니다. 환경 변수 `JVP_HW_VIDEO=0`으로 하드웨어 경로를 끌 수 있습니다.
+- **🌈 HDR 톤매핑**: HDR10(PQ)·HLG 영상을 SDR 화면에 맞게 GPU 셰이더로 변환합니다. 그대로 보이면 색이 바래고 밋밋해지는 문제를 막습니다(BT.2408 기준 백색 203nit, 밝은 부분만 부드럽게 압축, BT.2020→BT.709 색역). NVDEC 경로·소프트웨어 경로 모두 지원하며 4K에서도 프레임 드롭이 없었습니다. `⋯` 메뉴에서 끌 수 있고, `I` HUD에 HDR 여부가 표시됩니다.
 - `I` 키 HUD에 **실제로 동작 중인 디코더**, SoC 온도, GPU 부하, RAM 사용량이 표시됩니다.
 
 ### 2. 자막
@@ -205,6 +206,7 @@ jetson_player/
   media/thumbnails.py       # 썸네일 생성, 정밀 장면 분석
   media/scenes.py           # 장면 전환 검출 (중앙값/MAD 기준)
   media/loudness.py         # 음량 측정 (BS.1770 K-가중 + 게이팅)
+  media/hdr.py              # HDR(PQ/HLG) → SDR 톤매핑 셰이더와 참조 계산
   subtitles/parse.py        # 자막 파일 탐색 · 파싱 · 언어 감지
   subtitles/ass.py          # ASS/SSA 스타일·재정의 태그·위치 해석
   subtitles/opensubtitles.py # OpenSubtitles.com API (검색·다운로드·파일 해시)

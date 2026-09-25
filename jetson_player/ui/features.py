@@ -239,6 +239,10 @@ class FeaturesMixin:
             f"💬 <b>자막:</b> {sub_info}\n"
             f"🎵 <b>오디오:</b> 트랙 {self.current_audio_track + 1}/{max(1, self.n_audio_tracks)}"
         )
+        transfer = getattr(self, "hdr_transfer", None)
+        if transfer:
+            mapped = "톤매핑 중" if (getattr(self, "_hdr_key", None) or (None,))[0] else "톤매핑 꺼짐"
+            text += f"\n🌈 <b>HDR:</b> {'HDR10 (PQ)' if transfer == 'pq' else 'HLG'} — {mapped}"
 
         hw = get_jetson_hw_stats()
         if "cpu_temp" in hw or "gpu_temp" in hw:

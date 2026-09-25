@@ -385,8 +385,10 @@ class ControlsMixin:
             self.update_hud_info()
 
         self.stats_ticks += 1
-        if self.video_sink and self.stats_ticks % 20 == 0 and self.video_sink.find_property("stats"):
-            stats = self.video_sink.get_property("stats")
+        # 통계는 실제 싱크(gtkglsink)에 있습니다 — glsinkbin에는 stats 속성이 없습니다.
+        stats_sink = self.gtk_sink if self.gtk_sink is not None and self.gtk_sink.find_property("stats") else None
+        if stats_sink is not None and self.stats_ticks % 20 == 0:
+            stats = stats_sink.get_property("stats")
             if stats:
                 rendered = stats.get_value("rendered") or 0
                 dropped = stats.get_value("dropped") or 0

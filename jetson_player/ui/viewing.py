@@ -5,6 +5,8 @@ import time
 
 from gi.repository import GLib, Gst, Gtk
 
+from ..media.gst_setup import hdr_uniforms, renew_gl_shader
+from ..media.hdr import transfer_of_caps
 from ..settings import settings
 
 log = logging.getLogger(__name__)
@@ -46,6 +48,41 @@ class ViewingMixin:
 
     def is_rotated_quarter(self):
         return getattr(self, "video_rotation", "identity") in ("90r", "90l")
+
+    # ---- HDR 톤매핑 --------------------------------------------------------
+    def reset_hdr_shader(self):
+        """새 파이프라인마다 셰이더를 새 GL 컨텍스트에서 다시 만들게 합니다.
+        (재사용하는 GL 싱크의 glshader가 이전 파이프라인의 셰이더를 붙잡고 있으면 다음 영상에서 흐름 오류가 납니다)"""
+        stage = getattr(self, "hdr_shader", None)
+        if stage:
+            renew_gl_shader(stage, self.gtk_sink)
+        self._hdr_key = (None, False)
+
+    def update_hdr_tonemap(self):
+        """디코딩된 영상의 전달 특성(PQ/HLG)에 맞춰 톤매핑 셰이더를 고릅니다 (파이프라인 preroll 때 호출)."""
+        stage = getattr(self, "hdr_shader", None)
+        if not stage or not self.pipeline:
+            return
+        pad = self.pipeline.emit("get-video-pad", 0)
+        transfer = transfer_of_caps(pad.get_current_caps() if pad else None)
+        self.hdr_transfer = transfer
+        kind = transfer if settings.get("hdr_tonemap") else None
+        key = (kind, bool(self.using_hw_video_output))
+        if key == getattr(self, "_hdr_key", (None, False)):
+            return
+        self._hdr_key = key
+        # 셰이더 소스는 그대로 두고 uniform만 바꿉니다 (실행 중 소스 변경은 반영되지 않음)
+        stage[1].set_property("uniforms", hdr_uniforms(kind, key[1]))
+        if kind:
+            name = "HDR10 (PQ)" if kind == "pq" else "HLG"
+            self.show_osd(f"🌈 {name} 영상 — SDR 화면에 맞게 톤매핑합니다", duration_sec=2.5)
+            log.info(f"🌈 [HDR 톤매핑] {name}, {'HW' if key[1] else 'SW'} 경로")
+
+    def toggle_hdr_tonemap(self):
+        settings.set("hdr_tonemap", not settings.get("hdr_tonemap"))
+        self._hdr_key = None
+        self.update_hdr_tonemap()
+        self.show_osd("🌈 HDR 톤매핑 ON" if settings.get("hdr_tonemap") else "🌈 HDR 톤매핑 OFF (HDR 원본 값 그대로)")
 
     # ---- 야간 모드 ----------------------------------------------------------
     def build_night_mode_elements(self):
@@ -239,4 +276,5 @@ class ViewingMixin:
             ("check", "⏭ 다음 영상 5초 카운트다운", settings.get("autoplay_countdown"),
              lambda: settings.set("autoplay_countdown", not settings.get("autoplay_countdown"))),
             ("check", "🎨 ASS 자막을 원래 글꼴·색·위치로", settings.get("subtitle_ass_styles"), self.toggle_ass_styles),
+            ("check", "🌈 HDR 영상 톤매핑 (SDR 화면에서 자연스러운 색)", settings.get("hdr_tonemap"), self.toggle_hdr_tonemap),
         ]

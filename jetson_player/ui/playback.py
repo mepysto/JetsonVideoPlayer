@@ -439,6 +439,7 @@ class PlaybackMixin:
         if self.pipeline is not None:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
+        self.reset_hdr_shader()
 
         # 신규 playbin 파이프라인 생성
         self.subtitle_overlays = []
@@ -621,6 +622,7 @@ class PlaybackMixin:
         elif message.type == Gst.MessageType.ASYNC_DONE:
             self._detect_embedded_subtitles()
             self._update_overlay_video_size()
+            self.update_hdr_tonemap()
             if getattr(self, "pending_seek_ns", 0) > 0 and self.pipeline:
                 seek_ns = self.pending_seek_ns
                 self.pending_seek_ns = 0
