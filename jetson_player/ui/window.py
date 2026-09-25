@@ -11,6 +11,7 @@ from ..settings import settings
 from ..shortcuts import find_shortcut
 from ..media.gst_setup import build_hw_video_output, enable_x11_compositor_bypass, optimize_gstreamer_ranks
 from ..storage import bookmark_cache, history_cache, hw_cache, resume_cache
+from ..library import is_playlist_file
 from ..youtube import is_youtube_url
 from .remote import RemoteMixin
 from .youtube import YouTubeMixin
@@ -277,7 +278,8 @@ class JetsonSignageFlexiblePlayer(
 
         self.build_ui()
         self._apply_saved_settings()
-        self.apply_playlist_sort()
+        # 정렬 버튼 표시 (M3U 재생목록은 파일에 적힌 순서를 유지)
+        self.apply_playlist_sort(resort=not is_playlist_file(self.input_path or ""))
 
         # 재생 위치와 UI 상태 갱신 (250ms 주기로 매끄러운 진행바 보장)
         self.position_timer_id = GLib.timeout_add(250, self.update_playback_ui)

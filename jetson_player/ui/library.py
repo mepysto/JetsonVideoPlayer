@@ -11,7 +11,8 @@ from urllib.request import pathname2url
 from gi.repository import GLib, Gst, GstPbutils, Gtk
 
 from ..media.codecs import nvdec_supports
-from ..library import VIDEO_EXTS, prefer_h265_versions, scan_video_files, sort_video_paths
+from ..library import (VIDEO_EXTS, is_playlist_file, parse_m3u, prefer_h265_versions, scan_video_files,
+                       sort_video_paths, write_m3u)
 from ..settings import settings
 from ..storage import history_cache, hw_cache
 from ..subtitles.parse import get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
@@ -86,7 +87,7 @@ class LibraryMixin:
 
         filter_video = Gtk.FileFilter()
         filter_video.set_name("동영상 파일")
-        for ext in ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.webm", "*.ts", "*.m4v"]:
+        for ext in ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.webm", "*.ts", "*.m4v", "*.m3u", "*.m3u8"]:
             filter_video.add_pattern(ext)
             filter_video.add_pattern(ext.upper())
         dialog.add_filter(filter_video)
@@ -100,7 +101,10 @@ class LibraryMixin:
         if response == Gtk.ResponseType.OK:
             filenames = dialog.get_filenames()
             dialog.destroy()
-            if filenames:
+            playlists = [f for f in filenames if is_playlist_file(f)]
+            if playlists:
+                self.load_path(playlists[0])
+            elif filenames:
                 self.load_files(filenames)
         else:
             dialog.destroy()
@@ -142,7 +146,7 @@ class LibraryMixin:
         if not self.build_playlist(scanned):
             # 기존 재생목록을 유지하고 앱을 종료하지 않습니다.
             self.input_path, self.is_single_file_mode = prev_input, prev_single
-            self.show_osd("⚠️ 재생 가능한 영상이 없는 폴더입니다.", duration_sec=2.5)
+            self.show_osd("⚠️ 재생할 수 있는 영상이 없습니다.", duration_sec=2.5)
             return
         self.populate_playlist_tree()
         self.refresh_playlist_ui()
@@ -152,6 +156,32 @@ class LibraryMixin:
             if getattr(self, "placeholder_box", None):
                 self.placeholder_box.hide()
             self.play_current_video()
+
+    def save_playlist_m3u(self):
+        """현재 재생목록을 M3U8 파일로 저장합니다."""
+        if not self.playlist:
+            self.show_osd("ℹ️ 저장할 재생목록이 없습니다.")
+            return
+        dialog = Gtk.FileChooserDialog(title="재생목록 저장 (M3U)", parent=self, action=Gtk.FileChooserAction.SAVE)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
+        dialog.set_do_overwrite_confirmation(True)
+        folder = self.input_path if self.input_path and os.path.isdir(self.input_path) else os.path.dirname(self.playlist[0])
+        dialog.set_current_folder(folder)
+        dialog.set_current_name(f"{os.path.basename(folder.rstrip(os.sep)) or '재생목록'}.m3u8")
+        response = dialog.run()
+        dest = dialog.get_filename()
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK or not dest:
+            return
+        if not is_playlist_file(dest):
+            dest += ".m3u8"
+        try:
+            write_m3u([p for p in self.playlist if not p.startswith(("http://", "https://"))], dest)
+        except OSError as e:
+            self.show_osd(f"❌ 저장 실패: {e}", duration_sec=3.5)
+            return
+        self.show_osd(f"💾 재생목록 저장: {os.path.basename(dest)} ({len(self.playlist)}개)", duration_sec=2.5)
+        log.info(f"💾 [재생목록 저장] {dest}")
 
     def load_files(self, files):
         """다중 파일 목록을 재생목록에 추가하고 재생을 시작합니다."""
@@ -227,8 +257,8 @@ class LibraryMixin:
             context.finish(True, False, time)
             return
 
-        # 디렉토리가 드롭된 경우
-        if os.path.isdir(first):
+        # 디렉토리 또는 M3U 재생목록이 드롭된 경우
+        if os.path.isdir(first) or is_playlist_file(first):
             self.load_path(first)
             context.finish(True, False, time)
             return
@@ -301,6 +331,18 @@ class LibraryMixin:
                 log.error(f"❌ 에러: [{self.input_path}] 폴더 내에 재생 가능한 영상 파일이 없습니다.")
                 return False
 
+        elif os.path.isfile(abs_path) and is_playlist_file(abs_path):
+            try:
+                raw_playlist, skipped = parse_m3u(abs_path)
+            except OSError as e:
+                log.error(f"❌ 재생목록 파일을 읽을 수 없습니다 ({abs_path}): {e}")
+                return False
+            if skipped:
+                log.warning(f"⚠️ 재생목록 {os.path.basename(abs_path)}: 없는 파일·온라인 주소 {skipped}개는 건너뜁니다.")
+            if not raw_playlist:
+                log.error(f"❌ 재생목록 {abs_path}에 재생할 수 있는 영상이 없습니다.")
+                return False
+            self.is_single_file_mode = len(raw_playlist) == 1
         elif os.path.isfile(abs_path):
             self.is_single_file_mode = True
             raw_playlist.append(abs_path)
@@ -313,7 +355,8 @@ class LibraryMixin:
         # 하드웨어 재생 적합성 검사는 현재 재생할 영상에 대해 On-Demand로 즉시 수행되고,
         # 나머지 영상들은 재생 중 백그라운드 스레드에서 점진적으로 검사/캐싱됩니다.
         self.playlist = prefer_h265_versions(raw_playlist)
-        self.playlist = sort_video_paths(self.playlist, settings.get("playlist_sort"))
+        if not is_playlist_file(abs_path):   # M3U는 파일에 적힌 순서대로 재생
+            self.playlist = sort_video_paths(self.playlist, settings.get("playlist_sort"))
         mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
         log.info(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 영상을 로드했습니다.")
         for idx, path in enumerate(self.playlist):

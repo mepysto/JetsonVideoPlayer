@@ -179,6 +179,9 @@ class PlaylistPanelMixin:
                 refresh_item = Gtk.MenuItem(label="🔄 재생목록 새로고침 (F5)")
                 refresh_item.connect("activate", lambda _m: self.rescan_playlist())
                 menu.append(refresh_item)
+                save_item = Gtk.MenuItem(label="💾 재생목록 저장 (M3U)")
+                save_item.connect("activate", lambda _m: self.save_playlist_m3u())
+                menu.append(save_item)
 
                 # 3. 전체 경로 복사
                 copy_path_item = Gtk.MenuItem(label="📋 전체 경로 복사")
@@ -348,12 +351,12 @@ class PlaylistPanelMixin:
         self.apply_playlist_sort()
         self.show_osd(f"↕ 재생목록 정렬: {self.SORT_LABELS[mode]}")
 
-    def apply_playlist_sort(self):
-        """현재 재생 중인 영상을 유지한 채 재생목록을 설정된 기준으로 다시 정렬합니다."""
+    def apply_playlist_sort(self, resort=True):
+        """현재 재생 중인 영상을 유지한 채 재생목록을 설정된 기준으로 다시 정렬합니다 (resort=False: 버튼만 갱신)."""
         mode = settings.get("playlist_sort")
         if getattr(self, "sort_button", None):
             self.sort_button.set_label(f"↕ {self.SORT_LABELS.get(mode, '이름순')}")
-        if not self.playlist:
+        if not self.playlist or not resort:
             return
         current = self.playlist[self.current_index] if 0 <= self.current_index < len(self.playlist) else None
         self.playlist = sort_video_paths(self.playlist, mode)

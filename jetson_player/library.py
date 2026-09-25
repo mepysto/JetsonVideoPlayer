@@ -1,5 +1,6 @@
 """영상 파일 탐색 유틸리티"""
 import os
+from urllib.parse import unquote, urlsplit
 
 
 VIDEO_EXTS = {'.webm', '.mp4', '.mkv', '.mov', '.avi', '.ts', '.m4v'}
@@ -74,4 +75,57 @@ def merge_rescanned(playlist, root, scanned, current=None):
     added = [p for p in new if p not in old_set]
     removed = [p for p in playlist if p not in set(new)]
     return new, added, removed
+
+
+PLAYLIST_EXTS = {'.m3u', '.m3u8'}
+
+
+def is_playlist_file(path):
+    return os.path.splitext(path or "")[1].lower() in PLAYLIST_EXTS
+
+
+def parse_m3u(path):
+    """M3U/M3U8 재생목록의 로컬 영상 경로 목록 (상대 경로는 재생목록 파일 기준, 없는 파일·URL은 제외).
+
+    반환: (영상 경로 목록, 건너뛴 항목 수)
+    """
+    base = os.path.dirname(os.path.abspath(path))
+    with open(path, "rb") as f:
+        raw = f.read()
+    for encoding in ("utf-8-sig", "cp949", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    videos, skipped = [], 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("file://"):
+            line = unquote(urlsplit(line).path)
+        elif "://" in line:
+            skipped += 1          # 온라인 주소는 지원하지 않음
+            continue
+        full = os.path.normpath(line if os.path.isabs(line) else os.path.join(base, line))
+        if os.path.isfile(full) and os.path.splitext(full)[1].lower() in VIDEO_EXTS:
+            if full not in videos:
+                videos.append(full)
+        else:
+            skipped += 1
+    return videos, skipped
+
+
+def write_m3u(paths, dest):
+    """재생목록을 M3U8(UTF-8)로 저장합니다. 저장 위치 기준 상대 경로로 쓸 수 있으면 상대 경로로 씁니다."""
+    base = os.path.dirname(os.path.abspath(dest))
+    lines = ["#EXTM3U"]
+    for p in paths:
+        p = os.path.abspath(p)
+        rel = os.path.relpath(p, base)
+        lines.append(f"#EXTINF:-1,{os.path.splitext(os.path.basename(p))[0]}")
+        lines.append(p if rel.startswith("..") else rel)
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
