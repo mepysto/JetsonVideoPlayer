@@ -4,7 +4,8 @@ from gi.repository import Gst, Gtk
 
 from ..settings import settings
 from ..subtitles.ass import matroska_block_to_event, parse_ass
-from ..subtitles.parse import load_ass_script, strip_markup
+from ..subtitles.parse import (get_subtitle_color, get_subtitle_label, load_ass_script, parse_subtitle_file_events,
+                               strip_markup)
 from ..subtitles.timeline import SubtitleTrack
 
 log = logging.getLogger(__name__)
@@ -403,6 +404,22 @@ class SubtitlesMixin:
         ass = load_ass_script(path) if path and settings.get("subtitle_ass_styles") else None
         return {"path": path, "label": label, "color": color, "events": events,
                 "track": SubtitleTrack(label, color, events, ass=ass)}
+
+    def add_external_subtitle(self, path):
+        """자막 파일을 지금 영상의 자막 목록에 추가하고 켭니다 (드래그 앤 드롭, 온라인에서 받은 자막)."""
+        events = parse_subtitle_file_events(path)
+        if not events:
+            self.show_osd("⚠️ 자막을 읽을 수 없습니다.")
+            return False
+        idx = len(self.available_subtitles)
+        label = get_subtitle_label(path)
+        self.available_subtitles.append(self.make_subtitle_entry(path, label, get_subtitle_color(path, idx), events))
+        self.active_subtitle_indices.add(idx)
+        self.has_subtitles = True
+        self.subtitles_enabled = True
+        self.schedule_subtitles_reload()
+        self.show_osd(f"💬 자막 추가됨: {label}")
+        return True
 
     def toggle_ass_styles(self):
         """ASS/SSA 자막을 원래 스타일로 그릴지 전환합니다 (외부 자막은 바로, MKV 내장 자막은 다음 재생부터)."""

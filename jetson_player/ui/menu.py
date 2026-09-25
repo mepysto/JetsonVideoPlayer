@@ -79,6 +79,7 @@ class MenuMixin:
             (self.translation_menu_label(), self.start_translation),
             ("📑 챕터 / 장면 목록 (K)", self.show_chapters_menu),
             ("🔎 대사 검색 (Ctrl+F)", self.show_dialogue_search),
+            ("🌐 온라인 자막 찾기 (OpenSubtitles)...", self.show_online_subtitle_search),
         ]
 
     def more_menu_setting_items(self):

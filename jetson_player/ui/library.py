@@ -15,7 +15,6 @@ from ..library import (VIDEO_EXTS, is_playlist_file, parse_m3u, prefer_h265_vers
                        sort_video_paths, write_m3u)
 from ..settings import settings
 from ..storage import history_cache, hw_cache
-from ..subtitles.parse import get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
 from ..network import is_gvfs_path, is_network_uri
 from ..youtube import is_youtube_url
 
@@ -242,17 +241,7 @@ class LibraryMixin:
 
         # 자막 파일이 드롭된 경우: 현재 재생 영상에 자막 추가 적용
         if ext in sub_exts:
-            evs = parse_subtitle_file_events(first)
-            if evs:
-                idx = len(self.available_subtitles)
-                color = get_subtitle_color(first, idx)
-                lbl = get_subtitle_label(first)
-                self.available_subtitles.append(self.make_subtitle_entry(first, lbl, color, evs))
-                self.active_subtitle_indices.add(idx)
-                self.has_subtitles = True
-                self.subtitles_enabled = True
-                self.schedule_subtitles_reload()
-                self.show_osd(f"💬 자막 추가됨: {lbl}")
+            if self.add_external_subtitle(first):
                 log.info(f"💬 드래그로 자막 추가: {first}")
             context.finish(True, False, time)
             return

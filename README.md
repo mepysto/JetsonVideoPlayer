@@ -29,6 +29,7 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
   - NLLB-200 모델 라이선스는 **CC-BY-NC 4.0(비상업적 이용만 허용)**입니다.
   - 지금 보는 위치부터 번역해 바로 화면에 표시하고, 결과는 `영상이름.ai.ko.srt`로 저장합니다. "AI 자막을 만들면 자동으로 번역"도 켤 수 있습니다.
 
+- **🌐 온라인 자막 찾기**: `⋯` 메뉴 → "온라인 자막 찾기 (OpenSubtitles)". 파일 해시와 파일 이름으로 검색해 이 영상과 정확히 맞는 자막(✓)을 먼저 보여 주고, 고르면 받아서 `영상이름.<언어>.srt`로 저장한 뒤 바로 켭니다. OpenSubtitles.com의 무료 API 키가 필요하며(처음 열 때 입력), 계정을 넣으면 하루 다운로드 한도가 늘어납니다. 키는 `JVP_OPENSUBTITLES_KEY` 환경 변수로도 줄 수 있습니다.
 - **🔎 대사 검색 (`Ctrl+F`)**: 재생목록에 있는 모든 영상의 자막(AI 자막·번역 포함)에서 대사를 찾아, 고르면 그 영상의 해당 장면으로 이동합니다. 지금 보는 영상의 결과가 먼저 나오며, 리모컨에서도 검색할 수 있습니다.
 - 영상 폴더에 쓸 수 없으면(읽기 전용 공유 등) AI 자막·번역은 `~/.cache/jetson_video_player/ai_subtitles/`에 저장되고, 다음 재생 때 자동으로 불러옵니다.
 
@@ -205,6 +206,7 @@ jetson_player/
   media/loudness.py         # 음량 측정 (BS.1770 K-가중 + 게이팅)
   subtitles/parse.py        # 자막 파일 탐색 · 파싱 · 언어 감지
   subtitles/ass.py          # ASS/SSA 스타일·재정의 태그·위치 해석
+  subtitles/opensubtitles.py # OpenSubtitles.com API (검색·다운로드·파일 해시)
   subtitles/timeline.py     # 재생 위치별 표시 대사 조회
   remote/                   # 웹 리모컨: HTTP 핸들러, PIN 인증, SSE, 정적 페이지
   ui/window.py              # 메인 창: 상태 초기화, 키 처리, 종료

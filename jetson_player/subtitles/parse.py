@@ -42,10 +42,11 @@ def cached_ai_subtitle_stem(video_path):
 
 
 def find_cached_ai_subtitles(video_path, cache_dir=None):
-    """캐시 폴더에 저장된 이 영상의 AI 자막 (예전 버전이 해시 없이 저장한 <영상>.ai.<언어>.srt 포함)"""
+    """캐시 폴더에 저장된 이 영상의 자막 — AI 자막·번역·온라인에서 받은 자막
+    (예전 버전이 해시 없이 저장한 <영상>.ai.<언어>.srt 포함)"""
     cache_dir = cache_dir or AI_SUBTITLE_CACHE_DIR
     stem = os.path.splitext(os.path.basename(video_path))[0]
-    prefixes = (cached_ai_subtitle_stem(video_path) + ".ai.", stem + ".ai.")
+    prefixes = (cached_ai_subtitle_stem(video_path) + ".", stem + ".ai.")
     try:
         names = sorted(os.listdir(cache_dir))
     except OSError:
