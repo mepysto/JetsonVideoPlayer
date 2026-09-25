@@ -164,7 +164,8 @@ def _new_hdr_shader():
     shader = Gst.ElementFactory.make("glshader", None)
     if shader is None:
         return None
-    from .hdr import fragment_shader
+    from .hdr import VERTEX_SHADER, fragment_shader
+    shader.set_property("vertex", VERTEX_SHADER)
     shader.set_property("fragment", fragment_shader())
     shader.set_property("uniforms", hdr_uniforms(None, False))
     return shader

@@ -54,9 +54,23 @@ class ViewingMixin:
         """새 파이프라인마다 셰이더를 새 GL 컨텍스트에서 다시 만들게 합니다.
         (재사용하는 GL 싱크의 glshader가 이전 파이프라인의 셰이더를 붙잡고 있으면 다음 영상에서 흐름 오류가 납니다)"""
         stage = getattr(self, "hdr_shader", None)
-        if stage:
+        if stage and getattr(self, "_hdr_stage_failed", False):
+            # 이 GL에서 셰이더를 쓸 수 없음 → 셰이더 단계를 빼고 GL 싱크를 직접 씁니다 (톤매핑 없이 재생)
+            stage[0].remove(self.gtk_sink)
+            self.video_sink_bin.set_property("sink", self.gtk_sink)
+            self.hdr_shader = None
+        elif stage:
             renew_gl_shader(stage, self.gtk_sink)
         self._hdr_key = (None, False)
+
+    def is_hdr_shader_error(self, message):
+        """버스 오류가 톤매핑 셰이더에서 났는지 (그렇다면 셰이더 없이 다시 재생하도록 표시)"""
+        stage = getattr(self, "hdr_shader", None)
+        if not stage or message.src is not stage[1]:
+            return False
+        self._hdr_stage_failed = True
+        log.warning("⚠️ HDR 톤매핑 셰이더를 이 GL에서 쓸 수 없어 끄고 다시 재생합니다.")
+        return True
 
     def update_hdr_tonemap(self):
         """디코딩된 영상의 전달 특성(PQ/HLG)에 맞춰 톤매핑 셰이더를 고릅니다 (파이프라인 preroll 때 호출)."""

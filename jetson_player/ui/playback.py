@@ -581,6 +581,11 @@ class PlaybackMixin:
             if getattr(self, "_restart_scheduled", False):
                 # 같은 파이프라인이 연달아 내는 후속 오류(not-negotiated 등): 이미 다시 시작하도록 예약됨
                 return
+            if self.is_hdr_shader_error(message):
+                restart_ns = self.pending_seek_ns or self.last_known_pos_ns
+                self._restart_scheduled = True
+                GLib.timeout_add(100, lambda: (self.play_current_video(restart_ns), False)[1])
+                return
             path = self.playlist[self.current_index]
             name = os.path.basename(path)[:40]
             if getattr(self, "passthrough_active", False) and path not in self.passthrough_failed:

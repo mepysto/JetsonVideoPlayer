@@ -106,13 +106,14 @@ def test_hdr_shader_on_gl_matches_reference():
     """톤매핑 셰이더를 실제 GL에서 돌려 파이썬 참조 계산과 비교 (uniform은 GFloat여야 적용됨)"""
     import numpy as np
     from jetson_player.media.gst_setup import hdr_uniforms
-    from jetson_player.media.hdr import fragment_shader, reference
+    from jetson_player.media.hdr import VERTEX_SHADER, fragment_shader, reference
     if not all(Gst.ElementFactory.find(n) for n in ("glupload", "glshader", "gldownload")):
         pytest.skip("GL 요소 없음")
     p = Gst.parse_launch("videotestsrc num-buffers=3 pattern=solid-color foreground-color=0xffc83c28 "
                          "! video/x-raw,format=RGBA,width=16,height=16 ! glupload ! glshader name=sh "
                          "! gldownload ! video/x-raw,format=RGBA ! appsink name=s")
     sh = p.get_by_name("sh")
+    sh.set_property("vertex", VERTEX_SHADER)
     sh.set_property("fragment", fragment_shader())
     sh.set_property("uniforms", hdr_uniforms("pq", True))
     p.set_state(Gst.State.PLAYING)

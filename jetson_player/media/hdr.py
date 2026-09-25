@@ -94,6 +94,18 @@ def _mat3(m):
     return "mat3(" + ", ".join(cols) + ")"
 
 
+# glshader의 기본 정점 셰이더는 #version을 붙이므로, 버전 없는 조각 셰이더와 짝이 맞도록 직접 넘깁니다
+# (Mesa 등 일부 GL은 "all shaders must use same shading language version"으로 링크를 거부).
+VERTEX_SHADER = """attribute vec4 a_position;
+attribute vec2 a_texcoord;
+varying vec2 v_texcoord;
+void main () {
+  gl_Position = a_position;
+  v_texcoord = a_texcoord;
+}
+"""
+
+
 def uniforms_for(kind, fix_matrix):
     """톤매핑 셰이더에 넘길 uniform 값 (셰이더는 하나, 영상마다 이 값만 바꿉니다)"""
     mode = {"pq": 1.0, "hlg": 2.0}.get(kind, 0.0)
