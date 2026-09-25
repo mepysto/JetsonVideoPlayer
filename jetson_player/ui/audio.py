@@ -4,6 +4,7 @@ import os
 
 from gi.repository import GLib, Gst
 
+from ..media.gst_setup import PASSTHROUGH_CAPS, audio_codec_of, sink_passthrough_formats
 from ..media.loudness import LoudnessJob, db_to_linear, gain_for
 from ..settings import settings
 from ..storage import loudness_cache
@@ -125,6 +126,45 @@ class AudioEffectsMixin:
             self._set_loudness_gain(0.0)
         self.show_osd("🔊 음량 평준화 ON" if on else "🔊 음량 평준화 OFF")
 
+    # ---- HDMI 패스스루 ---------------------------------------------------------------
+    def passthrough_sink_for(self, path):
+        """패스스루를 쓸 수 있으면 그 싱크(pulsesink), 아니면 None. passthrough_active를 갱신합니다."""
+        self.passthrough_active = False
+        if not settings.get("audio_passthrough") or not path or not os.path.isfile(path):
+            return None
+        if not hasattr(self, "passthrough_failed"):
+            self.passthrough_failed = set()
+        if path in self.passthrough_failed:
+            return None
+        codec = audio_codec_of(path)
+        if codec not in PASSTHROUGH_CAPS:
+            return None
+        supported = sink_passthrough_formats()
+        if codec not in supported:
+            if not getattr(self, "_passthrough_hint_shown", False):
+                self._passthrough_hint_shown = True
+                self.show_osd("🔈 HDMI 패스스루: 사운드 설정에서 HDMI 출력의 AC3/DTS 패스스루를 켜야 합니다 (지금은 디코딩)",
+                              duration_sec=4.0)
+            log.info(f"🔈 [HDMI 패스스루] 출력 장치가 {codec}을(를) 받지 않아 디코딩합니다 (지원: {sorted(supported) or '없음'})")
+            return None
+        sink = Gst.ElementFactory.make("pulsesink", "asink")
+        if sink is None:
+            return None
+        self.passthrough_active = True
+        if self.playback_rate != 1.0:
+            self.playback_rate = 1.0
+            self.update_speed_button_ui()
+        self.show_osd(f"🔈 HDMI 패스스루: {codec.split('-', 1)[-1].upper()} 원음 출력 (볼륨·효과·배속 끔)", duration_sec=3.0)
+        log.info(f"🔈 [HDMI 패스스루] {os.path.basename(path)}: {codec}")
+        return sink
+
+    def toggle_audio_passthrough(self):
+        on = not settings.get("audio_passthrough")
+        settings.set("audio_passthrough", on)
+        self._passthrough_hint_shown = False
+        self.show_osd("🔈 HDMI 패스스루 ON (다음 영상부터, AC3/E-AC3/DTS 파일)" if on else "🔈 HDMI 패스스루 OFF (다음 영상부터)",
+                      duration_sec=2.5)
+
     def audio_setting_entries(self):
         lufs = getattr(self, "_loudness_lufs", None)
         detail = f" — {lufs:.0f} LUFS → {getattr(self, '_loudness_current_db', 0.0):+.0f}dB" \
@@ -135,4 +175,6 @@ class AudioEffectsMixin:
              self.toggle_loudness_normalize),
             ("submenu", f"🎚️ EQ: {EQ_PRESETS.get(preset, EQ_PRESETS['flat'])[0]}",
              [(name, (lambda k=k: self.set_eq_preset(k)), k == preset) for k, (name, _g) in EQ_PRESETS.items()]),
+            ("check", "🔈 HDMI 패스스루 (AC3/DTS 원음 → AV 리시버, 실험적)", settings.get("audio_passthrough"),
+             self.toggle_audio_passthrough),
         ]

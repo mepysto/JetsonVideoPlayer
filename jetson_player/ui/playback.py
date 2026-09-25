@@ -39,6 +39,9 @@ class PlaybackMixin:
 
     def set_playback_rate(self, new_rate):
         """GStreamer 파이프라인에 재생 속도(Playback Rate)를 적용합니다."""
+        if getattr(self, "passthrough_active", False) and round(new_rate, 2) != 1.0:
+            self.show_osd("🔈 HDMI 패스스루 중에는 재생 속도를 바꿀 수 없습니다")
+            return
         new_rate = round(max(0.25, min(3.0, new_rate)), 2)
         self.playback_rate = new_rate
         self.rate_applied_on_preroll = True
@@ -468,10 +471,15 @@ class PlaybackMixin:
                 self.video_sink.set_property("max-lateness", 50 * Gst.MSECOND)
             self.pipeline.set_property("video-sink", video_output)
 
-        # 배속에서도 음정을 유지하는 오디오 bin (scaletempo + 야간 모드 효과)
-        asink = make_audio_output(self.av_sync_offset_ms)
-        self.current_asink = asink
-        self.pipeline.set_property("audio-sink", build_audio_sink_bin(asink, self.build_audio_effect_elements()))
+        # 배속에서도 음정을 유지하는 오디오 bin (scaletempo + 야간 모드 효과) — 또는 HDMI 원음 패스스루
+        passthrough_sink = self.passthrough_sink_for(video_path)
+        if passthrough_sink is not None:
+            self.current_asink = passthrough_sink
+            self.pipeline.set_property("audio-sink", passthrough_sink)
+        else:
+            asink = make_audio_output(self.av_sync_offset_ms)
+            self.current_asink = asink
+            self.pipeline.set_property("audio-sink", build_audio_sink_bin(asink, self.build_audio_effect_elements()))
 
         # 버스 이벤트 연결
         self.bus = self.pipeline.get_bus()
@@ -574,6 +582,14 @@ class PlaybackMixin:
                 return
             path = self.playlist[self.current_index]
             name = os.path.basename(path)[:40]
+            if getattr(self, "passthrough_active", False) and path not in self.passthrough_failed:
+                # 사운드 서버/수신기가 원음을 받지 못함 → 이 파일은 일반(디코딩) 경로로 다시 재생
+                log.info("↩️ HDMI 패스스루 실패 — 디코딩해서 다시 재생합니다.")
+                self.passthrough_failed.add(path)
+                restart_ns = self.pending_seek_ns or self.last_known_pos_ns
+                self._restart_scheduled = True
+                GLib.timeout_add(100, lambda: (self.play_current_video(restart_ns), False)[1])
+                return
             if self.using_hw_video_output and path not in self.hw_output_disabled:
                 # HW 출력 경로(nvvidconv)가 이 영상 포맷을 처리하지 못함 → 기존(소프트웨어 변환) 경로로 즉시 재시도
                 log.info("↩️ HW 영상 출력 경로 실패 — 호환 경로로 다시 재생합니다.")

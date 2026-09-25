@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 
-from gi.repository import GdkX11, Gst
+from gi.repository import GdkX11, Gst, GstPbutils
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +79,36 @@ def seek_flags(mode):
     if mode == "accurate":
         return Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE
     raise ValueError(f"unknown seek mode: {mode}")
+
+
+PASSTHROUGH_CAPS = ("audio/x-ac3", "audio/x-eac3", "audio/x-dts")
+
+
+def sink_passthrough_formats(factory="pulsesink"):
+    """사운드 서버가 원음 그대로 받을 수 있는 압축 오디오 형식 (HDMI 패스스루가 켜져 있을 때만 나타남)"""
+    sink = Gst.ElementFactory.make(factory, None)
+    if sink is None:
+        return set()
+    try:
+        if sink.set_state(Gst.State.READY) == Gst.StateChangeReturn.FAILURE:
+            return set()
+        caps = sink.get_static_pad("sink").query_caps(None)
+        return {caps.get_structure(i).get_name() for i in range(caps.get_size())} & set(PASSTHROUGH_CAPS)
+    finally:
+        sink.set_state(Gst.State.NULL)
+
+
+def audio_codec_of(path, timeout_sec=3):
+    """파일의 첫 오디오 스트림 형식 (예: audio/x-ac3). 오디오가 없거나 알 수 없으면 None"""
+    try:
+        discoverer = GstPbutils.Discoverer.new(timeout_sec * Gst.SECOND)
+        info = discoverer.discover_uri(Gst.filename_to_uri(os.path.abspath(path)))
+    except Exception:
+        log.debug(f"오디오 형식 확인 실패: {path}", exc_info=True)
+        return None
+    streams = info.get_audio_streams()
+    caps = streams[0].get_caps() if streams else None
+    return caps.get_structure(0).get_name() if caps and caps.get_size() else None
 
 
 def make_audio_output(av_offset_ms=0, factory="autoaudiosink"):

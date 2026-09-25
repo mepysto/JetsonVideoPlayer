@@ -32,6 +32,7 @@ DEFAULTS = {
     "loudness_normalize": True,   # 영상마다 다른 음량을 비슷하게 (EBU R128 측정)
     "eq_preset": "flat",
     "opensubtitles_languages": "ko,en",
+    "audio_passthrough": False,
     "remote_pin": "",
     "remote_lan_only": True,
     "mini_width": 480,

@@ -268,6 +268,7 @@ class JetsonSignageFlexiblePlayer(
         self.using_hw_video_output = False
         self.hw_decode_expected = None  # 현재 영상의 NVDEC 지원 여부 (None: 판별 불가)
         self.hw_output_disabled = set()  # HW 출력 경로가 실패한 파일 (호환 경로로 재생)
+        self.passthrough_failed = set()  # HDMI 패스스루가 실패한 파일 (디코딩 경로로 재생)
 
         self.video_widget.set_hexpand(True)
         self.video_widget.set_vexpand(True)

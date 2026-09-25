@@ -92,3 +92,11 @@ def test_thumbnail_job_finishes_on_generated_video(media_dir, tmp_path, monkeypa
     index = thumbnails.load_thumbnail_index(str(media_dir / "b.mkv"))
     assert index and index["complete"] and index["files"]
     assert all((tmp_path / "thumbs").rglob(f) for f in index["files"])
+
+
+def test_passthrough_helpers(media_dir):
+    from jetson_player.media.gst_setup import PASSTHROUGH_CAPS, audio_codec_of, sink_passthrough_formats
+    assert audio_codec_of(str(media_dir / "a.mkv")) == "audio/x-vorbis"
+    assert sink_passthrough_formats("fakesink") == set()          # 원음을 받는다고 알리지 않는 싱크
+    assert sink_passthrough_formats("no-such-sink") == set()
+    assert "audio/x-ac3" in PASSTHROUGH_CAPS
