@@ -112,3 +112,27 @@ def test_sse_sends_snapshot_retry_and_ping(remote):
     assert "retry: 2000" in seen
     assert 'data: {"n":1}' in seen and 'data: {"n":2}' in seen
     assert "event: ping" in seen
+
+
+def test_share_page_is_public_but_sending_needs_login(remote):
+    port, player, _ = remote
+    r, body = request(port, "GET", "/share?url=https%3A%2F%2Fyoutu.be%2Fabc")
+    assert r.status == 200 and "JETSON" in body.decode()
+    assert player.commands == []  # 페이지를 여는 것만으로는 아무것도 보내지 않음
+    assert request(port, "POST", "/api/cmd", {"action": "yt", "url": "https://youtu.be/abc"})[0].status == 401
+
+
+def test_non_lan_clients_are_rejected(remote, monkeypatch):
+    port, player, _ = remote
+    monkeypatch.setattr(srv, "is_lan_client", lambda addr: False)
+    assert request(port, "GET", "/")[0].status == 403
+    assert request(port, "POST", "/api/login", {"pin": "4242"})[0].status == 403
+
+
+@pytest.mark.parametrize("addr, expected", [
+    ("192.168.0.10", True), ("10.1.2.3", True), ("172.16.5.5", True), ("127.0.0.1", True),
+    ("169.254.1.1", True), ("::1", True), ("fe80::1", True), ("fd00::5", True), ("::ffff:192.168.1.2", True),
+    ("8.8.8.8", False), ("2001:4860:4860::8888", False), ("::ffff:8.8.8.8", False), ("not-an-ip", False),
+])
+def test_is_lan_client(addr, expected):
+    assert srv.is_lan_client(addr) is expected

@@ -46,6 +46,7 @@ class RemoteMixin:
         JetsonWebRemoteHandler.player = self
         JetsonWebRemoteHandler.auth = self.remote_auth
         JetsonWebRemoteHandler.broker = self.remote_broker
+        JetsonWebRemoteHandler.lan_only = settings.get("remote_lan_only")
 
         local_ip = get_local_ip()
         for port in [8888, 8889, 8890, 8080]:

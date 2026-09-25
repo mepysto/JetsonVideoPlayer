@@ -26,6 +26,7 @@ DEFAULTS = {
     "autoplay_countdown": True,
     "night_mode": False,
     "remote_pin": "",
+    "remote_lan_only": True,
     "whisper_model": "small-q5_1",
     "whisper_language": "auto",
     "whisper_translate": False,

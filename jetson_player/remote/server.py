@@ -6,6 +6,7 @@
 실시간: /api/events 로 상태 변경을 SSE로 푸시합니다 (폴링 불필요).
 """
 import http.server
+import ipaddress
 import json
 import os
 import urllib.parse
@@ -26,6 +27,7 @@ def _read_static(name):
 
 REMOTE_HTML = _read_static("index.html")
 LOGIN_HTML = _read_static("login.html")
+SHARE_HTML = _read_static("share.html")
 ICON_SVG = _read_static("icon.svg")
 MANIFEST_JSON = json.dumps({
     "name": "Jetson Player Remote", "short_name": "Jetson 리모컨", "start_url": "/", "display": "standalone",
@@ -34,10 +36,22 @@ MANIFEST_JSON = json.dumps({
 }, ensure_ascii=False)
 
 
+def is_lan_client(address):
+    """같은 네트워크(사설·링크 로컬·루프백 주소)에서 온 연결인지 판단합니다."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
 class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
     player = None       # 플레이어 창 (get_remote_status, handle_remote_command, remote_thumbnail_path)
     auth = None         # RemoteAuth
     broker = None       # EventBroker
+    lan_only = True     # 사설 네트워크 밖(공인 IP)에서 온 연결을 거부
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format, *args):
@@ -74,8 +88,17 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
     def _cookie_header(self, token):
         return {"Set-Cookie": f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000"}
 
+    def _reject_non_lan(self):
+        if self.lan_only and not is_lan_client(self.client_address[0]):
+            self.close_connection = True   # 읽지 않은 요청 본문이 다음 요청으로 해석되지 않도록
+            self._send(403, b"forbidden", "text/plain")
+            return True
+        return False
+
     # ---- GET -----------------------------------------------------------
     def do_GET(self):
+        if self._reject_non_lan():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
@@ -94,6 +117,10 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
             self._send(200, page, "text/html; charset=utf-8")
             return
 
+        if path == "/share":
+            # 폰에서 링크 보내기 (북마클릿·공유). 페이지는 상태를 바꾸지 않고, 버튼을 누르면 /api/cmd로 POST합니다.
+            self._send(200, SHARE_HTML, "text/html; charset=utf-8")
+            return
         if path == "/manifest.json":
             self._send(200, MANIFEST_JSON, "application/manifest+json")
             return
@@ -179,6 +206,8 @@ class JetsonWebRemoteHandler(http.server.BaseHTTPRequestHandler):
         return data if isinstance(data, dict) else None
 
     def do_POST(self):
+        if self._reject_non_lan():
+            return
         path = urllib.parse.urlparse(self.path).path
         data = self._read_json()
         if data is None:
