@@ -80,9 +80,9 @@ def db_to_linear(db):
 
 def _value_array(values):
     """audioiirfilter의 계수 속성(GValueArray). PyGObject는 리스트를 바로 변환하지 못합니다."""
-    arr = GObject.ValueArray.new(len(values))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
+        arr = GObject.ValueArray.new(len(values))
         for x in values:
             v = GObject.Value()
             v.init(GObject.TYPE_DOUBLE)
