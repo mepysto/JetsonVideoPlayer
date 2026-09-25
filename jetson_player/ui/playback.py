@@ -2,6 +2,7 @@
 import logging
 import os
 import random
+import time
 from urllib.request import pathname2url
 
 from gi.repository import GLib, GdkX11, Gst, GstVideo
@@ -525,6 +526,7 @@ class PlaybackMixin:
         """재생 완료(EOS) 및 에러 메시지 처리"""
         has_current = bool(self.playlist) and 0 <= self.current_index < len(self.playlist)
         if message.type == Gst.MessageType.EOS:
+            self._eos_at = time.monotonic()   # 다음 영상이 화면에 나오기까지 걸린 시간 측정용
             if not has_current:
                 return
             self.retry_counts.pop(self.playlist[self.current_index], None)
@@ -616,6 +618,10 @@ class PlaybackMixin:
         elif message.type == Gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             _old_state, new_state, _pending = message.parse_state_changed()
             self.is_playing = new_state == Gst.State.PLAYING
+            eos_at = getattr(self, "_eos_at", None)
+            if self.is_playing and eos_at is not None:
+                self._eos_at = None
+                log.info(f"⏭ [전환 시간] 앞 영상 끝 → 다음 영상 재생 {(time.monotonic() - eos_at) * 1000:.0f}ms")
 
     def seek_relative(self, offset_seconds):
         """현재 재생 위치를 기준으로 지정된 초만큼 앞/뒤로 이동합니다."""
