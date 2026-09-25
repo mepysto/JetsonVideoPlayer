@@ -11,7 +11,7 @@ from urllib.request import pathname2url
 from gi.repository import GLib, Gst, GstPbutils, Gtk
 
 from ..media.codecs import nvdec_supports
-from ..library import VIDEO_EXTS, scan_video_files, sort_video_paths
+from ..library import VIDEO_EXTS, prefer_h265_versions, scan_video_files, sort_video_paths
 from ..settings import settings
 from ..storage import history_cache, hw_cache
 from ..subtitles.parse import get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
@@ -146,6 +146,7 @@ class LibraryMixin:
             return
         self.populate_playlist_tree()
         self.refresh_playlist_ui()
+        self.start_folder_watch()
         if self.playlist:
             self.current_index = 0
             if getattr(self, "placeholder_box", None):
@@ -163,6 +164,7 @@ class LibraryMixin:
         self.input_path = os.path.dirname(valid_files[0]) if len(valid_files) > 1 else valid_files[0]
         self.current_index = 0
         self.is_single_file_mode = (len(valid_files) == 1)
+        self.stop_folder_watch()   # 직접 고른 파일 목록은 폴더 감시 대상이 아님
         self.populate_playlist_tree()
         self.refresh_playlist_ui()
         if getattr(self, "placeholder_box", None):
@@ -310,29 +312,7 @@ class LibraryMixin:
         # 기존 H.265 변환본이 있는 경우에만 빠르게 우선 매핑하여 0.05초 만에 재생목록을 완성합니다.
         # 하드웨어 재생 적합성 검사는 현재 재생할 영상에 대해 On-Demand로 즉시 수행되고,
         # 나머지 영상들은 재생 중 백그라운드 스레드에서 점진적으로 검사/캐싱됩니다.
-        self.playlist = []
-        processed_set = set()
-        raw_set = set(raw_playlist)
-        for path in raw_playlist:
-            if not os.path.exists(path) or path in processed_set:
-                continue
-
-            dir_name = os.path.dirname(path)
-            base_name = os.path.basename(path)
-            name_no_ext, _ext = os.path.splitext(base_name)
-
-            final_path = path
-            # 동일 폴더에 이미 _h265.mp4 변환본이 존재하는 경우 변환본을 채택
-            if not name_no_ext.endswith("_h265"):
-                target_h265 = os.path.join(dir_name, f"{name_no_ext}_h265.mp4")
-                if target_h265 in raw_set or os.path.exists(target_h265):
-                    final_path = target_h265
-                    processed_set.add(path)
-
-            if final_path not in self.playlist:
-                self.playlist.append(final_path)
-                processed_set.add(final_path)
-
+        self.playlist = prefer_h265_versions(raw_playlist)
         self.playlist = sort_video_paths(self.playlist, settings.get("playlist_sort"))
         mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
         log.info(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 영상을 로드했습니다.")

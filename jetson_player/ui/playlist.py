@@ -176,6 +176,10 @@ class PlaylistPanelMixin:
 
                 menu.append(Gtk.SeparatorMenuItem())
 
+                refresh_item = Gtk.MenuItem(label="🔄 재생목록 새로고침 (F5)")
+                refresh_item.connect("activate", lambda _m: self.rescan_playlist())
+                menu.append(refresh_item)
+
                 # 3. 전체 경로 복사
                 copy_path_item = Gtk.MenuItem(label="📋 전체 경로 복사")
                 def on_copy_path(_m):

@@ -5,6 +5,7 @@ test_player_smoke.py가 격리된 HOME·가상 디스플레이에서 하위 프�
 """
 import json
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,6 +74,17 @@ def main(folder):
 
     def record_jump():
         result["after_search"] = {"file": playing_file(), "subs": subtitle_texts()}
+        shutil.copy(os.path.join(folder, "b.mkv"), os.path.join(folder, "c.mkv"))   # 재생 중 새 영상 추가
+
+    def names():
+        return sorted(os.path.basename(p) for p in win.playlist)
+
+    def record_added():
+        result["after_add"] = {"playlist": names(), "file": playing_file()}
+        os.remove(os.path.join(folder, "b.mkv"))
+
+    def record_removed():
+        result["after_remove"] = {"playlist": names(), "file": playing_file()}
 
     started = {}
     steps += [
@@ -83,6 +95,8 @@ def main(folder):
         ("measure", lambda: GLib.get_monotonic_time() - started["measure_at"][0] > 600_000, record_rate),
         ("search", search_ready, activate_hit),
         ("jump", lambda: playing_file() == "a.mkv", record_jump),
+        ("watch_add", lambda: "c.mkv" in names(), record_added),
+        ("watch_remove", lambda: "b.mkv" not in names(), record_removed),
     ]
 
     def tick():

@@ -102,6 +102,7 @@ SHORTCUTS = [
     _sc({"h", "H"}, "plain", "cycle_sleep_timer", help_key="H", help_desc="⏾ 수면 타이머 (15 → 30 → 60분 → 영상 끝 → 끄기)", category=EXTRA),
     _sc({"k", "K"}, "plain", "show_chapters_menu", help_key="K", help_desc="챕터 / 장면 목록", category=EXTRA),
 
+    _sc({"F5"}, "any", "rescan_playlist", help_key="F5", help_desc="🔄 재생목록 새로고침 (폴더에 추가·삭제된 영상 반영)", category=GENERAL),
     _sc({"F1", "question"}, "any", "show_help_dialog", help_key="F1 또는 ?", help_desc="단축키 도움말", category=GENERAL),
 ]
 

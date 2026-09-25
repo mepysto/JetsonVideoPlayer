@@ -23,7 +23,9 @@ def smoke_result(media_dir, tmp_path):
                JVP_VIDEO_SINK="gtk", JVP_LOG_LEVEL="INFO")
     for key in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"):
         env.pop(key, None)
-    proc = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, DRIVER, str(media_dir)],
+    folder = tmp_path / "media"   # 시나리오가 파일을 추가·삭제하므로 복사본에서 실행
+    shutil.copytree(media_dir, folder)
+    proc = subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", sys.executable, DRIVER, str(folder)],
                           env=env, capture_output=True, text=True, timeout=120)
     line = next((l for l in proc.stdout.splitlines() if l.startswith("RESULT ")), None)
     assert line, f"드라이버 실패 (exit {proc.returncode}):\n{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}"
@@ -39,3 +41,6 @@ def test_player_plays_folder_and_switches_subtitles(smoke_result):
     assert r["ui_rate"] == pytest.approx(2.0)
     assert r["search_rows"] == [["a.mkv", 0]]
     assert r["after_search"] == {"file": "a.mkv", "subs": ["AAA line"]}
+    # 폴더 감시: 재생을 멈추지 않고 재생목록 갱신
+    assert r["after_add"] == {"playlist": ["a.mkv", "b.mkv", "c.mkv"], "file": "a.mkv"}
+    assert r["after_remove"] == {"playlist": ["a.mkv", "c.mkv"], "file": "a.mkv"}

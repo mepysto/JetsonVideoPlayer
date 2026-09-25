@@ -1,4 +1,5 @@
 import json
+import os
 
 from jetson_player.settings import DEFAULTS, Settings
 from jetson_player.storage import NS_PER_SECOND, ResumeCache
@@ -135,3 +136,22 @@ def test_stores_survive_wrong_json_types(tmp_path):
     (tmp_path / "h.json").write_text('{"a": 1}')
     assert BookmarkCache(path=str(tmp_path / "bm.json")).get("/x") == []
     assert HistoryCache(path=str(tmp_path / "h.json")).get_all() == []
+
+
+def test_prefer_h265_versions(tmp_path):
+    from jetson_player.library import prefer_h265_versions
+    for n in ("a.mkv", "a_h265.mp4", "b.mkv"):
+        (tmp_path / n).write_bytes(b"x")
+    paths = [str(tmp_path / n) for n in ("a.mkv", "a_h265.mp4", "b.mkv", "gone.mkv")]
+    assert [os.path.basename(p) for p in prefer_h265_versions(paths)] == ["a_h265.mp4", "b.mkv"]
+
+
+def test_merge_rescanned_keeps_outside_items_and_current():
+    from jetson_player.library import merge_rescanned
+    playlist = ["/v/a.mkv", "/v/b.mkv", "/yt/clip.mp4", "/v/sub/c.mkv"]
+    new, added, removed = merge_rescanned(playlist, "/v", ["/v/a.mkv", "/v/sub/c.mkv", "/v/d.mkv"], current="/v/b.mkv")
+    assert set(new) == {"/v/a.mkv", "/v/sub/c.mkv", "/v/d.mkv", "/yt/clip.mp4", "/v/b.mkv"}   # b는 재생 중이라 유지
+    assert added == ["/v/d.mkv"] and removed == []
+    new, added, removed = merge_rescanned(playlist, "/v", ["/v/a.mkv"], current="/v/a.mkv")
+    assert removed == ["/v/b.mkv", "/v/sub/c.mkv"] and "/yt/clip.mp4" in new
+    assert merge_rescanned(["/vv/x.mkv"], "/v", [])[0] == ["/vv/x.mkv"]   # /vv는 /v 폴더 밖
