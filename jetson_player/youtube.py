@@ -1,4 +1,5 @@
 """YouTube URL 처리와 yt-dlp 기반 다운로드 매니저"""
+import logging
 import os
 import re
 import shutil
@@ -6,6 +7,8 @@ import threading
 import urllib.parse
 
 from gi.repository import GLib
+
+log = logging.getLogger(__name__)
 
 
 try:
@@ -166,8 +169,8 @@ class YouTubeManager:
         self.download_dir = download_dir or os.path.expanduser("~/Videos/YouTube")
         try:
             os.makedirs(self.download_dir, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"⚠️ YouTube 저장 폴더를 만들 수 없습니다 ({self.download_dir}): {e}")
         self.current_download = {
             "active": False,
             "title": "",
@@ -204,7 +207,7 @@ class YouTubeManager:
                     if os.path.isfile(full_p) and os.path.getsize(full_p) > 512 * 1024:
                         return full_p
         except Exception:
-            pass
+            log.debug("받아 둔 YouTube 영상 검색 실패", exc_info=True)
         return None
 
     @staticmethod

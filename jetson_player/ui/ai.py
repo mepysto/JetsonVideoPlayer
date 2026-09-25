@@ -1,4 +1,5 @@
 """AI 자막 생성 UI: whisper.cpp 작업 시작/취소, 실시간 자막 트랙 갱신, 설정 메뉴"""
+import logging
 import os
 
 from gi.repository import GLib
@@ -6,6 +7,8 @@ from gi.repository import GLib
 from ..ai.translate import TranslationJob, make_backend, resolve_backend
 from ..ai.whisper import LANGUAGE_NAMES, MODEL_NOTES, AiSubtitleJob, ai_subtitle_path, list_whisper_models, whisper_available
 from ..settings import settings
+
+log = logging.getLogger(__name__)
 
 AI_COLOR = "#B388FF"
 TRANSLATE_TARGETS = [("ko", "한국어"), ("en", "영어"), ("ja", "일본어"), ("zh", "중국어")]
@@ -30,7 +33,7 @@ class AiSubtitlesMixin:
         model = settings.get("whisper_model")
         if not whisper_available(model):
             self.show_osd("⚠️ AI 자막 엔진이 설치되지 않았습니다: ./scripts/setup_whisper.sh 실행", duration_sec=5.0)
-            print("ℹ️ AI 자막을 사용하려면 프로젝트 폴더에서 ./scripts/setup_whisper.sh 를 실행하세요.")
+            log.info("ℹ️ AI 자막을 사용하려면 프로젝트 폴더에서 ./scripts/setup_whisper.sh 를 실행하세요.")
             return
         if self.duration_ns <= 0:
             self.show_osd("영상 길이를 확인하는 중입니다. 잠시 후 다시 시도하세요.")
@@ -138,7 +141,7 @@ class AiSubtitlesMixin:
         backend_name = resolve_backend(settings.get("translate_backend"))
         if backend_name is None:
             self.show_osd("⚠️ 번역 엔진이 없습니다: ./scripts/setup_translator.sh 실행 (또는 Claude API 키 설정)", duration_sec=5.0)
-            print("ℹ️ 자막 번역을 쓰려면 ./scripts/setup_translator.sh 를 실행하거나 ANTHROPIC_API_KEY를 설정하세요.")
+            log.info("ℹ️ 자막 번역을 쓰려면 ./scripts/setup_translator.sh 를 실행하거나 ANTHROPIC_API_KEY를 설정하세요.")
             return
         if not self.playlist:
             return
@@ -179,7 +182,7 @@ class AiSubtitlesMixin:
             entry["label"] = f"🌐 {target_name} 번역 ({os.path.basename(path)})"
             entry["track"].label = entry["label"]
             entry["path"] = path
-            print(f"🌐 [자막 번역] {len(events)}문장 → {path}")
+            log.info(f"🌐 [자막 번역] {len(events)}문장 → {path}")
             self.show_osd(f"🌐 {target_name} 번역 완성: {len(events)}문장 (다음 재생부터 자동 로드)", duration_sec=4.0)
             self.update_subtitle_button_ui()
 
@@ -226,7 +229,7 @@ class AiSubtitlesMixin:
         if job and job.is_running():
             return
         if whisper_available(settings.get("whisper_model")):
-            print(f"🤖 [자동 AI 자막] {os.path.basename(path)}")
+            log.info(f"🤖 [자동 AI 자막] {os.path.basename(path)}")
             self.start_ai_subtitles()
 
     def ai_menu_label(self):

@@ -7,7 +7,8 @@ on:
 
 jobs:
   test:
-    # 테스트는 GTK/GPU 없이 실행되는 모듈만 다룹니다 (자막·YouTube 대기열·저장소·리모컨 서버·코덱 판별 등).
+    # 모듈 단위 테스트 + GStreamer 파이프라인 테스트(fakesink) + 가상 디스플레이(Xvfb)에서 창 전체를 띄우는 스모크 테스트.
+    # Jetson 전용 경로(NVDEC, nvvidconv)는 CI에서 다루지 않습니다.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +18,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             python3-gi gir1.2-gtk-3.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
-            gir1.2-pango-1.0 gir1.2-gdkpixbuf-2.0 python3-numpy python3-pytest python3-pip
+            gir1.2-pango-1.0 gir1.2-gdkpixbuf-2.0 python3-numpy python3-pytest python3-pip \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-gtk3 gstreamer1.0-tools xvfb python3-dbus
 
       - name: Lint (pyflakes)
         run: |
@@ -29,4 +31,4 @@ jobs:
         run: for f in install.sh uninstall.sh bin/jetson-player scripts/*.sh; do bash -n "$f"; done
 
       - name: Unit and integration tests
-        run: python3 -m pytest -q tests
+        run: xvfb-run -a python3 -m pytest -q tests

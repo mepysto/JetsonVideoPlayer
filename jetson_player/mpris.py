@@ -3,12 +3,15 @@
 버스 이름: org.mpris.MediaPlayer2.jetson_player
 D-Bus 호출은 GLib 메인 루프(GTK 스레드)에서 실행되므로 플레이어 메서드를 직접 호출해도 안전합니다.
 """
+import logging
 import os
 from urllib.request import pathname2url
 
 import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
+
+log = logging.getLogger(__name__)
 
 BUS_NAME = "org.mpris.MediaPlayer2.jetson_player"
 OBJECT_PATH = "/org/mpris/MediaPlayer2"
@@ -194,8 +197,8 @@ def start_mpris(player):
     """세션 버스가 없거나 이름이 사용 중이면 조용히 건너뜁니다 (플레이어 기능에는 영향 없음)."""
     try:
         service = MprisService(player)
-        print(f"🎛️ [MPRIS] 미디어 키/시스템 미디어 컨트롤 연동: {BUS_NAME}")
+        log.info(f"🎛️ [MPRIS] 미디어 키/시스템 미디어 컨트롤 연동: {BUS_NAME}")
         return service
     except Exception as e:
-        print(f"ℹ️ MPRIS 연동을 건너뜁니다: {e}")
+        log.info(f"ℹ️ MPRIS 연동을 건너뜁니다: {e}")
         return None

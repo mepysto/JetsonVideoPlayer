@@ -1,8 +1,11 @@
 """하단/전체화면 컨트롤, OSD, 진행바, 커서, 전체화면 전환"""
 
+import logging
 from gi.repository import GLib, Gdk, Gst, Gtk
 
 from ..storage import resume_cache
+
+log = logging.getLogger(__name__)
 
 SCRUB_INTERVAL_MS = 150  # 진행바 드래그 중 미리보기 탐색 간격
 
@@ -384,7 +387,7 @@ class ControlsMixin:
                 rendered = stats.get_value("rendered") or 0
                 dropped = stats.get_value("dropped") or 0
                 if dropped > self.last_dropped_frames:
-                    print(f"📊 [렌더링 통계] rendered={rendered}, dropped={dropped}")
+                    log.debug(f"📊 [렌더링 통계] rendered={rendered}, dropped={dropped}")
                 self.last_dropped_frames = dropped
         return True
 
@@ -526,7 +529,7 @@ class ControlsMixin:
             # 전체화면 전환 시 마우스 커서 즉시 숨김
             self.hide_cursor()
             self.show_osd("🖥️ 전체화면 (영상 전용)")
-            print("🖥️ 영상 전용 전체화면 (마우스 조작 시 컨트롤 표시)")
+            log.debug("🖥️ 영상 전용 전체화면 (마우스 조작 시 컨트롤 표시)")
         else:
             self.unfullscreen()
             self.set_decorated(True)
@@ -548,4 +551,4 @@ class ControlsMixin:
             # 일반 모드 복귀 시 마우스 커서 복원
             self.show_cursor()
             self.show_osd("🖥️ 창 모드 복귀")
-            print("🖥️ 플레이어 창 모드 복귀")
+            log.debug("🖥️ 플레이어 창 모드 복귀")

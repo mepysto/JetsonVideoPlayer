@@ -1,8 +1,11 @@
 """이어보기/북마크/최근 기록/HW 적합성 캐시의 JSON 영구 저장소"""
 import json
+import logging
 import os
 import threading
 import time
+
+log = logging.getLogger(__name__)
 
 
 NS_PER_SECOND = 1_000_000_000
@@ -58,7 +61,7 @@ class JsonStore:
                 atomic_write_json(self.path, self.data)
                 self.is_dirty = False
             except (OSError, TypeError, ValueError) as e:
-                print(f"⚠️ 저장 실패 ({os.path.basename(self.path)}): {e}")
+                log.warning(f"⚠️ 저장 실패 ({os.path.basename(self.path)}): {e}")
 
 
 CACHE_FILE = os.path.join(CACHE_DIR, "hw_cache.json")

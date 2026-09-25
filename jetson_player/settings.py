@@ -1,10 +1,13 @@
 """사용자 설정(볼륨, 자막 크기, 반복 모드, 창/사이드바 크기 등)의 영구 저장"""
 import copy
 import json
+import logging
 import os
 import threading
 
 from .storage import atomic_write_json
+
+log = logging.getLogger(__name__)
 
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "jetson_video_player")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
@@ -114,7 +117,7 @@ class Settings:
                 self._saved = copy.deepcopy(self.values)
                 return True
             except OSError as e:
-                print(f"⚠️ 설정 저장 실패: {e}")
+                log.warning(f"⚠️ 설정 저장 실패: {e}")
                 return False
 
 

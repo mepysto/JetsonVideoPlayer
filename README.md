@@ -170,6 +170,7 @@ jetson_player.py            # 실행 진입점 (bin/jetson-player가 실행). `p
 jetson_player/
   __init__.py               # PATH/DISPLAY 환경 설정, gi 라이브러리 버전 고정 (GTK 로드 전에 실행)
   app.py                    # 명령줄 처리, 종료 신호 처리, GTK 메인 루프
+  log.py                    # 로그 설정 (터미널 + 회전 로그 파일)
   settings.py               # 사용자 설정 (settings.json)
   shortcuts.py              # 단축키 정의 테이블 (키 처리 · 도움말 · README 표의 단일 출처)
   storage.py                # 이어보기/시청 완료/북마크/최근 기록/HW 캐시 (JSON, 원자적 저장)
@@ -198,4 +199,6 @@ scripts/check_deps.py       # 실행 환경 점검
 tests/                      # pytest (GTK 없이 실행되는 모듈 테스트)
 ```
 
-테스트: `python3 -m pytest tests`
+테스트: `python3 -m pytest tests` (창을 띄우는 스모크 테스트는 `xvfb-run`이 있으면 가상 디스플레이에서 실행, 없으면 건너뜀)
+
+로그: 터미널과 `~/.cache/jetson_video_player/player.log`(1MB × 4개 회전)에 기록합니다. `⋯` 메뉴 → **📄 로그 파일 보기**로 열 수 있고, `JVP_LOG_LEVEL=DEBUG jetson-player …`로 자세한 로그를 볼 수 있습니다. `JVP_VIDEO_SINK=gtk`는 OpenGL 없이 재생합니다(진단용).

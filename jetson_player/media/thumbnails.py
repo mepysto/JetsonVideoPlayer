@@ -5,6 +5,7 @@
 """
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
@@ -15,6 +16,8 @@ from gi.repository import GdkPixbuf, GLib, Gst, GstPbutils
 
 from ..storage import CACHE_DIR, atomic_write_json
 from .scenes import detect_scene_changes, image_signature, scene_changes_from_diffs
+
+log = logging.getLogger(__name__)
 
 THUMB_ROOT = os.path.join(CACHE_DIR, "thumbs")
 THUMB_WIDTH = 160
@@ -104,7 +107,7 @@ class ThumbnailJob:
         try:
             self._generate()
         except Exception as e:
-            print(f"⚠️ 썸네일 생성 실패 ({os.path.basename(self.path)}): {e}")
+            log.warning(f"⚠️ 썸네일 생성 실패 ({os.path.basename(self.path)}): {e}")
 
     def _generate(self):
         uri = f"file://{pathname2url(os.path.abspath(self.path))}"
@@ -122,7 +125,7 @@ class ThumbnailJob:
         pb.set_state(Gst.State.PAUSED)
         if pb.get_state(10 * Gst.SECOND)[0] == Gst.StateChangeReturn.FAILURE:
             pb.set_state(Gst.State.NULL)
-            print(f"⚠️ 썸네일 파이프라인 준비 실패: {os.path.basename(self.path)}")
+            log.warning(f"⚠️ 썸네일 파이프라인 준비 실패: {os.path.basename(self.path)}")
             return
 
         n = sample_count(duration)
@@ -169,7 +172,7 @@ class ThumbnailJob:
         index = {"version": INDEX_VERSION, "complete": True, "duration": duration,
                  "positions": positions, "files": files, "scenes": scenes}
         atomic_write_json(os.path.join(out_dir, "index.json"), index)
-        print(f"🖼️ [썸네일] {len(files)}장, 장면 전환 {len(scenes)}곳 ({time.time() - started:.1f}초): {os.path.basename(self.path)}")
+        log.info(f"🖼️ [썸네일] {len(files)}장, 장면 전환 {len(scenes)}곳 ({time.time() - started:.1f}초): {os.path.basename(self.path)}")
         index["dir"] = out_dir
         if self.on_done:
             GLib.idle_add(lambda: (self.on_done(index), False)[1])
@@ -205,7 +208,7 @@ class SceneAnalysisJob:
         try:
             scenes = self._analyze()
         except Exception as e:
-            print(f"⚠️ 장면 분석 실패: {e}")
+            log.warning(f"⚠️ 장면 분석 실패: {e}")
         if self.on_done:
             GLib.idle_add(lambda: (self.on_done(None if self.cancelled else scenes), False)[1])
 
@@ -280,7 +283,7 @@ class SceneAnalysisJob:
         duration = state["duration"] or (positions[-1] if positions else 0)
         scenes = scene_changes_from_diffs(diffs, positions, duration, sensitivity=6.0,
                                           min_gap_ns=max(3 * Gst.SECOND, duration // 100), max_scenes=80)
-        print(f"🎬 [정밀 장면 분석] 프레임 {len(diffs) + 1}개, 장면 전환 {len(scenes)}곳 ({time.time() - started:.1f}초)")
+        log.info(f"🎬 [정밀 장면 분석] 프레임 {len(diffs) + 1}개, 장면 전환 {len(scenes)}곳 ({time.time() - started:.1f}초)")
         index_file = os.path.join(thumbnail_cache_dir(self.path), "index.json")
         try:
             with open(index_file, encoding="utf-8") as f:

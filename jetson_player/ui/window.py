@@ -1,4 +1,6 @@
 """메인 플레이어 창: 상태 초기화, 키보드 단축키, 종료 처리 (기능은 mixin 모듈에 분리)"""
+import logging
+import os
 import sys
 import threading
 
@@ -24,6 +26,8 @@ from .timeline import TimelineMixin
 from .ai import AiSubtitlesMixin
 from .viewing import ViewingMixin
 from .state import ControlStateMixin
+
+log = logging.getLogger(__name__)
 
 
 class JetsonSignageFlexiblePlayer(
@@ -233,7 +237,9 @@ class JetsonSignageFlexiblePlayer(
         self.auto_ai_paths = set()  # 재생되면 AI 자막을 자동 생성할 영상 (YouTube 다운로드)
 
         # 3. 비디오가 임베딩될 GtkGLSink 네이티브 OpenGL 위젯 생성 (Totem 공식 아키텍처)
-        self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink")
+        # JVP_VIDEO_SINK=gtk: OpenGL 없이 gtksink 사용 (가상 디스플레이 테스트, GL 문제 진단용)
+        use_gl = os.environ.get("JVP_VIDEO_SINK", "gl") != "gtk"
+        self.gtk_sink = Gst.ElementFactory.make("gtkglsink", "gtk_sink") if use_gl else None
         if self.gtk_sink:
             self.video_sink_bin = Gst.ElementFactory.make("glsinkbin", "glsinkbin")
             self.video_sink_bin.set_property("sink", self.gtk_sink)
@@ -341,7 +347,7 @@ class JetsonSignageFlexiblePlayer(
         """GTK 창의 리소스가 로드되었을 때 영상 재생을 시작하고 백그라운드 검사기를 가동합니다."""
         if self.pipeline is not None:
             return
-        print("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
+        log.info("🖥️ GUI 창 준비 완료. 영상 재생을 시작합니다.")
         
         top_window = self.get_window()
         if top_window:
@@ -380,7 +386,7 @@ class JetsonSignageFlexiblePlayer(
             self.quit_player()
 
     def quit_player(self):
-        print("⏹ 프로그램 종료.")
+        log.info("⏹ 프로그램 종료.")
         self.on_destroy(self)
 
     def on_destroy(self, widget):
@@ -398,7 +404,7 @@ class JetsonSignageFlexiblePlayer(
             self._capture_settings()
             settings.save()
         except Exception as e:
-            print(f"⚠️ 종료 시 저장 실패: {e}")
+            log.warning(f"⚠️ 종료 시 저장 실패: {e}")
 
         for timer_name in ("sleep_timer_id", "autoplay_timer_id"):
             timer_id = getattr(self, timer_name, None)

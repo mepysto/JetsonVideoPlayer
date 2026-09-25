@@ -1,11 +1,12 @@
 """파일/폴더 열기, 재생목록 구성, 최근 기록, HW 적합성 검사"""
 import json
+import logging
 import os
 import subprocess
 import threading
 import time
-from urllib.request import pathname2url
 from urllib.parse import unquote
+from urllib.request import pathname2url
 
 from gi.repository import GLib, Gst, GstPbutils, Gtk
 
@@ -15,6 +16,8 @@ from ..settings import settings
 from ..storage import history_cache, hw_cache
 from ..subtitles.parse import get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
 from ..youtube import is_youtube_url
+
+log = logging.getLogger(__name__)
 
 
 class LibraryMixin:
@@ -161,7 +164,7 @@ class LibraryMixin:
                 self.start_youtube_stream(raw_text, quality="best")
                 return
         except Exception:
-            pass
+            log.debug("드롭한 텍스트를 YouTube 링크로 처리하지 못했습니다", exc_info=True)
 
         uris = data.get_uris()
         if not uris:
@@ -203,7 +206,7 @@ class LibraryMixin:
                 self.subtitles_enabled = True
                 self.schedule_subtitles_reload()
                 self.show_osd(f"💬 자막 추가됨: {lbl}")
-                print(f"💬 드래그로 자막 추가: {first}")
+                log.info(f"💬 드래그로 자막 추가: {first}")
             context.finish(True, False, time)
             return
 
@@ -256,7 +259,7 @@ class LibraryMixin:
                     chroma = "444" if "4:4:4" in caps else ("422" if "4:2:2" in caps else "420")
                     pix_fmt = f"yuv{chroma}p{depth}le" if depth else f"yuv{chroma}p"
             except Exception:
-                pass
+                log.debug(f"Discoverer 코덱 분석 실패: {file_path}", exc_info=True)
         if not codec:
             return None, "코덱 분석 실패"
         res = nvdec_supports(codec, pix_fmt, profile)
@@ -274,17 +277,17 @@ class LibraryMixin:
             try:
                 raw_playlist = scan_video_files(abs_path)
             except Exception as e:
-                print(f"❌ 디렉토리 읽기 실패 ({abs_path}): {e}")
+                log.error(f"❌ 디렉토리 읽기 실패 ({abs_path}): {e}")
                 return False
             if not raw_playlist:
-                print(f"❌ 에러: [{self.input_path}] 폴더 내에 재생 가능한 영상 파일이 없습니다.")
+                log.error(f"❌ 에러: [{self.input_path}] 폴더 내에 재생 가능한 영상 파일이 없습니다.")
                 return False
 
         elif os.path.isfile(abs_path):
             self.is_single_file_mode = True
             raw_playlist.append(abs_path)
         else:
-            print(f"❌ 에러: [{self.input_path}] 존재하지 않는 파일이거나 올바르지 않은 경로입니다.")
+            log.error(f"❌ 에러: [{self.input_path}] 존재하지 않는 파일이거나 올바르지 않은 경로입니다.")
             return False
 
         # [초고속 시작 최적화] 시작 시 모든 파일에 대한 무거운 ffprobe 검사를 건너뛰고,
@@ -316,10 +319,10 @@ class LibraryMixin:
 
         self.playlist = sort_video_paths(self.playlist, settings.get("playlist_sort"))
         mode_str = "단일 파일 반복 모드" if self.is_single_file_mode else "폴더 순환 모드"
-        print(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 영상을 로드했습니다.")
+        log.info(f"📂 [{mode_str}] 총 {len(self.playlist)}개의 영상을 로드했습니다.")
         for idx, path in enumerate(self.playlist):
             disp = os.path.relpath(path, abs_path) if not self.is_single_file_mode else os.path.basename(path)
-            print(f"   [{idx}] {disp}")
+            log.debug(f"   [{idx}] {disp}")
         return True
 
     def start_background_hw_checker(self):

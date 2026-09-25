@@ -1,5 +1,5 @@
 """스마트폰 웹 리모컨: HTTP 서버, PIN/QR 접속, 상태 방송(SSE), 원격 명령 처리"""
-import http.server
+import logging
 import os
 import threading
 
@@ -10,12 +10,14 @@ from ..ai.whisper import whisper_available
 from ..media.thumbnails import load_thumbnail_index, thumbnail_cache_dir
 from ..remote.auth import RemoteAuth, default_token_file, generate_pin
 from ..remote.events import EventBroker
-from ..remote.server import JetsonWebRemoteHandler
+from ..remote.server import JetsonWebRemoteHandler, RemoteHTTPServer
 from ..settings import settings
 from ..storage import bookmark_cache, resume_cache
 from ..system import get_local_ip
 from ..vendor.qrcodegen import QrCode
 from ..youtube import youtube_mgr
+
+log = logging.getLogger(__name__)
 
 
 def _to_float(value, default=None):
@@ -51,15 +53,14 @@ class RemoteMixin:
         local_ip = get_local_ip()
         for port in [8888, 8889, 8890, 8080]:
             try:
-                server = http.server.ThreadingHTTPServer(("0.0.0.0", port), JetsonWebRemoteHandler)
-                server.daemon_threads = True   # SSE 연결이 남아 있어도 종료를 막지 않음
+                server = RemoteHTTPServer(("0.0.0.0", port), JetsonWebRemoteHandler)
                 self.web_server = server
                 self.web_port = port
                 self.remote_url = f"http://{local_ip}:{port}"
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 self.web_server_thread = thread
-                print(f"📱 [웹 리모컨 서버 활성화] 스마트폰 접속 주소: {self.remote_url}  (PIN {pin})")
+                log.info(f"📱 [웹 리모컨 서버 활성화] 스마트폰 접속 주소: {self.remote_url}  (PIN {pin})")
                 break
             except Exception:
                 continue
@@ -104,7 +105,7 @@ class RemoteMixin:
             groups = self._build_remote_playlist_groups()
             thumbs = self._remote_thumbs_payload()
         except Exception as e:
-            print(f"⚠️ 리모컨 상태 갱신 실패: {e}")
+            log.warning(f"⚠️ 리모컨 상태 갱신 실패: {e}")
             return True
         status["yt_download"] = youtube_mgr.get_status()
         with self._remote_status_lock:
@@ -115,7 +116,7 @@ class RemoteMixin:
             try:
                 self.mpris.update()
             except Exception as e:
-                print(f"⚠️ MPRIS 갱신 실패: {e}")
+                log.warning(f"⚠️ MPRIS 갱신 실패: {e}")
         broker = getattr(self, "remote_broker", None)
         if broker:
             broker.publish("status", status)

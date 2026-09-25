@@ -1,8 +1,11 @@
 """GStreamer 디코더 랭크 최적화와 X11 컴포지터 우회"""
+import logging
 import os
 import subprocess
 
 from gi.repository import GdkX11, Gst
+
+log = logging.getLogger(__name__)
 
 
 def enable_x11_compositor_bypass(gdk_window):
@@ -60,9 +63,9 @@ def optimize_gstreamer_ranks():
             if elem:
                 elem.set_rank(Gst.Rank.PRIMARY)
 
-        print("⚡ [하드웨어 가속 60 FPS 최적화] nvv4l2decoder HW 가속 및 60 FPS 전용 파이프라인 무결 적용 완료.")
+        log.info("⚡ [하드웨어 가속 60 FPS 최적화] nvv4l2decoder HW 가속 및 60 FPS 전용 파이프라인 무결 적용 완료.")
     else:
-        print("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
+        log.info("ℹ️ [소프트웨어 디코딩] Jetson HW 디코더(nvv4l2decoder)가 감지되지 않아 기본 디코더를 유지합니다.")
 
 
 def seek_flags(mode):
@@ -76,6 +79,43 @@ def seek_flags(mode):
     if mode == "accurate":
         return Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE
     raise ValueError(f"unknown seek mode: {mode}")
+
+
+def make_audio_output(av_offset_ms=0, factory="autoaudiosink"):
+    """오디오 출력 싱크 (없으면 fakesink). AV 싱크 보정값을 ts-offset으로 적용합니다."""
+    asink = Gst.ElementFactory.make(factory, "asink") or Gst.ElementFactory.make("fakesink", "asink")
+    if asink and asink.find_property("sync"):
+        asink.set_property("sync", True)
+    if asink and asink.find_property("ts-offset") and av_offset_ms:
+        asink.set_property("ts-offset", av_offset_ms * 1_000_000)
+    return asink
+
+
+def build_audio_sink_bin(asink, filters=()):
+    """audioconvert → scaletempo → [filters...] → audioresample → asink 로 이어진 오디오 싱크 bin.
+
+    scaletempo는 배속 재생에서 음정을 유지합니다. filters는 야간 모드 등 효과 요소이며 순서대로 연결됩니다.
+    필수 요소가 없으면 asink를 그대로 돌려줍니다.
+    """
+    aconv = Gst.ElementFactory.make("audioconvert", "aconv")
+    scaletempo = Gst.ElementFactory.make("scaletempo", "scaletempo")
+    aresample = Gst.ElementFactory.make("audioresample", "aresample")
+    if not (aconv and scaletempo and aresample and asink):
+        return asink
+    chain = [aconv, scaletempo, *[f for f in filters if f is not None], aresample, asink]
+    audio_bin = Gst.Bin.new("audio_sink_bin")
+    for el in chain:
+        audio_bin.add(el)
+    for a, b in zip(chain, chain[1:]):
+        if not a.link(b):
+            log.warning(f"⚠️ 오디오 체인 연결 실패 ({a.get_name()} → {b.get_name()}): 효과 없이 재생합니다.")
+            for el in chain:
+                audio_bin.remove(el)
+            return build_audio_sink_bin(asink) if filters else asink
+    ghost_pad = Gst.GhostPad.new("sink", aconv.get_static_pad("sink"))
+    ghost_pad.set_active(True)
+    audio_bin.add_pad(ghost_pad)
+    return audio_bin
 
 
 def build_hw_video_output(sink, fmt="NV12"):
@@ -97,7 +137,7 @@ def build_hw_video_output(sink, fmt="NV12"):
     for el in (conv, capsfilter, sink):
         out.add(el)
     if not (conv.link(capsfilter) and capsfilter.link(sink)):
-        print("⚠️ HW 영상 출력 구성 실패: 기본 싱크를 사용합니다.")
+        log.warning("⚠️ HW 영상 출력 구성 실패: 기본 싱크를 사용합니다.")
         for el in (conv, capsfilter, sink):
             out.remove(el)
         return sink

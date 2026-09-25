@@ -1,8 +1,11 @@
 """외부/내장 자막 선택, 크기·싱크 조절"""
+import logging
 from gi.repository import Gst, Gtk
 
 from ..subtitles.parse import strip_markup
 from ..subtitles.timeline import SubtitleTrack
+
+log = logging.getLogger(__name__)
 
 
 class SubtitlesMixin:
@@ -167,7 +170,7 @@ class SubtitlesMixin:
         if new_scale != self.subtitle_font_scale:
             self.subtitle_font_scale = new_scale
             pct = int(self.subtitle_font_scale * 100)
-            print(f"🗚 [자막 크기 조절] {pct}%")
+            log.debug(f"🗚 [자막 크기 조절] {pct}%")
             self.show_osd(f"🗚 자막 크기: {pct}%")
             if getattr(self, "scale_label", None):
                 self.scale_label.set_text(f"{pct}%")
@@ -177,7 +180,7 @@ class SubtitlesMixin:
         """자막 크기를 기본값(100%)으로 복원합니다."""
         if self.subtitle_font_scale != 1.0:
             self.subtitle_font_scale = 1.0
-            print("🗚 [자막 크기 조절] 100% (기본값)")
+            log.debug("🗚 [자막 크기 조절] 100% (기본값)")
             self.show_osd("🗚 자막 크기: 100%")
             if getattr(self, "scale_label", None):
                 self.scale_label.set_text("100%")
@@ -187,7 +190,7 @@ class SubtitlesMixin:
         """자막 싱크를 delta_ms만큼 앞당기거나 늦추고 실시간 OSD 반영 후 디바운스로 적용합니다."""
         self.subtitle_offset_ms += delta_ms
         sec_str = f"{self.subtitle_offset_ms / 1000:+.1f}s"
-        print(f"⏱️ [자막 싱크 조절] {sec_str}")
+        log.debug(f"⏱️ [자막 싱크 조절] {sec_str}")
         self.show_osd(f"⏱️ 자막 싱크: {sec_str}")
         if getattr(self, "sync_label", None):
             self.sync_label.set_text(sec_str)
@@ -197,7 +200,7 @@ class SubtitlesMixin:
         """자막 싱크를 기본값(0.0초)으로 복원합니다."""
         if self.subtitle_offset_ms != 0:
             self.subtitle_offset_ms = 0
-            print("⏱️ [자막 싱크 조절] 0.0s (기본값)")
+            log.debug("⏱️ [자막 싱크 조절] 0.0s (기본값)")
             self.show_osd("⏱️ 자막 싱크: 0.0s")
             if getattr(self, "sync_label", None):
                 self.sync_label.set_text("0.0s")
@@ -206,7 +209,7 @@ class SubtitlesMixin:
     def show_subtitle_popover(self, parent_btn=None):
         """자막 선택 팝오버를 열거나 닫습니다."""
         if not self.available_subtitles:
-            print("ℹ️ 현재 영상에 사용 가능한 자막이 없습니다.")
+            log.info("ℹ️ 현재 영상에 사용 가능한 자막이 없습니다.")
             return
         if self.sub_popover:
             self.sub_popover.destroy()
@@ -263,7 +266,7 @@ class SubtitlesMixin:
         if n_text != self.n_embedded_text:
             self.n_embedded_text = n_text
             if n_text > 0:
-                print(f"💬 [내장 자막 감지] {n_text}개 트랙")
+                log.info(f"💬 [내장 자막 감지] {n_text}개 트랙")
             self.reload_and_apply_subtitles()
 
     def _apply_embedded_subs_visibility(self):
@@ -451,7 +454,7 @@ class SubtitlesMixin:
             if self.n_embedded_text > 0:
                 self.toggle_embedded_subtitles()
             else:
-                print("ℹ️ 현재 영상에 로드된 자막이 없습니다.")
+                log.info("ℹ️ 현재 영상에 로드된 자막이 없습니다.")
             return
 
         self.subtitles_enabled = not self.subtitles_enabled

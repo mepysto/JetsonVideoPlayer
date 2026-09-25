@@ -1,6 +1,9 @@
 """상단바 ⋯ 더 보기 메뉴: 자주 쓰지 않는 기능과 부가 기능을 한곳에 모읍니다."""
 from gi.repository import Gdk, Gtk
 
+from ..log import LOG_FILE
+from ..system import open_file_location
+
 
 class MenuMixin:
     def show_more_menu(self, button):
@@ -62,6 +65,7 @@ class MenuMixin:
         add_check("ℹ️ 미디어 정보 HUD (I)", self.is_hud_visible, self.toggle_hud)
         add_check("📌 항상 위에 표시 (T)", self.is_keep_above, self.toggle_keep_above)
         add("❓ 단축키 안내 (F1)", self.show_help_dialog)
+        add("📄 로그 파일 보기", lambda: open_file_location(LOG_FILE))
 
         menu.show_all()
         menu.popup_at_widget(button, Gdk.Gravity.SOUTH_EAST, Gdk.Gravity.NORTH_EAST, None)

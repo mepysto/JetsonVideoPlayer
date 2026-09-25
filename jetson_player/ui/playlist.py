@@ -1,4 +1,5 @@
 """사이드바 재생목록 트리 패널"""
+import logging
 import os
 
 from gi.repository import GLib, Gdk, Gtk, Pango
@@ -8,6 +9,8 @@ from ..settings import settings
 from ..storage import resume_cache
 from ..system import open_file_location
 from ..youtube import youtube_mgr
+
+log = logging.getLogger(__name__)
 
 
 class PlaylistPanelMixin:
@@ -129,7 +132,7 @@ class PlaylistPanelMixin:
         if success:
             dir_name = path_to_open if os.path.isdir(path_to_open) else os.path.dirname(path_to_open)
             self.show_osd(f"📂 폴더 열기: {os.path.basename(dir_name) or dir_name}", duration_sec=2.0)
-            print(f"📂 [파일 위치 열기] {path_to_open}")
+            log.info(f"📂 [파일 위치 열기] {path_to_open}")
         else:
             self.show_osd("⚠️ 파일 브라우저를 열지 못했습니다.")
 

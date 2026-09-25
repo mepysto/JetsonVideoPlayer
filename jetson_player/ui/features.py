@@ -1,5 +1,6 @@
 """A-B 반복, 북마크, 스크린샷, AV 싱크, HUD, 도움말, 컨텍스트 메뉴"""
 import datetime
+import logging
 import os
 
 from gi.repository import GLib, Gdk, Gst, Gtk
@@ -7,6 +8,8 @@ from gi.repository import GLib, Gdk, Gst, Gtk
 from ..shortcuts import help_rows
 from ..storage import bookmark_cache
 from ..system import get_jetson_hw_stats
+
+log = logging.getLogger(__name__)
 
 
 class FeaturesMixin:
@@ -22,7 +25,7 @@ class FeaturesMixin:
                 self.ab_badge.hide()
             t_str = self.format_time(pos)
             self.show_osd(f"🔁 구간 반복 [A] 설정: {t_str}")
-            print(f"🔁 [구간 반복] A 지점 설정: {t_str}")
+            log.info(f"🔁 [구간 반복] A 지점 설정: {t_str}")
             self.refresh_timeline_marks()
 
     def set_ab_repeat_b(self):
@@ -48,7 +51,7 @@ class FeaturesMixin:
             self.ab_badge.set_label(f"🔁 {a_str} ~ {b_str} ✕")
             self.ab_badge.show()
         self.show_osd(f"🔁 [A-B] 구간 반복 활성화: {a_str} ~ {b_str}")
-        print(f"🔁 [구간 반복] 활성화: {a_str} ~ {b_str}")
+        log.info(f"🔁 [구간 반복] 활성화: {a_str} ~ {b_str}")
         self.refresh_timeline_marks()
 
     def clear_ab_repeat(self):
@@ -60,7 +63,7 @@ class FeaturesMixin:
             if getattr(self, "ab_badge", None):
                 self.ab_badge.hide()
             self.show_osd("🔁 A-B 구간 반복 해제")
-            print("🔁 [구간 반복] 해제")
+            log.info("🔁 [구간 반복] 해제")
             self.refresh_timeline_marks()
 
     def add_bookmark(self):
@@ -74,7 +77,7 @@ class FeaturesMixin:
         ok, res = bookmark_cache.add(cur_path, pos)
         if ok:
             self.show_osd(f"🔖 북마크 추가: {res}")
-            print(f"🔖 [북마크 추가] {os.path.basename(cur_path)} @ {res}")
+            log.info(f"🔖 [북마크 추가] {os.path.basename(cur_path)} @ {res}")
             self.refresh_timeline_marks()
         else:
             self.show_osd(f"🔖 {res}")
@@ -174,7 +177,7 @@ class FeaturesMixin:
 
         if saved:
             self.show_osd(f"📸 스크린샷 저장 완료: {filename}", timeout_ms=2000)
-            print(f"📸 [스크린샷 캡처] 저장 완료: {filepath}")
+            log.info(f"📸 [스크린샷 캡처] 저장 완료: {filepath}")
         else:
             self.show_osd("⚠️ 스크린샷 캡처 실패")
 
@@ -188,7 +191,7 @@ class FeaturesMixin:
 
         sign = "+" if self.av_sync_offset_ms > 0 else ""
         self.show_osd(f"🔊 AV 싱크: {sign}{self.av_sync_offset_ms}ms")
-        print(f"🔊 [AV 싱크] 오프셋: {sign}{self.av_sync_offset_ms}ms")
+        log.debug(f"🔊 [AV 싱크] 오프셋: {sign}{self.av_sync_offset_ms}ms")
 
     def reset_av_sync(self):
         """오디오 싱크 오프셋을 0ms(기본값)으로 복원합니다."""
@@ -196,7 +199,7 @@ class FeaturesMixin:
         if getattr(self, "current_asink", None) and self.current_asink.find_property("ts-offset"):
             self.current_asink.set_property("ts-offset", 0)
         self.show_osd("🔊 AV 싱크 초기화: 0ms")
-        print("🔊 [AV 싱크] 0ms 초기화 완료")
+        log.debug("🔊 [AV 싱크] 0ms 초기화 완료")
 
     def toggle_hud(self):
         """미디어 정보 및 실시간 통계 HUD 오버레이를 토글합니다."""

@@ -1,13 +1,16 @@
 """GStreamer playbin 파이프라인 구성과 재생 제어"""
+import logging
 import os
 import random
 from urllib.request import pathname2url
 
 from gi.repository import GLib, GdkX11, Gst, GstVideo
 
-from ..media.gst_setup import seek_flags
+from ..media.gst_setup import build_audio_sink_bin, make_audio_output, seek_flags
 from ..storage import history_cache, resume_cache
 from ..subtitles.parse import find_all_matching_subtitles, get_subtitle_color, get_subtitle_label, parse_subtitle_file_events
+
+log = logging.getLogger(__name__)
 
 
 class PlaybackMixin:
@@ -47,9 +50,9 @@ class PlaybackMixin:
 
             res = self.seek_to(pos, "accurate")
             if not res:
-                print(f"⚠️ 재생 속도 {new_rate:.2f}x 설정 실패")
+                log.warning(f"⚠️ 재생 속도 {new_rate:.2f}x 설정 실패")
             else:
-                print(f"⚡ [재생 속도 변경] {new_rate:.2f}x (현재 위치: {self.format_time(pos)})")
+                log.debug(f"⚡ [재생 속도 변경] {new_rate:.2f}x (현재 위치: {self.format_time(pos)})")
 
         self.update_speed_button_ui()
         self.show_osd(f"⚡ 속도: {self.playback_rate:.2f}x")
@@ -112,7 +115,7 @@ class PlaybackMixin:
                 w, h = h, w
             self.subtitle_overlay.set_video_size(w, h)
         except Exception as e:
-            print(f"⚠️ 영상 크기 확인 실패: {e}")
+            log.warning(f"⚠️ 영상 크기 확인 실패: {e}")
 
     def step_volume(self, delta):
         """볼륨을 delta(%)만큼 조절합니다 (0~200%)."""
@@ -177,7 +180,7 @@ class PlaybackMixin:
             next_track = (cur + 1) % n_audio
             self.set_audio_track(next_track)
         except Exception:
-            pass
+            log.debug("오디오 트랙 전환 실패", exc_info=True)
 
     def set_audio_track(self, track_idx):
         if not self.pipeline:
@@ -186,9 +189,9 @@ class PlaybackMixin:
             self.pipeline.set_property("current-audio", track_idx)
             self.current_audio_track = track_idx
             self.show_osd(f"🎵 오디오 트랙 {track_idx + 1}/{max(1, self.n_audio_tracks)}")
-            print(f"🎵 [오디오 트랙 변경] 트랙 {track_idx + 1}/{max(1, self.n_audio_tracks)}")
+            log.info(f"🎵 [오디오 트랙 변경] 트랙 {track_idx + 1}/{max(1, self.n_audio_tracks)}")
         except Exception as e:
-            print(f"⚠️ 오디오 트랙 변경 실패: {e}")
+            log.warning(f"⚠️ 오디오 트랙 변경 실패: {e}")
 
     def on_source_setup(self, playbin, source):
         """네트워크 스트리밍(HTTP/HTTPS) 소스에 User-Agent 및 SSL 설정을 주입합니다."""
@@ -210,7 +213,7 @@ class PlaybackMixin:
         if klass and "Decoder" in klass and "Video" in klass and fname not in self.decoder_names:
             self.decoder_names.add(fname)
             acceleration = "NVDEC 하드웨어" if fname == "nvv4l2decoder" else "소프트웨어 fallback"
-            print(f"🎬 [선택된 비디오 디코더] {fname} ({acceleration})")
+            log.info(f"🎬 [선택된 비디오 디코더] {fname} ({acceleration})")
 
         if "dav1d" in fname or "dav1d" in ename:
             if element.find_property("max-threads"):
@@ -288,7 +291,7 @@ class PlaybackMixin:
         # 삭제/이동된 파일은 건너뛰고, 존재하는 다음 영상을 재생합니다.
         is_remote = video_path.startswith(("http://", "https://"))
         if not is_remote and not os.path.exists(video_path):
-            print(f"⚠️ 파일을 찾을 수 없습니다: {video_path}")
+            log.warning(f"⚠️ 파일을 찾을 수 없습니다: {video_path}")
             n = len(self.playlist)
             for step in range(1, n):
                 cand = (self.current_index + step) % n
@@ -317,7 +320,7 @@ class PlaybackMixin:
             is_supported, reason = self.check_video_hw_support(video_path)
             self.hw_decode_expected = is_supported
             if is_supported is False:
-                print(f"ℹ️ [코덱 상태] {os.path.basename(video_path)}: {reason} → 소프트웨어 디코딩으로 재생합니다")
+                log.info(f"ℹ️ [코덱 상태] {os.path.basename(video_path)}: {reason} → 소프트웨어 디코딩으로 재생합니다")
         
         if getattr(self, "yt_loading_box", None):
             self.hide_yt_loading()
@@ -330,7 +333,7 @@ class PlaybackMixin:
             if saved_pos_ns > 0:
                 start_position_ns = saved_pos_ns
                 self.show_osd(f"⏱️ 이어서 재생: {self.format_time(saved_pos_ns)}")
-                print(f"⏱️ [이어보기] {self.format_time(saved_pos_ns)} 지점부터 재생합니다.")
+                log.info(f"⏱️ [이어보기] {self.format_time(saved_pos_ns)} 지점부터 재생합니다.")
 
             abs_root = os.path.abspath(self.input_path) if (self.input_path and os.path.isdir(self.input_path)) else None
             is_net_stream = video_path.startswith("http://") or video_path.startswith("https://")
@@ -341,7 +344,7 @@ class PlaybackMixin:
                 disp = rel if not rel.startswith("..") else os.path.basename(video_path)
             else:
                 disp = os.path.basename(video_path)
-            print(f"\n▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {disp}")
+            log.info(f"▶ [{self.current_index + 1}/{len(self.playlist)}] 재생 중: {disp}")
             self.refresh_playlist_ui()
             self.duration_ns = 0
             self.progress_scale.set_value(0)
@@ -383,12 +386,12 @@ class PlaybackMixin:
                     self.active_subtitle_indices = {0}
                     self.has_subtitles = True
                     self.subtitles_enabled = True
-                    print(f"💬 [자막 자동 활성화] {self.available_subtitles[0]['label']} (다중 자막 메뉴에서 추가 선택 가능)")
+                    log.info(f"💬 [자막 자동 활성화] {self.available_subtitles[0]['label']} (다중 자막 메뉴에서 추가 선택 가능)")
                 else:
                     self.active_subtitle_indices = set(range(len(self.available_subtitles)))
                     self.has_subtitles = True
                     self.subtitles_enabled = True
-                    print(f"💬 [다중 자막 자동 활성화 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
+                    log.info(f"💬 [다중 자막 자동 활성화 ({len(self.available_subtitles)}개)] " + ", ".join([s['label'] for s in self.available_subtitles]))
             else:
                 self.has_subtitles = False
 
@@ -442,45 +445,11 @@ class PlaybackMixin:
                 self.video_sink.set_property("max-lateness", 50 * Gst.MSECOND)
             self.pipeline.set_property("video-sink", video_output)
 
-        # scaletempo가 포함된 커스텀 오디오 싱크 bin 생성 (배속 재생 시 끊김 및 음정 왜곡 없는 완벽한 사운드 보장)
-        audio_bin = Gst.Bin.new("audio_sink_bin")
-        aconv = Gst.ElementFactory.make("audioconvert", "aconv")
-        scaletempo = Gst.ElementFactory.make("scaletempo", "scaletempo")
-        aresample = Gst.ElementFactory.make("audioresample", "aresample")
-        asink = Gst.ElementFactory.make("autoaudiosink", "asink")
-        if not asink:
-            asink = Gst.ElementFactory.make("fakesink", "asink")
-        if asink and asink.find_property("sync"):
-            asink.set_property("sync", True)
+        # 배속에서도 음정을 유지하는 오디오 bin (scaletempo + 야간 모드 효과)
+        asink = make_audio_output(self.av_sync_offset_ms)
         self.current_asink = asink
-        if asink and asink.find_property("ts-offset") and self.av_sync_offset_ms != 0:
-            asink.set_property("ts-offset", self.av_sync_offset_ms * 1_000_000)
-
-        if aconv and scaletempo and aresample and asink:
-            audio_bin.add(aconv)
-            audio_bin.add(scaletempo)
-            audio_bin.add(aresample)
-            audio_bin.add(asink)
-            aconv.link(scaletempo)
-            night_dyn, night_gain = self.build_night_mode_elements()
-            if night_dyn and night_gain:
-                # 야간 모드: 압축기 + 보정 볼륨 (꺼져 있을 때는 효과 없는 값으로 대기)
-                audio_bin.add(night_dyn)
-                audio_bin.add(night_gain)
-                scaletempo.link(night_dyn)
-                night_dyn.link(night_gain)
-                night_gain.link(aresample)
-            else:
-                scaletempo.link(aresample)
-            aresample.link(asink)
-
-            pad = aconv.get_static_pad("sink")
-            ghost_pad = Gst.GhostPad.new("sink", pad)
-            ghost_pad.set_active(True)
-            audio_bin.add_pad(ghost_pad)
-            self.pipeline.set_property("audio-sink", audio_bin)
-        elif asink:
-            self.pipeline.set_property("audio-sink", asink)
+        night_dyn, night_gain = self.build_night_mode_elements()
+        self.pipeline.set_property("audio-sink", build_audio_sink_bin(asink, [night_dyn, night_gain]))
 
         # 버스 이벤트 연결
         self.bus = self.pipeline.get_bus()
@@ -549,7 +518,7 @@ class PlaybackMixin:
                 # 사용자가 지정한 "다음에 재생" 대기열이 반복 모드보다 우선합니다.
                 next_idx = self.pop_queued_index()
             elif self.repeat_mode == "one" or self.is_single_file_mode:
-                print("🔄 1곡 반복: 처음부터 다시 재생합니다.")
+                log.info("🔄 1곡 반복: 처음부터 다시 재생합니다.")
                 GLib.timeout_add(10, self.play_current_video, 0)
                 return
             elif self.repeat_mode == "shuffle" and len(self.playlist) > 1:
@@ -558,7 +527,7 @@ class PlaybackMixin:
                     next_idx = random.randint(0, len(self.playlist) - 1)
             elif self.repeat_mode == "none":
                 if self.current_index + 1 >= len(self.playlist):
-                    print("⏹ 모든 영상 재생 완료 (순차 재생 정지).")
+                    log.info("⏹ 모든 영상 재생 완료 (순차 재생 정지).")
                     self.toggle_play_pause()
                     return
                 next_idx = self.current_index + 1
@@ -572,31 +541,31 @@ class PlaybackMixin:
             
         elif message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            print(f"❌ 재생 중 에러 발생: {err}")
+            log.error(f"❌ 재생 중 에러 발생: {err}")
             if debug:
-                print(f"   GStreamer: {debug}")
+                log.error(f"   GStreamer: {debug}")
             if not has_current:
                 return
             path = self.playlist[self.current_index]
             name = os.path.basename(path)[:40]
             if self.using_hw_video_output and path not in self.hw_output_disabled:
                 # HW 출력 경로(nvvidconv)가 이 영상 포맷을 처리하지 못함 → 기존(소프트웨어 변환) 경로로 즉시 재시도
-                print("↩️ HW 영상 출력 경로 실패 — 호환 경로로 다시 재생합니다.")
+                log.info("↩️ HW 영상 출력 경로 실패 — 호환 경로로 다시 재생합니다.")
                 self.hw_output_disabled.add(path)
                 GLib.timeout_add(100, self.play_current_video, self.last_known_pos_ns)
                 return
             retries = self.retry_counts.get(path, 0)
             if retries < self.max_retries:
                 self.retry_counts[path] = retries + 1
-                print(f"🔄 재생 파이프라인 재시도 ({retries + 1}/{self.max_retries})")
+                log.info(f"🔄 재생 파이프라인 재시도 ({retries + 1}/{self.max_retries})")
                 self.show_osd(f"⚠️ 재생 오류 — 다시 시도 중 ({retries + 1}/{self.max_retries})", duration_sec=2.5)
                 GLib.timeout_add(250, self.play_current_video)
             elif self.is_single_file_mode or len(self.playlist) <= 1:
-                print("⏹ 반복 오류로 재생을 중단합니다. 원본과 디코더 로그를 확인하세요.")
+                log.info("⏹ 반복 오류로 재생을 중단합니다. 원본과 디코더 로그를 확인하세요.")
                 self.show_osd(f"❌ 재생할 수 없는 영상입니다: {name}", duration_sec=5.0)
                 self.pipeline.set_state(Gst.State.PAUSED)
             else:
-                print("⏭ 반복 오류 항목을 건너뜁니다.")
+                log.info("⏭ 반복 오류 항목을 건너뜁니다.")
                 self.show_osd(f"⏭ 재생 실패로 건너뜁니다: {name}", duration_sec=3.5)
                 self.play_next_video()
 
@@ -627,7 +596,7 @@ class PlaybackMixin:
             
         success, position = self.pipeline.query_position(Gst.Format.TIME)
         if not success:
-            print("⚠️ 현재 재생 위치를 확인할 수 없어 탐색에 실패했습니다.")
+            log.warning("⚠️ 현재 재생 위치를 확인할 수 없어 탐색에 실패했습니다.")
             return
 
         target_ns = position + (offset_seconds * Gst.SECOND)
@@ -638,12 +607,12 @@ class PlaybackMixin:
 
         res = self.seek_to(target_ns, "accurate")
         if not res:
-            print("⚠️ 탐색 실패로 파이프라인을 재구축합니다.")
+            log.warning("⚠️ 탐색 실패로 파이프라인을 재구축합니다.")
             self.play_current_video(start_position_ns=target_ns)
             return
 
         direction = "앞으로" if offset_seconds > 0 else "뒤로"
-        print(f"⏩ {direction} {abs(offset_seconds)}초 이동 (현재 위치: {target_ns / Gst.SECOND:.1f}초)")
+        log.debug(f"⏩ {direction} {abs(offset_seconds)}초 이동 (현재 위치: {target_ns / Gst.SECOND:.1f}초)")
         direction_symbol = "⏩ +" if offset_seconds > 0 else "⏪ -"
         cur_str = self.format_time(target_ns)
         dur_str = f" / {self.format_time(self.duration_ns)}" if self.duration_ns > 0 else ""
@@ -658,12 +627,12 @@ class PlaybackMixin:
             self.pipeline.set_state(Gst.State.PAUSED)
             self.is_playing = False
             self.show_osd("⏸ 일시 정지")
-            print("⏸ 일시 정지")
+            log.debug("⏸ 일시 정지")
         else:
             self.pipeline.set_state(Gst.State.PLAYING)
             self.is_playing = True
             self.show_osd("▶ 재생")
-            print("▶ 다시 재생")
+            log.debug("▶ 다시 재생")
 
     def play_next_video(self):
         """다음 영상으로 전환합니다."""
@@ -672,7 +641,7 @@ class PlaybackMixin:
         queued_idx = self.pop_queued_index()
         if queued_idx is not None:
             self.current_index = queued_idx
-            print("⏭ 대기열의 다음 영상을 재생합니다.")
+            log.info("⏭ 대기열의 다음 영상을 재생합니다.")
             GLib.timeout_add(50, self.play_current_video, 0)
         elif self.is_single_file_mode:
             GLib.timeout_add(10, self.play_current_video, 0)
@@ -684,7 +653,7 @@ class PlaybackMixin:
             GLib.timeout_add(50, self.play_current_video, 0)
         else:
             self.current_index = (self.current_index + 1) % len(self.playlist)
-            print("⏭ 다음 영상으로 넘어갑니다.")
+            log.info("⏭ 다음 영상으로 넘어갑니다.")
             GLib.timeout_add(50, self.play_current_video, 0)
 
     def play_prev_video(self):
@@ -701,5 +670,5 @@ class PlaybackMixin:
             GLib.timeout_add(50, self.play_current_video, 0)
         else:
             self.current_index = (self.current_index - 1 + len(self.playlist)) % len(self.playlist)
-            print("⏮ 이전 영상으로 넘어갑니다.")
+            log.info("⏮ 이전 영상으로 넘어갑니다.")
             GLib.timeout_add(50, self.play_current_video, 0)

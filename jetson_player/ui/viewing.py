@@ -1,10 +1,13 @@
 """시청 경험: 화면 회전, 야간 모드(음량 평준화), 수면 타이머, 다음 영상 자동 재생 카운트다운"""
+import logging
 import os
 import time
 
 from gi.repository import GLib, Gst, Gtk
 
 from ..settings import settings
+
+log = logging.getLogger(__name__)
 
 # (gtkglsink rotate-method 값, 표시 이름)
 ROTATIONS = [
@@ -133,7 +136,7 @@ class ViewingMixin:
             self.toggle_play_pause()
         self._cancel_sleep_fade()
         self.show_osd("⏾ 수면 타이머: 재생을 멈췄습니다. 편안한 밤 되세요.", duration_sec=5.0)
-        print("⏾ [수면 타이머] 재생 정지")
+        log.info("⏾ [수면 타이머] 재생 정지")
 
     def sleep_after_this_video(self):
         """EOS 시 호출: '현재 영상이 끝나면' 모드면 다음 영상으로 넘어가지 않고 멈춥니다."""

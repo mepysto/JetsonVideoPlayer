@@ -1,9 +1,12 @@
 """자막 파일(SMI/SRT/VTT/ASS) 탐색·파싱과 언어 감지"""
 import html
+import logging
 import os
 import re
 
 from ..library import VIDEO_EXTS
+
+log = logging.getLogger(__name__)
 
 
 LANGUAGE_COLORS = {
@@ -194,7 +197,7 @@ def parse_subtitle_file_events(file_path):
         else:
             return parse_srt_or_vtt_to_events(content)
     except Exception as e:
-        print(f"⚠️ 자막 파싱 실패 ({file_path}): {e}")
+        log.warning(f"⚠️ 자막 파싱 실패 ({file_path}): {e}")
         return []
 
 

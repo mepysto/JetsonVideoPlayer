@@ -1,6 +1,5 @@
 """웹 리모컨 HTTP 서버 통합 테스트 (실제 소켓, 가짜 플레이어)"""
 import http.client
-import http.server
 import json
 import threading
 import time
@@ -35,8 +34,7 @@ def remote(tmp_path, monkeypatch):
     player, broker = FakePlayer(), EventBroker()
     handler = type("H", (srv.JetsonWebRemoteHandler,), {
         "player": player, "auth": RemoteAuth("4242", str(tmp_path / "tokens.json")), "broker": broker})
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.daemon_threads = True
+    server = srv.RemoteHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server.server_address[1], player, broker
     broker.close()

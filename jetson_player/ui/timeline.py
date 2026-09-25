@@ -1,5 +1,6 @@
 """진행바(타임라인): 마우스 hover 미리보기(시각 + 썸네일), 남은 시간 표시 전환, 북마크/구간/챕터 눈금"""
 import bisect
+import logging
 import os
 from collections import OrderedDict
 
@@ -8,6 +9,8 @@ from gi.repository import GdkPixbuf, Gdk, GLib, Gst, Gtk
 from ..media.thumbnails import SceneAnalysisJob, ThumbnailJob
 from ..settings import settings
 from ..storage import bookmark_cache
+
+log = logging.getLogger(__name__)
 
 
 class TimelineMixin:
@@ -245,7 +248,7 @@ class TimelineMixin:
         visit(toc.get_entries())
         if found:
             self.toc_chapters = sorted(found)
-            print(f"📑 [챕터] {len(found)}개 (컨테이너 TOC)")
+            log.info(f"📑 [챕터] {len(found)}개 (컨테이너 TOC)")
             self.refresh_timeline_marks()
 
     def chapter_title_at(self, position_ns):

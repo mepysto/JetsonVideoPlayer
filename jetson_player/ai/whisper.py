@@ -7,6 +7,7 @@
   2) whisper-cli 실행 — 지금 보고 있는 위치부터 먼저 인식한 뒤 앞부분을 이어서 인식
   3) 인식된 문장을 즉시 콜백으로 전달 (화면에 실시간 표시), 끝나면 영상 옆에 .ai.<언어>.srt 저장
 """
+import logging
 import os
 import re
 import shutil
@@ -16,6 +17,8 @@ import threading
 import time
 
 from gi.repository import GLib, Gst
+
+log = logging.getLogger(__name__)
 
 WHISPER_HOME = os.environ.get("JVP_WHISPER_DIR", os.path.expanduser("~/.local/share/jetson_video_player/whisper.cpp"))
 SEGMENT_RE = re.compile(r"^\[(\d+):(\d+):(\d+)\.(\d+)\s*-->\s*(\d+):(\d+):(\d+)\.(\d+)\]\s*(.*)$")
@@ -220,7 +223,7 @@ class AiSubtitleJob:
             srt_path = ai_subtitle_path(self.video_path, lang, self.translate)
             with open(srt_path, "w", encoding="utf-8") as f:
                 f.write(format_srt(self.events))
-            print(f"🤖 [AI 자막] {len(self.events)}문장, {time.time() - started:.1f}초 → {srt_path}")
+            log.info(f"🤖 [AI 자막] {len(self.events)}문장, {time.time() - started:.1f}초 → {srt_path}")
         except InterruptedError:
             error = "취소됨"
         except Exception as e:

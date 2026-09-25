@@ -8,8 +8,12 @@
 import http.server
 import ipaddress
 import json
+import logging
 import os
+import sys
 import urllib.parse
+
+log = logging.getLogger(__name__)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 COOKIE_NAME = "jvp_token"
@@ -34,6 +38,17 @@ MANIFEST_JSON = json.dumps({
     "background_color": "#0c1017", "theme_color": "#0c1017",
     "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}],
 }, ensure_ascii=False)
+
+
+class RemoteHTTPServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True   # SSE 연결이 남아 있어도 종료를 막지 않음
+
+    def handle_error(self, request, client_address):
+        """폰 화면 꺼짐·네트워크 전환으로 끊긴 연결은 흔하므로 조용히 넘기고, 그 외만 기록합니다."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return
+        log.warning(f"⚠️ 리모컨 요청 처리 실패 ({client_address[0]})", exc_info=True)
 
 
 def is_lan_client(address):

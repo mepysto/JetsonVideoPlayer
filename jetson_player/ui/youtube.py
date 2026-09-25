@@ -1,9 +1,12 @@
 """YouTube 다운로드/재생 UI와 로딩 오버레이"""
+import logging
 import time
 
 from gi.repository import GLib, Gdk, Gtk
 
 from ..youtube import extract_youtube_url, youtube_mgr
+
+log = logging.getLogger(__name__)
 
 
 class YouTubeMixin:
@@ -77,7 +80,7 @@ class YouTubeMixin:
 
         existing = youtube_mgr.find_existing_video(norm_url)
         if existing:
-            print(f"⚡ [YouTube] 이미 받은 영상을 바로 재생합니다: {existing}")
+            log.info(f"⚡ [YouTube] 이미 받은 영상을 바로 재생합니다: {existing}")
             self.show_osd("⚡ 이미 받은 유튜브 영상입니다. 바로 재생합니다!", duration_sec=2.0)
             self.hide_yt_loading()
             self._add_and_play_youtube_file(existing)
@@ -99,7 +102,7 @@ class YouTubeMixin:
             self.update_yt_loading(pct, speed_str, eta_str, title)
 
         def _on_finish(final_filepath, title):
-            print(f"🎉 [YouTube 다운로드 완료] {final_filepath}")
+            log.info(f"🎉 [YouTube 다운로드 완료] {final_filepath}")
             self.hide_yt_loading()
             if getattr(self, "yt_btn", None):
                 self.yt_btn.set_label("✅ 완료")
@@ -113,7 +116,7 @@ class YouTubeMixin:
 
         def _on_error(err):
             cancelled = err == youtube_mgr.CANCELLED_MESSAGE
-            print(f"{'⏹' if cancelled else '❌'} [YouTube] {err}")
+            log.warning(f"{'⏹' if cancelled else '❌'} [YouTube] {err}")
             if getattr(self, "yt_btn", None):
                 self.yt_btn.set_label("⏹ 취소됨" if cancelled else "❌ 실패")
                 self._reset_yt_button_later(3000)
@@ -129,7 +132,7 @@ class YouTubeMixin:
             norm_url, quality=quality, on_progress=_on_progress, on_finish=_on_finish, on_error=_on_error
         )
         if result == "started":
-            print(f"⬇️ [YouTube 다운로드 시작] {norm_url} (품질: {quality})")
+            log.info(f"⬇️ [YouTube 다운로드 시작] {norm_url} (품질: {quality})")
             if nothing_playing:
                 self.show_yt_loading(title="YouTube 영상 받는 중...", status=f"⬇️ {q_desc} 다운로드 준비 중...")
             else:
