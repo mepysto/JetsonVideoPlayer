@@ -29,6 +29,8 @@ DEFAULTS = {
     "playlist_sort": "name",
     "autoplay_countdown": True,
     "night_mode": False,
+    "loudness_normalize": True,   # 영상마다 다른 음량을 비슷하게 (EBU R128 측정)
+    "eq_preset": "flat",
     "remote_pin": "",
     "remote_lan_only": True,
     "mini_width": 480,
@@ -75,7 +77,8 @@ def _validate(key, value):
         if not isinstance(value, str):
             return default
         choices = {"repeat_mode": REPEAT_MODES, "playlist_sort": PLAYLIST_SORTS,
-                   "translate_target": ("ko", "en", "ja", "zh"), "translate_backend": ("auto", "local", "claude")}.get(key)
+                   "translate_target": ("ko", "en", "ja", "zh"), "translate_backend": ("auto", "local", "claude"),
+                   "eq_preset": ("flat", "dialogue", "bass", "treble", "quiet")}.get(key)
         if choices and value not in choices:
             return default
         return value

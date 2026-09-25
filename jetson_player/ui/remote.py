@@ -257,6 +257,9 @@ class RemoteMixin:
                           "available": resolve_backend(settings.get("translate_backend")) is not None},
             "sleep": {"minutes": self.sleep_minutes, "remaining": self.sleep_remaining_sec()},
             "night_mode": settings.get("night_mode"),
+            "loudness": {"on": settings.get("loudness_normalize"), "lufs": getattr(self, "_loudness_lufs", None),
+                         "gain_db": round(getattr(self, "_loudness_current_db", 0.0), 1)},
+            "eq_preset": settings.get("eq_preset"),
             "rotation": self.video_rotation,
         }
 
@@ -276,6 +279,7 @@ class RemoteMixin:
             "sub_sync_reset": self.reset_subtitle_sync, "ai_subtitles": self.start_ai_subtitles,
             "translate": self.start_translation,
             "night": self.toggle_night_mode, "rotate": self.cycle_video_rotation,
+            "loudness": self.toggle_loudness_normalize,
             "yt_cancel": youtube_mgr.cancel_current,
         }
         if action in simple:
@@ -292,6 +296,8 @@ class RemoteMixin:
             run(self.seek_direct, int(max(0.0, _to_float(sec)) * Gst.SECOND))
         elif action == "volume" and _to_float(val) is not None:
             run(self.set_volume, _to_float(val))
+        elif action == "eq" and isinstance(val, str):
+            run(self.set_eq_preset, val)
         elif action == "play_at" and _to_int(index) is not None and _to_float(sec) is not None:
             i, start_ms = _to_int(index), int(max(0.0, _to_float(sec)) * 1000)
             run(lambda: self.jump_to_dialogue(self.playlist[i], start_ms) if 0 <= i < len(self.playlist) else None)

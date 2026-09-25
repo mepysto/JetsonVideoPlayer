@@ -158,7 +158,10 @@
       <button onclick="cmd('rotate')">🔄 화면 회전</button>
       <button id="audioBtn" onclick="cmd('audio_cycle')">🎵 음성 트랙</button>
       <button onclick="cmd('screenshot')">📸 캡처</button>
+      <button id="loudBtn" onclick="cmd('loudness')" style="grid-column: span 2">🔊 음량 평준화</button>
     </div>
+    <div class="card-title-row"><span class="muted">🎚️ EQ</span></div>
+    <div class="chips" id="eqChips"></div>
     <div class="card-title-row"><span class="muted">⏾ 수면 타이머</span><span id="sleepVal" class="muted"></span></div>
     <div class="chips" id="sleepChips"></div>
   </div>
@@ -283,6 +286,10 @@ function volLabel(v) { const l = $('volVal'); l.textContent = v + '%' + (v > 100
   const b = document.createElement('button'); b.textContent = s + 'x'; b.dataset.speed = s;
   b.onclick = () => cmd('speed', { val: s }); $('speedChips').appendChild(b);
 });
+[['flat', '기본'], ['dialogue', '대사 강조'], ['bass', '저음'], ['treble', '고음'], ['quiet', '작은 볼륨']].forEach(([k, label]) => {
+  const b = document.createElement('button'); b.textContent = label; b.dataset.eq = k;
+  b.onclick = () => cmd('eq', { val: k }); $('eqChips').appendChild(b);
+});
 [[0, '끄기'], [15, '15분'], [30, '30분'], [60, '60분'], [-1, '영상 끝']].forEach(([m, label]) => {
   const b = document.createElement('button'); b.textContent = label; b.dataset.min = m;
   b.onclick = () => cmd('sleep', { minutes: m }); $('sleepChips').appendChild(b);
@@ -327,6 +334,10 @@ function renderStatus(d) {
   const repeatNames = { all: '전체 반복', one: '한 곡 반복', none: '순차 후 정지', shuffle: '셔플' };
   $('repeatBtn').textContent = '🔁 ' + (repeatNames[d.repeat_mode] || '반복');
   $('nightBtn').classList.toggle('on', !!d.night_mode);
+  const ld = d.loudness || {};
+  $('loudBtn').classList.toggle('on', !!ld.on);
+  $('loudBtn').textContent = '🔊 음량 평준화' + (ld.on && ld.lufs != null ? ` (${Math.round(ld.lufs)} LUFS → ${ld.gain_db >= 0 ? '+' : ''}${ld.gain_db.toFixed(0)}dB)` : '');
+  document.querySelectorAll('#eqChips button').forEach(b => b.classList.toggle('on', b.dataset.eq === d.eq_preset));
   $('audioBtn').textContent = d.audio && d.audio.total > 1 ? `🎵 음성 ${d.audio.current}/${d.audio.total}` : '🎵 음성 트랙';
 
   // 수면 타이머

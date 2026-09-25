@@ -273,3 +273,51 @@ class HistoryCache(JsonStore):
 
 
 history_cache = HistoryCache()
+
+
+LOUDNESS_FILE = os.path.join(CACHE_DIR, "loudness.json")
+
+
+def file_key(path):
+    """파일이 바뀌면 달라지는 키 (경로|크기|수정 시각)"""
+    try:
+        st = os.stat(path)
+        return f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        return None
+
+
+class LoudnessCache(JsonStore):
+    """영상별 통합 음량(LUFS) 측정값 {파일 키: LUFS 또는 None(오디오 없음)}"""
+    MAX_ENTRIES = 2000
+
+    def __init__(self, path=None):
+        super().__init__(path or LOUDNESS_FILE, dict)
+
+    def _valid(self, data):
+        return {k: v for k, v in data.items() if v is None or isinstance(v, (int, float))} if isinstance(data, dict) else None
+
+    def _before_save(self):
+        if len(self.data) > self.MAX_ENTRIES:
+            self.data = dict(list(self.data.items())[-self.MAX_ENTRIES:])
+
+    def lookup(self, path):
+        """(측정했는지, LUFS)"""
+        key = file_key(path)
+        with self.lock:
+            if key in self.data:
+                return True, self.data[key]
+        return False, None
+
+    def store(self, path, lufs):
+        key = file_key(path)
+        if key is None:
+            return
+        with self.lock:
+            self.data.pop(key, None)
+            self.data[key] = None if lufs is None else round(float(lufs), 2)
+            self.is_dirty = True
+
+
+loudness_cache = LoudnessCache()
+

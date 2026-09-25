@@ -10,7 +10,7 @@ from ..mpris import start_mpris
 from ..settings import settings
 from ..shortcuts import find_shortcut
 from ..media.gst_setup import build_hw_video_output, enable_x11_compositor_bypass, optimize_gstreamer_ranks
-from ..storage import bookmark_cache, history_cache, hw_cache, resume_cache
+from ..storage import bookmark_cache, history_cache, hw_cache, loudness_cache, resume_cache
 from ..library import is_playlist_file
 from ..youtube import is_youtube_url
 from .remote import RemoteMixin
@@ -31,6 +31,7 @@ from .search import DialogueSearchMixin
 from .network import NetworkMixin
 from .watch import FolderWatchMixin
 from .mini import MiniPlayerMixin
+from .audio import AudioEffectsMixin
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class JetsonSignageFlexiblePlayer(
     NetworkMixin,
     FolderWatchMixin,
     MiniPlayerMixin,
+    AudioEffectsMixin,
     Gtk.Window,
 ):
     """Jetson 영상 플레이어 메인 창. 기능별 메서드는 각 mixin 모듈에 있고, 공유 상태는 __init__에서 초기화합니다."""
@@ -305,7 +307,7 @@ class JetsonSignageFlexiblePlayer(
     def _flush_caches(self):
         if self.is_destroyed:
             return False
-        for cache in (resume_cache, bookmark_cache, history_cache):
+        for cache in (resume_cache, bookmark_cache, history_cache, loudness_cache):
             cache.save()
         self._capture_settings()
         settings.save()
@@ -406,7 +408,7 @@ class JetsonSignageFlexiblePlayer(
     def on_destroy(self, widget):
         self.is_destroyed = True
         self.stop_folder_watch()
-        for job_name in ("thumb_job", "scene_job", "ai_job", "translate_job"):
+        for job_name in ("thumb_job", "scene_job", "ai_job", "translate_job", "loudness_job"):
             job = getattr(self, job_name, None)
             if job:
                 job.cancel()
@@ -414,6 +416,7 @@ class JetsonSignageFlexiblePlayer(
             self.stop_web_remote_server()
             hw_cache.save()
             resume_cache.save()
+            loudness_cache.save()
             bookmark_cache.save()
             history_cache.save()
             self._capture_settings()

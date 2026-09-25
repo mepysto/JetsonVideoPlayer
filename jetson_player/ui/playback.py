@@ -377,6 +377,7 @@ class PlaybackMixin:
             self.toc_chapters = None
             self.refresh_timeline_marks()
             self.start_thumbnails(video_path)
+            self.start_loudness_for(video_path)
             self.cancel_ai_subtitles()
             self.cancel_translation()
             self.cancel_autoplay_countdown()
@@ -469,8 +470,7 @@ class PlaybackMixin:
         # 배속에서도 음정을 유지하는 오디오 bin (scaletempo + 야간 모드 효과)
         asink = make_audio_output(self.av_sync_offset_ms)
         self.current_asink = asink
-        night_dyn, night_gain = self.build_night_mode_elements()
-        self.pipeline.set_property("audio-sink", build_audio_sink_bin(asink, [night_dyn, night_gain]))
+        self.pipeline.set_property("audio-sink", build_audio_sink_bin(asink, self.build_audio_effect_elements()))
 
         # 버스 이벤트 연결
         self.bus = self.pipeline.get_bus()
