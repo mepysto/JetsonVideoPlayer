@@ -4,13 +4,16 @@ import logging
 import os
 from collections import OrderedDict
 
-from gi.repository import GdkPixbuf, Gdk, GLib, Gst, Gtk
+from gi.repository import GdkPixbuf, Gdk, GLib, Gst, Gtk, Pango
 
-from ..media.thumbnails import SceneAnalysisJob, ThumbnailJob
+from ..media.thumbnails import THUMB_WIDTH, SceneAnalysisJob, ThumbnailJob
 from ..settings import settings
 from ..storage import bookmark_cache
 
 log = logging.getLogger(__name__)
+
+CHAPTER_GRID_COLUMNS = 4
+THUMB_CELL_WIDTH = THUMB_WIDTH
 
 
 class TimelineMixin:
@@ -159,6 +162,7 @@ class TimelineMixin:
             return
         self.thumb_index = index
         self._set_scene_chapters(index.get("scenes_precise") or index.get("scenes") or [])
+        self.refresh_chapters_popover()
 
     def _set_scene_chapters(self, scenes):
         if scenes:
@@ -186,7 +190,10 @@ class TimelineMixin:
             if not self.playlist or self.playlist[self.current_index] != path:
                 return
             self.scene_chapters = []
+            if getattr(self, "thumb_index", None):
+                self.thumb_index["scenes_precise"] = scenes   # 파일에는 작업이 저장, 메모리 사본도 맞춤
             self._set_scene_chapters(scenes)
+            self.refresh_chapters_popover()
             self.show_osd(f"🔍 장면 분석 완료: {len(scenes)}곳 (K로 목록 보기)", duration_sec=3.0)
 
         self.scene_job = SceneAnalysisJob(path, on_progress=progress, on_done=done)
@@ -198,15 +205,18 @@ class TimelineMixin:
         if job:
             job.cancel()
 
-    def get_thumbnail_at(self, position_ns):
+    def get_thumbnail_at(self, position_ns, prefer_after=False):
+        """position_ns에 가장 가까운 썸네일. prefer_after: 그 시각 이후의 첫 썸네일 (장면 시작 미리보기용)"""
         index = getattr(self, "thumb_index", None)
         if not index or not index.get("positions"):
             return None
         positions = index["positions"]
         i = bisect.bisect_right(positions, position_ns) - 1
         i = max(0, min(len(positions) - 1, i))
+        if prefer_after and positions[i] < position_ns and i + 1 < len(positions):
+            i += 1
         # 다음 썸네일이 더 가까우면 그것을 사용
-        if i + 1 < len(positions) and abs(positions[i + 1] - position_ns) < abs(position_ns - positions[i]):
+        elif i + 1 < len(positions) and abs(positions[i + 1] - position_ns) < abs(position_ns - positions[i]):
             i += 1
         path = os.path.join(index["dir"], index["files"][i])
         cache = self.thumb_cache
@@ -260,40 +270,102 @@ class TimelineMixin:
         return chapters[i][1] if i >= 0 else None
 
     def show_chapters_menu(self, event=None):
-        """챕터/장면 목록 메뉴: 선택하면 해당 위치로 이동합니다 (단축키 K)."""
-        menu = Gtk.Menu()
+        """챕터/장면 목록을 썸네일 격자로 보여 줍니다. 누르면(Enter) 해당 위치로 이동합니다 (단축키 K)."""
+        old = getattr(self, "_chapters_popover", None)
+        if old is not None:
+            old.destroy()
+        anchor = getattr(self, "progress_scale", None) if not self.is_video_only else getattr(self, "fs_progress_scale", None)
+        if anchor is None or not anchor.get_mapped():
+            anchor = self.video_widget
+        pop = Gtk.Popover(relative_to=anchor)
+        pop.set_position(Gtk.PositionType.TOP)
+        pop.get_style_context().add_class("chapters-popover")
+        pop.connect("closed", lambda p: (setattr(self, "_chapters_popover", None), p.destroy()))
+        self._chapters_popover = pop
+        self._fill_chapters_popover(pop)
+        pop.popup()
+
+    def _fill_chapters_popover(self, pop):
+        for child in pop.get_children():
+            pop.remove(child)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(10)
         chapters = self.chapters
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        source = "챕터" if getattr(self, "toc_chapters", None) else "자동 장면 분석"
+        title = Gtk.Label(label=f"📑 {source} ({len(chapters)})" if chapters else "📑 챕터 / 장면", xalign=0)
+        title.get_style_context().add_class("popover-title")
+        head.pack_start(title, True, True, 0)
         job = getattr(self, "scene_job", None)
         if job and job.thread.is_alive():
-            item = Gtk.MenuItem(label=f"⏹ 장면 분석 취소 ({job.progress * 100:.0f}% 진행)")
-            item.connect("activate", lambda _i: self.cancel_scene_analysis())
+            scan_btn = Gtk.Button(label=f"⏹ 장면 분석 취소 ({job.progress * 100:.0f}%)")
+            scan_btn.connect("clicked", lambda _b: (self.cancel_scene_analysis(), pop.popdown()))
         else:
             has_precise = bool((getattr(self, "thumb_index", None) or {}).get("scenes_precise"))
-            item = Gtk.MenuItem(label="🔍 정밀 장면 분석 다시 실행" if has_precise else "🔍 정밀 장면 분석 (모든 프레임, 백그라운드)")
-            item.connect("activate", lambda _i: self.start_scene_analysis())
-            item.set_sensitive(not getattr(self, "toc_chapters", None) and bool(self.playlist))
-        menu.append(item)
-        menu.append(Gtk.SeparatorMenuItem())
+            scan_btn = Gtk.Button(label="🔍 정밀 장면 분석 다시 실행" if has_precise else "🔍 정밀 장면 분석")
+            scan_btn.set_tooltip_text("모든 프레임을 분석해 장면 전환을 찾습니다 (백그라운드)")
+            scan_btn.connect("clicked", lambda _b: (self.start_scene_analysis(), pop.popdown()))
+            scan_btn.set_sensitive(not getattr(self, "toc_chapters", None) and bool(self.playlist))
+        scan_btn.get_style_context().add_class("tree-tool-btn")
+        head.pack_end(scan_btn, False, False, 0)
+        box.pack_start(head, False, False, 0)
+
         if not chapters:
             job = getattr(self, "thumb_job", None)
-            text = "장면 분석 중..." if job and job.thread.is_alive() else "챕터 정보가 없습니다"
-            item = Gtk.MenuItem(label=text)
-            item.set_sensitive(False)
-            menu.append(item)
+            empty = Gtk.Label(label="장면 분석 중..." if job and job.thread.is_alive() else "챕터 정보가 없습니다", xalign=0)
+            empty.get_style_context().add_class("muted")
+            box.pack_start(empty, False, False, 8)
         else:
-            source = "챕터" if getattr(self, "toc_chapters", None) else "자동 장면 분석"
-            head = Gtk.MenuItem(label=f"📑 {source} ({len(chapters)})")
-            head.set_sensitive(False)
-            menu.append(head)
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
+            flow.set_activate_on_single_click(True)
+            flow.set_homogeneous(True)
+            flow.set_min_children_per_line(2)
+            flow.set_max_children_per_line(CHAPTER_GRID_COLUMNS)
+            flow.set_row_spacing(6)
+            flow.set_column_spacing(6)
             current = self.chapter_title_at(self.last_known_pos_ns)
-            for pos, title in chapters:
-                label = f"{'▶ ' if title == current else '   '}{self.format_time(pos)}  {title}"
-                item = Gtk.MenuItem(label=label)
-                item.connect("activate", lambda _i, p=pos: (self.seek_direct(p), self.show_osd(f"📑 {self.format_time(p)}")))
-                menu.append(item)
-        menu.show_all()
-        anchor = getattr(self, "progress_scale", None) if not self.is_video_only else getattr(self, "fs_progress_scale", None)
-        if anchor is not None and anchor.get_mapped():
-            menu.popup_at_widget(anchor, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, event)
-        else:
-            menu.popup_at_pointer(event)
+            selected = None
+            for pos, name in chapters:
+                cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+                pixbuf = self.get_thumbnail_at(pos, prefer_after=True)
+                if pixbuf is not None:
+                    image = Gtk.Image.new_from_pixbuf(pixbuf)
+                else:
+                    image = Gtk.Label(label="🎞️")
+                    image.set_size_request(THUMB_CELL_WIDTH, THUMB_CELL_WIDTH * 9 // 16)
+                    image.get_style_context().add_class("chapter-thumb-empty")
+                cell.pack_start(image, False, False, 0)
+                label = Gtk.Label(xalign=0)
+                label.set_ellipsize(Pango.EllipsizeMode.END)
+                label.set_max_width_chars(20)
+                mark = "▶ " if name == current else ""
+                label.set_markup(f"<small><b>{mark}{self.format_time(pos)}</b>  {GLib.markup_escape_text(name)}</small>")
+                cell.pack_start(label, False, False, 0)
+                child = Gtk.FlowBoxChild()
+                child.add(cell)
+                child.chapter_pos = pos
+                child.set_tooltip_text(f"{self.format_time(pos)}  {name}")
+                flow.add(child)
+                if name == current:
+                    selected = child
+            flow.connect("child-activated", lambda _f, c: (pop.popdown(), self.seek_direct(c.chapter_pos),
+                                                           self.show_osd(f"📑 {self.format_time(c.chapter_pos)}")))
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            rows = -(-len(chapters) // CHAPTER_GRID_COLUMNS)
+            scroll.set_size_request(CHAPTER_GRID_COLUMNS * (THUMB_CELL_WIDTH + 16), min(3, rows) * 130)
+            scroll.add(flow)
+            box.pack_start(scroll, True, True, 0)
+            if selected is not None:
+                flow.select_child(selected)
+                GLib.idle_add(lambda: (selected.grab_focus(), False)[1])
+        box.show_all()
+        pop.add(box)
+
+    def refresh_chapters_popover(self):
+        """썸네일·장면 분석이 끝나면 열려 있는 챕터 격자를 새로 그립니다."""
+        pop = getattr(self, "_chapters_popover", None)
+        if pop is not None:
+            self._fill_chapters_popover(pop)
