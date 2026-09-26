@@ -1,0 +1,31 @@
+{
+    "formatRevision": 1,
+    "modules": [
+        {
+            "moduleFiles": [
+                {
+                    "entries": [
+                        {
+                            "codegenResult": 0,
+                            "column": 20,
+                            "durationMicroseconds": 0,
+                            "functionName": "implicitWidth",
+                            "line": 6,
+                            "message": ""
+                        },
+                        {
+                            "codegenResult": 2,
+                            "column": 21,
+                            "durationMicroseconds": 5000,
+                            "functionName": "pixelSize",
+                            "line": 7,
+                            "message": "Cannot generate efficient code for call to untyped JavaScript function"
+                        }
+                    ],
+                    "filePath": "/home/btree/Dev/JetsonVideoPlayer/app/qml/components/JIconButton.qml"
+                }
+            ],
+            "moduleId": "JetsonPlayer(jetson-player)"
+        }
+    ]
+}

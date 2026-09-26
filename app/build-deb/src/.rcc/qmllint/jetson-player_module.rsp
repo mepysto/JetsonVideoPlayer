@@ -1,0 +1,16 @@
+-I
+/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src
+-I
+/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/JetsonPlayer
+-I
+/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src
+-I
+/home/btree/Qt/6.11.3/gcc_arm64/qml
+--resource
+/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qmake_JetsonPlayer.qrc
+--resource
+/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/jetson-player_raw_qml_0.qrc
+--resource
+/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/jetson-player_raw_qml_0_extra_qmldirs.qrc
+--module
+JetsonPlayer

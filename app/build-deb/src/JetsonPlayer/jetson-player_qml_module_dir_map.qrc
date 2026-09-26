@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="/qt/qml/JetsonPlayer">/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/JetsonPlayer</file>
+
+  </qresource>
+</RCC>

@@ -1,0 +1,27 @@
+{
+    "classes": [
+        {
+            "className": "YouTubeController",
+            "lineNumber": 16,
+            "object": true,
+            "qualifiedClassName": "jvp::YouTubeController",
+            "signals": [
+                {
+                    "access": "public",
+                    "index": 0,
+                    "lineNumber": 32,
+                    "name": "changed",
+                    "returnType": "void"
+                }
+            ],
+            "superClasses": [
+                {
+                    "access": "public",
+                    "name": "QObject"
+                }
+            ]
+        }
+    ],
+    "inputFile": "YouTubeController.h",
+    "outputRevision": 69
+}

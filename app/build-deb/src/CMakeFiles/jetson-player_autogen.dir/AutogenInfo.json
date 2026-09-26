@@ -1,0 +1,353 @@
+{
+	"BUILD_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen",
+	"CMAKE_BINARY_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb",
+	"CMAKE_CURRENT_BINARY_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src",
+	"CMAKE_CURRENT_SOURCE_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/src",
+	"CMAKE_EXECUTABLE" : "/usr/bin/cmake",
+	"CMAKE_LIST_FILES" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/CMakeLists.txt",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Core/Qt6CoreConfigureFileTemplate.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Core/Qt6CoreResourceInit.in.cpp",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Core/Qt6CoreConfigureFileTemplate.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Qml/Qt6QmlModuleDirMappingTemplate.qrc.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Core/Qt6CoreConfigureFileTemplate.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Qml/Qt6qmldirTemplate.cmake.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Qml/Qt6qmldirTemplate.cmake.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Qml/Qt6qmldirTemplate.cmake.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Core/Qt6CoreConfigureFileTemplate.in",
+		"/home/btree/Qt/6.11.3/gcc_arm64/lib/cmake/Qt6Qml/Qt6qmldirTemplate.cmake.in",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/qml_imports/jetson-player_conf.cmake"
+	],
+	"CMAKE_SOURCE_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app",
+	"DEP_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/deps",
+	"DEP_FILE_RULE_NAME" : "jetson-player_autogen/timestamp",
+	"HEADERS" : 
+	[
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/media/VideoItem.h",
+			"MU",
+			"HTGEZKIBRU/moc_VideoItem.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AiController.h",
+			"MU",
+			"UYX5XTB5RZ/moc_AiController.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AppController.h",
+			"MU",
+			"UYX5XTB5RZ/moc_AppController.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/OnlineSubsController.h",
+			"MU",
+			"UYX5XTB5RZ/moc_OnlineSubsController.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/PlaylistModel.h",
+			"MU",
+			"UYX5XTB5RZ/moc_PlaylistModel.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/QrImageProvider.h",
+			"MU",
+			"UYX5XTB5RZ/moc_QrImageProvider.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/RemoteInfo.h",
+			"MU",
+			"UYX5XTB5RZ/moc_RemoteInfo.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/SubtitleController.h",
+			"MU",
+			"UYX5XTB5RZ/moc_SubtitleController.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/SubtitleOverlay.h",
+			"MU",
+			"UYX5XTB5RZ/moc_SubtitleOverlay.cpp",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/YouTubeController.h",
+			"MU",
+			"UYX5XTB5RZ/moc_YouTubeController.cpp",
+			null
+		]
+	],
+	"HEADER_EXTENSIONS" : [ "h", "hh", "h++", "hm", "hpp", "hxx", "in", "txx" ],
+	"INCLUDE_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include",
+	"MOC_COMPILATION_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/mocs_compilation.cpp",
+	"MOC_DEFINITIONS" : 
+	[
+		"JVP_HAVE_NVMM",
+		"JVP_VERSION=\"2.0.0\"",
+		"QT_CONCURRENT_LIB",
+		"QT_CORE_LIB",
+		"QT_DBUS_LIB",
+		"QT_GUI_LIB",
+		"QT_NETWORK_LIB",
+		"QT_NO_DEBUG",
+		"QT_OPENGL_LIB",
+		"QT_QMLINTEGRATION_LIB",
+		"QT_QML_LIB",
+		"QT_QUICKCONTROLS2_LIB",
+		"QT_QUICK_LIB"
+	],
+	"MOC_DEPEND_FILTERS" : 
+	[
+		[
+			"Q_PLUGIN_METADATA",
+			"[\n][ \t]*Q_PLUGIN_METADATA[ \t]*\\([^\\)]*FILE[ \t]*\"([^\"]+)\""
+		]
+	],
+	"MOC_INCLUDES" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/src",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/ui",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/core",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/media",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/services",
+		"/usr/src/jetson_multimedia_api/include",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQml",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtCore",
+		"/home/btree/Qt/6.11.3/gcc_arm64/mkspecs/linux-g++",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQmlIntegration",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtNetwork",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtGui",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQuick",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtOpenGL",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtDBus",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtConcurrent",
+		"/usr/include/gstreamer-1.0",
+		"/usr/include/glib-2.0",
+		"/usr/lib/aarch64-linux-gnu/glib-2.0/include",
+		"/usr/include/orc-0.4",
+		"/usr/include/freetype2",
+		"/usr/include/libpng16",
+		"/usr/include/harfbuzz",
+		"/usr/include/fribidi",
+		"/usr/include/libmount",
+		"/usr/include/blkid",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQuickControls2",
+		"/usr/include",
+		"/usr/include/aarch64-linux-gnu",
+		"/usr/include/c++/13",
+		"/usr/include/aarch64-linux-gnu/c++/13",
+		"/usr/include/c++/13/backward",
+		"/usr/lib/gcc/aarch64-linux-gnu/13/include",
+		"/usr/local/include"
+	],
+	"MOC_MACRO_NAMES" : 
+	[
+		"Q_OBJECT",
+		"Q_GADGET",
+		"Q_NAMESPACE",
+		"Q_NAMESPACE_EXPORT",
+		"Q_GADGET_EXPORT",
+		"Q_ENUM_NS"
+	],
+	"MOC_OPTIONS" : [ "--output-json" ],
+	"MOC_PATH_PREFIX" : false,
+	"MOC_PREDEFS_CMD" : 
+	[
+		"/usr/bin/c++",
+		"-std=gnu++17",
+		"-dM",
+		"-E",
+		"-c",
+		"/usr/share/cmake-3.28/Modules/CMakeCXXCompilerABI.cpp"
+	],
+	"MOC_PREDEFS_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/moc_predefs.h",
+	"MOC_RELAXED_MODE" : false,
+	"MOC_SKIP" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_jetson-player_raw_qml_0.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_jetson-player_raw_qml_0_extra_qmldirs.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_qmake_JetsonPlayer.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_remote_static.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_remote_static_init.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_AutoplayCard_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_ContextMenu_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_ControlBar_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_DesktopLayout_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_FloatingControls_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_HistoryPopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Hud_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Main_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_MiniControls_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_MoreMenu_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Osd_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Placeholder_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_PlaylistPanel_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_SeekBar_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_SpeedPopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_SubtitlePopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_TopBar_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_VideoArea_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_YouTubeLoading_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_YouTubePopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JButton_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JCheck_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JField_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JIconButton_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JPopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JSlider_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_Theme_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_AccountDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_BookmarksDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_ChaptersDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_DialogFrame_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_Dialogs_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_HelpDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_NetworkDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_OnlineSubsDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_PasswordDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_QuestionDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_RemoteDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_SearchDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_YouTubeDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_tv_TvHome_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_tv_TvLayout_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_tv_TvPanel_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player_qmlcache_loader.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_qmltyperegistrations.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jvpcore_autogen/mocs_compilation.cpp"
+	],
+	"MULTI_CONFIG" : false,
+	"PARALLEL" : 1,
+	"PARSE_CACHE_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/CMakeFiles/jetson-player_autogen.dir/ParseCache.txt",
+	"QT_MOC_EXECUTABLE" : "/home/btree/Qt/6.11.3/gcc_arm64/libexec/moc",
+	"QT_UIC_EXECUTABLE" : "",
+	"QT_VERSION_MAJOR" : 6,
+	"QT_VERSION_MINOR" : 11,
+	"SETTINGS_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/CMakeFiles/jetson-player_autogen.dir/AutogenUsed.txt",
+	"SOURCES" : 
+	[
+		[ "/home/btree/Dev/JetsonVideoPlayer/app/src/main.cpp", "MU", null ],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/media/VideoItem.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AiController.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AppController.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AppLibrary.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AppPlayback.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/AppServices.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/OnlineSubsController.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/PlaylistModel.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/SubtitleController.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/SubtitleOverlay.cpp",
+			"MU",
+			null
+		],
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/src/ui/YouTubeController.cpp",
+			"MU",
+			null
+		]
+	],
+	"UIC_OPTIONS" : [],
+	"UIC_SEARCH_PATHS" : [],
+	"UIC_SKIP" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_jetson-player_raw_qml_0.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_jetson-player_raw_qml_0_extra_qmldirs.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_qmake_JetsonPlayer.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_remote_static.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.qt/rcc/qrc_remote_static_init.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_AutoplayCard_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_ContextMenu_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_ControlBar_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_DesktopLayout_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_FloatingControls_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_HistoryPopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Hud_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Main_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_MiniControls_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_MoreMenu_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Osd_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_Placeholder_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_PlaylistPanel_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_SeekBar_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_SpeedPopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_SubtitlePopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_TopBar_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_VideoArea_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_YouTubeLoading_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_YouTubePopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JButton_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JCheck_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JField_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JIconButton_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JPopup_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_JSlider_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_components_Theme_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_AccountDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_BookmarksDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_ChaptersDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_DialogFrame_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_Dialogs_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_HelpDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_NetworkDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_OnlineSubsDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_PasswordDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_QuestionDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_RemoteDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_SearchDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_dialogs_YouTubeDialog_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_tv_TvHome_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_tv_TvLayout_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player__qml_tv_TvPanel_qml.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/.rcc/qmlcache/jetson-player_qmlcache_loader.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_qmltyperegistrations.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jvpcore_autogen/mocs_compilation.cpp"
+	],
+	"UIC_UI_FILES" : [],
+	"VERBOSITY" : 0
+}

@@ -1,0 +1,154 @@
+{
+	"BUILD_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_settings_storage_autogen",
+	"CMAKE_BINARY_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb",
+	"CMAKE_CURRENT_BINARY_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests",
+	"CMAKE_CURRENT_SOURCE_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/tests",
+	"CMAKE_EXECUTABLE" : "/usr/bin/cmake",
+	"CMAKE_LIST_FILES" : [ "/home/btree/Dev/JetsonVideoPlayer/app/tests/CMakeLists.txt" ],
+	"CMAKE_SOURCE_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app",
+	"DEP_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_settings_storage_autogen/deps",
+	"DEP_FILE_RULE_NAME" : "test_settings_storage_autogen/timestamp",
+	"HEADERS" : [],
+	"HEADER_EXTENSIONS" : [ "h", "hh", "h++", "hm", "hpp", "hxx", "in", "txx" ],
+	"INCLUDE_DIR" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_settings_storage_autogen/include",
+	"MOC_COMPILATION_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_settings_storage_autogen/mocs_compilation.cpp",
+	"MOC_DEFINITIONS" : 
+	[
+		"JVP_HAVE_NVMM",
+		"QT_CONCURRENT_LIB",
+		"QT_CORE_LIB",
+		"QT_DBUS_LIB",
+		"QT_GUI_LIB",
+		"QT_NETWORK_LIB",
+		"QT_NO_DEBUG",
+		"QT_OPENGL_LIB",
+		"QT_QMLINTEGRATION_LIB",
+		"QT_QML_LIB",
+		"QT_QUICK_LIB",
+		"QT_TESTCASE_BUILDDIR=\"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests\"",
+		"QT_TESTCASE_SOURCEDIR=\"/home/btree/Dev/JetsonVideoPlayer/app/tests\"",
+		"QT_TESTLIB_LIB"
+	],
+	"MOC_DEPEND_FILTERS" : 
+	[
+		[
+			"Q_PLUGIN_METADATA",
+			"[\n][ \t]*Q_PLUGIN_METADATA[ \t]*\\([^\\)]*FILE[ \t]*\"([^\"]+)\""
+		]
+	],
+	"MOC_INCLUDES" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/src",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/core",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/media",
+		"/home/btree/Dev/JetsonVideoPlayer/app/src/services",
+		"/usr/src/jetson_multimedia_api/include",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtCore",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include",
+		"/home/btree/Qt/6.11.3/gcc_arm64/mkspecs/linux-g++",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtGui",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQuick",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQml",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtQmlIntegration",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtNetwork",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtOpenGL",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtDBus",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtConcurrent",
+		"/usr/include/gstreamer-1.0",
+		"/usr/include/glib-2.0",
+		"/usr/lib/aarch64-linux-gnu/glib-2.0/include",
+		"/usr/include/orc-0.4",
+		"/usr/include/freetype2",
+		"/usr/include/libpng16",
+		"/usr/include/harfbuzz",
+		"/usr/include/fribidi",
+		"/usr/include/libmount",
+		"/usr/include/blkid",
+		"/home/btree/Qt/6.11.3/gcc_arm64/include/QtTest",
+		"/usr/include",
+		"/usr/include/aarch64-linux-gnu",
+		"/usr/include/c++/13",
+		"/usr/include/aarch64-linux-gnu/c++/13",
+		"/usr/include/c++/13/backward",
+		"/usr/lib/gcc/aarch64-linux-gnu/13/include",
+		"/usr/local/include"
+	],
+	"MOC_MACRO_NAMES" : 
+	[
+		"Q_OBJECT",
+		"Q_GADGET",
+		"Q_NAMESPACE",
+		"Q_NAMESPACE_EXPORT",
+		"Q_GADGET_EXPORT",
+		"Q_ENUM_NS"
+	],
+	"MOC_OPTIONS" : [],
+	"MOC_PATH_PREFIX" : false,
+	"MOC_PREDEFS_CMD" : 
+	[
+		"/usr/bin/c++",
+		"-std=gnu++17",
+		"-dM",
+		"-E",
+		"-c",
+		"/usr/share/cmake-3.28/Modules/CMakeCXXCompilerABI.cpp"
+	],
+	"MOC_PREDEFS_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_settings_storage_autogen/moc_predefs.h",
+	"MOC_RELAXED_MODE" : false,
+	"MOC_SKIP" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_ass_renderer_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_codecs_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_dialogue_index_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_hdr_reference_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_library_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_log_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_loudness_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_media_probe_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_mpris_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_network_mount_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_network_uri_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_opensubtitles_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_qrcode_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_remote_server_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_scenes_thumbnails_autogen/mocs_compilation.cpp"
+	],
+	"MULTI_CONFIG" : false,
+	"PARALLEL" : 1,
+	"PARSE_CACHE_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/CMakeFiles/test_settings_storage_autogen.dir/ParseCache.txt",
+	"QT_MOC_EXECUTABLE" : "/home/btree/Qt/6.11.3/gcc_arm64/libexec/moc",
+	"QT_UIC_EXECUTABLE" : "",
+	"QT_VERSION_MAJOR" : 6,
+	"QT_VERSION_MINOR" : 11,
+	"SETTINGS_FILE" : "/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/CMakeFiles/test_settings_storage_autogen.dir/AutogenUsed.txt",
+	"SOURCES" : 
+	[
+		[
+			"/home/btree/Dev/JetsonVideoPlayer/app/tests/test_settings_storage.cpp",
+			"MU",
+			null
+		]
+	],
+	"UIC_OPTIONS" : [],
+	"UIC_SEARCH_PATHS" : [],
+	"UIC_SKIP" : 
+	[
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_ass_renderer_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_codecs_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_dialogue_index_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_hdr_reference_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_library_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_log_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_loudness_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_media_probe_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_mpris_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_network_mount_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_network_uri_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_opensubtitles_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_qrcode_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_remote_server_autogen/mocs_compilation.cpp",
+		"/home/btree/Dev/JetsonVideoPlayer/app/build-deb/tests/test_scenes_thumbnails_autogen/mocs_compilation.cpp"
+	],
+	"UIC_UI_FILES" : [],
+	"VERBOSITY" : 0
+}

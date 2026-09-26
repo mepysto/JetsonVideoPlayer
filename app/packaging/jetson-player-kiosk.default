@@ -1,0 +1,5 @@
+# Jetson Video Player 키오스크(전용 기기) 모드 설정 — 바꾼 뒤: sudo systemctl restart jetson-player-kiosk
+# 재생할 사용자 (설정·이어보기 기록이 이 사용자 홈에 저장됩니다)
+KIOSK_USER=jetson
+# 켜자마자 재생할 폴더·파일·재생목록 (비우면 홈 화면)
+KIOSK_MEDIA=/home/jetson/Videos

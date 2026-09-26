@@ -1,0 +1,30 @@
+# 전용 기기(TV 박스·사이니지) 모드: 데스크톱 없이 부팅 직후 전체화면으로 재생합니다 (Qt EGLFS, KMS 직접 출력).
+# 설정: /etc/default/jetson-player-kiosk  ·  켜기/끄기: sudo jetson-player-kiosk enable | disable
+[Unit]
+Description=Jetson Video Player (kiosk)
+After=systemd-user-sessions.service network-online.target sound.target
+Wants=network-online.target
+# 화면(DRM)을 데스크톱과 나눠 쓸 수 없으므로 로그인 화면과 함께 돌지 않습니다
+Conflicts=display-manager.service getty@tty1.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/jetson-player-kiosk
+# 실행 사용자는 jetson-player-kiosk enable 이 드롭인(user.conf)으로 정합니다 (User=에는 변수를 쓸 수 없음)
+User=nobody
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+SupplementaryGroups=video render audio input
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms_egldevice
+Environment=QT_QPA_EGLFS_ALWAYS_SET_MODE=1
+Environment=QT_QPA_EGLFS_HIDECURSOR=1
+ExecStart=/usr/bin/jetson-player --kiosk --tv ${KIOSK_MEDIA}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

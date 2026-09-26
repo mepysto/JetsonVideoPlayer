@@ -48,5 +48,18 @@ add_subdirectory(tests)
 
 include(GNUInstallDirs)
 install(TARGETS jetson-player RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# 패키지(.deb)용: Qt 라이브러리·플러그인·QML 모듈을 함께 설치합니다 (시스템에 최신 Qt가 없으므로).
+# 개발 중에는 끄고(-DJVP_DEPLOY_QT=OFF) ~/Qt 를 그대로 씁니다.
+option(JVP_DEPLOY_QT "Bundle Qt runtime into the install tree" OFF)
+if(JVP_DEPLOY_QT)
+  # 설치본은 ~/Qt 가 아니라 함께 넣은 lib/ 를 봅니다
+  set_target_properties(jetson-player PROPERTIES INSTALL_RPATH "$ORIGIN/../lib" INSTALL_RPATH_USE_LINK_PATH OFF)
+  qt_generate_deploy_qml_app_script(
+    TARGET jetson-player
+    OUTPUT_SCRIPT jvp_deploy_script
+    NO_TRANSLATIONS
+  )
+  install(SCRIPT ${jvp_deploy_script})
+endif()
 # 로컬 번역(NLLB) 보조 프로세스 스크립트 — Translator.cpp가 ../share/jetson-player/ 에서 찾습니다
 install(PROGRAMS tools/nllb_worker.py DESTINATION ${CMAKE_INSTALL_DATADIR}/jetson-player)
