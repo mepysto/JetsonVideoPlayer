@@ -26,6 +26,7 @@ FocusScope {
         visible: root.panelOpen && !root.homeOpen
         focus: visible
         onCloseRequested: { root.panelOpen = false; root.forceActiveFocus() }
+        onMenuRequested: tvMenu.popup()
     }
 
     Keys.onPressed: (event) => {

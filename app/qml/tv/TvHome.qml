@@ -52,10 +52,10 @@ FocusScope {
             focus: resume.count === 0
             KeyNavigation.up: resume
             KeyNavigation.down: list
-            JButton { id: a1; text: "📁 폴더 열기"; focus: true; KeyNavigation.right: a2; onClicked: dialogs.open("openFolder"); Keys.onReturnPressed: clicked() }
-            JButton { id: a2; text: "🌐 네트워크 폴더"; KeyNavigation.right: a3; onClicked: dialogs.open("network"); Keys.onReturnPressed: clicked() }
-            JButton { id: a3; text: "▶️ 유튜브"; KeyNavigation.right: a4; onClicked: dialogs.open("youtube"); Keys.onReturnPressed: clicked() }
-            JButton { id: a4; text: "📱 리모컨 연결"; onClicked: dialogs.open("remote"); Keys.onReturnPressed: clicked() }
+            JButton { id: a1; text: "📁 폴더 열기"; focus: true; KeyNavigation.right: a2; onClicked: App.requestDialog("openFolder"); Keys.onReturnPressed: clicked() }
+            JButton { id: a2; text: "🌐 네트워크 폴더"; KeyNavigation.right: a3; onClicked: App.requestDialog("network"); Keys.onReturnPressed: clicked() }
+            JButton { id: a3; text: "▶️ 유튜브"; KeyNavigation.right: a4; onClicked: App.requestDialog("youtube"); Keys.onReturnPressed: clicked() }
+            JButton { id: a4; text: "📱 리모컨 연결"; onClicked: App.requestDialog("remote"); Keys.onReturnPressed: clicked() }
         }
 
         Text { visible: list.count > 0; text: "📂 재생목록 (" + App.playlist.count + ")"; color: Theme.accent; font.pixelSize: Theme.px(15); font.bold: true }

@@ -23,7 +23,7 @@ DialogFrame {
             JButton { text: "취소"; tool: true; onClicked: d.close() }
             JButton {
                 text: "저장"; primary: true; enabled: key.text.trim().length > 0
-                onClicked: { App.onlineSubs.saveCredentials(key.text.trim(), user.text.trim(), pass.text); d.close(); dialogs.open("onlineSubs") }
+                onClicked: { App.onlineSubs.saveCredentials(key.text.trim(), user.text.trim(), pass.text); d.close(); App.requestDialog("onlineSubs") }
             }
         }
     }

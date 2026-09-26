@@ -21,6 +21,8 @@ Item {
         case "remote": remote.open(); break
         case "youtube": youtube.open(); break
         case "mountPassword": password.show(arg); break
+        case "mountQuestion": question.show(arg); break
+        case "subtitles": subtitles.open(); break
         }
     }
 
@@ -53,4 +55,12 @@ Item {
     AccountDialog { id: account }
     RemoteDialog { id: remote }
     YouTubeDialog { id: youtube }
+    QuestionDialog { id: question }
+    // 단축키 C: 자막 선택 창을 화면 가운데에
+    SubtitlePopup {
+        id: subtitles
+        parent: Overlay.overlay
+        x: parent ? (parent.width - width) / 2 : 0
+        y: parent ? (parent.height - height) / 2 : 0
+    }
 }

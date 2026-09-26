@@ -24,8 +24,8 @@ Rectangle {
             font.letterSpacing: 1
         }
         Sep {}
-        JButton { text: "📂 파일"; ToolTip.text: "동영상 파일 열기 (Ctrl+O)"; onClicked: dialogs.open("openFile") }
-        JButton { text: "📁 폴더"; ToolTip.text: "동영상 폴더 열기 (Ctrl+Shift+O)"; onClicked: dialogs.open("openFolder") }
+        JButton { text: "📂 파일"; ToolTip.text: "동영상 파일 열기 (Ctrl+O)"; onClicked: App.requestDialog("openFile") }
+        JButton { text: "📁 폴더"; ToolTip.text: "동영상 폴더 열기 (Ctrl+Shift+O)"; onClicked: App.requestDialog("openFolder") }
         JButton { id: recentBtn; text: "🕒 최근"; ToolTip.text: "최근 재생한 영상/폴더"; onClicked: historyPopup.open() }
         JButton { id: ytBtn; text: "▶️ 유튜브"; ToolTip.text: "유튜브 영상 받아서 재생"; onClicked: ytPopup.open() }
         Sep {}

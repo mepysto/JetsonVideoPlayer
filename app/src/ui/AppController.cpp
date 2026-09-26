@@ -94,6 +94,9 @@ AppController::AppController(const Options &opt, QObject *parent) : QObject(pare
                 requestDialog(QStringLiteral("mountPassword"),
                               QVariantMap{{"message", message}, {"user", user}, {"domain", domain}, {"flags", flags}});
             });
+    connect(m_network, &NetworkMount::questionAsked, this, [this](const QString &message, const QStringList &choices) {
+        requestDialog(QStringLiteral("mountQuestion"), QVariantMap{{"message", message}, {"choices", choices}});
+    });
     connect(m_network, &NetworkMount::finished, this, &AppController::onMountFinished);
     m_remoteInfo = new RemoteInfo(this);
 

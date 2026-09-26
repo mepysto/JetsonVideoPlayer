@@ -7,6 +7,7 @@ import QtQuick.Layouts
 FocusScope {
     id: panel
     signal closeRequested()
+    signal menuRequested()
     implicitHeight: col.implicitHeight + Theme.px(40)
     Rectangle { anchors.fill: parent; gradient: Gradient { GradientStop { position: 0; color: "transparent" } GradientStop { position: 0.4; color: "#e6000000" } } }
     Keys.onEscapePressed: panel.closeRequested()
@@ -35,8 +36,8 @@ FocusScope {
                     { t: "⏮", a: () => App.playPrevious() }, { t: "↶ 30", a: () => App.seekRelative(-30) },
                     { t: "⏯", a: () => App.togglePlayPause() }, { t: "30 ↷", a: () => App.seekRelative(30) },
                     { t: "⏭", a: () => App.playNext() }, { t: "💬 자막", a: () => App.toggleSubtitles() },
-                    { t: "⚡ 속도", a: () => App.stepRate(0.25) }, { t: "📑 챕터", a: () => dialogs.open("chapters") },
-                    { t: "🔎 대사", a: () => dialogs.open("search") }, { t: "⚙️ 설정", a: () => App.requestDialog("tvMenu", "") }
+                    { t: "⚡ 속도", a: () => App.stepRate(0.25) }, { t: "📑 챕터", a: () => App.requestDialog("chapters") },
+                    { t: "🔎 대사", a: () => App.requestDialog("search") }, { t: "⚙️ 설정", a: () => panel.menuRequested() }
                 ]
                 JButton {
                     required property var modelData

@@ -9,7 +9,7 @@ DialogFrame {
     title: "🌐 온라인 자막 찾기 (OpenSubtitles)"
     readonly property var os: App.onlineSubs
     onOpened: {
-        if (!os.hasKey) { d.close(); dialogs.open("osAccount"); return }
+        if (!os.hasKey) { d.close(); App.requestDialog("osAccount"); return }
         query.text = os.defaultQuery(); langs.text = App.settings.opensubtitles_languages; os.search(query.text, langs.text)
     }
     Column {
@@ -19,7 +19,7 @@ DialogFrame {
             JField { id: query; Layout.fillWidth: true; onAccepted: d.os.search(text, langs.text) }
             JField { id: langs; Layout.preferredWidth: Theme.px(90); ToolTip.visible: hovered; ToolTip.text: "언어 코드 (쉼표로 구분): ko, en, ja, zh-cn ..." }
             JButton { text: "🔎 검색"; enabled: !d.os.busy; onClicked: d.os.search(query.text, langs.text) }
-            JButton { text: "⚙️"; ToolTip.text: "API 키 / 계정 설정"; onClicked: dialogs.open("osAccount") }
+            JButton { text: "⚙️"; ToolTip.text: "API 키 / 계정 설정"; onClicked: App.requestDialog("osAccount") }
         }
         Text { text: d.os.status; color: Theme.muted; font.pixelSize: Theme.px(12) }
         ListView {

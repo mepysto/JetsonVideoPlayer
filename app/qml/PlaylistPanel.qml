@@ -103,8 +103,8 @@ Rectangle {
                     onClicked: (m) => {
                         if (m.button === Qt.RightButton) { rowMenu.row = row; rowMenu.popup(); return }
                         if (isFolder) App.playlist.toggleExpanded(index)
+                        else if (!active) { App.playIndex(playlistIndex); panel.done() }
                     }
-                    onDoubleClicked: (m) => { if (!isFolder && m.button === Qt.LeftButton) { App.playIndex(playlistIndex); panel.done() } }
                 }
                 ToolTip.visible: rowMouse.containsMouse && !isFolder
                 ToolTip.delay: 800
@@ -128,6 +128,6 @@ Rectangle {
         MenuItem { text: "📋 파일 이름 복사"; onTriggered: App.copyText(rowMenu.row.title, "📋 파일 이름이 복사되었습니다!") }
         MenuSeparator {}
         MenuItem { text: "🔄 재생목록 새로고침 (F5)"; onTriggered: App.rescanPlaylist() }
-        MenuItem { text: "💾 재생목록 저장 (M3U)"; onTriggered: dialogs.open("saveM3u") }
+        MenuItem { text: "💾 재생목록 저장 (M3U)"; onTriggered: App.requestDialog("saveM3u") }
     }
 }

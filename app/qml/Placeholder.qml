@@ -19,10 +19,10 @@ Column {
     Row {
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: Theme.px(12)
-        JButton { text: "📂 동영상 파일 열기"; primary: true; onClicked: dialogs.open("openFile") }
-        JButton { text: "📁 폴더 열기"; tool: true; onClicked: dialogs.open("openFolder") }
-        JButton { text: "▶️ 유튜브 영상 재생"; tool: true; onClicked: dialogs.open("youtube") }
-        JButton { text: "🌐 네트워크 폴더"; tool: true; onClicked: dialogs.open("network") }
+        JButton { text: "📂 동영상 파일 열기"; primary: true; onClicked: App.requestDialog("openFile") }
+        JButton { text: "📁 폴더 열기"; tool: true; onClicked: App.requestDialog("openFolder") }
+        JButton { text: "▶️ 유튜브 영상 재생"; tool: true; onClicked: App.requestDialog("youtube") }
+        JButton { text: "🌐 네트워크 폴더"; tool: true; onClicked: App.requestDialog("network") }
     }
     Column {
         anchors.horizontalCenter: parent.horizontalCenter
