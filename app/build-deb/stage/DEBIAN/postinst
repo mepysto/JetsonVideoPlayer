@@ -1,6 +1,0 @@
-#!/bin/sh
-set -e
-command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
-command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q /usr/share/icons/hicolor || true
-command -v systemctl >/dev/null && systemctl daemon-reload || true
-exit 0

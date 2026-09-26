@@ -1,9 +1,0 @@
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../HTGEZKIBRU/moc_VideoItem.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_AiController.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_AppController.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_OnlineSubsController.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_PlaylistModel.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_RemoteInfo.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_SubtitleController.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_SubtitleOverlay.cpp.json
-/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/jetson-player_autogen/include/../UYX5XTB5RZ/moc_YouTubeController.cpp.json

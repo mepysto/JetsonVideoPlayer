@@ -1,6 +1,0 @@
-<RCC>
-  <qresource prefix="/qt/qml/JetsonPlayer">
-    <file alias="qmldir">/home/btree/Dev/JetsonVideoPlayer/app/build-deb/src/JetsonPlayer/qmldir</file>
-  </qresource>
-</RCC>
-

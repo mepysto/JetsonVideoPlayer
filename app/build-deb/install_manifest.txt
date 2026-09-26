@@ -1,2 +1,0 @@
-/opt/jetson-player/bin/jetson-player
-/opt/jetson-player/share/jetson-player/nllb_worker.py

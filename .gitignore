@@ -57,4 +57,8 @@ ENV/
 __pycache__/
 
 # C++ 앱 빌드 결과
-app/build/
+app/build*/
+
+# Claude Code 로컬 설정·작업 트리
+.claude/settings.local.json
+.claude/worktrees/

@@ -1,9 +1,0 @@
-<RCC>
-  <qresource prefix="/remote">
-    <file alias="index.html">/home/btree/Dev/JetsonVideoPlayer/app/resources/remote/index.html</file>
-    <file alias="login.html">/home/btree/Dev/JetsonVideoPlayer/app/resources/remote/login.html</file>
-    <file alias="share.html">/home/btree/Dev/JetsonVideoPlayer/app/resources/remote/share.html</file>
-    <file alias="icon.svg">/home/btree/Dev/JetsonVideoPlayer/app/resources/remote/icon.svg</file>
-  </qresource>
-</RCC>
-
