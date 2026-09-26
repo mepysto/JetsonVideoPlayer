@@ -85,6 +85,14 @@ def main(folder):
 
     def record_removed():
         result["after_remove"] = {"playlist": names(), "file": playing_file()}
+        # 직접 고른 파일 목록은 새로고침해도 폴더 전체(d.mkv 포함)로 바뀌지 않아야 합니다
+        shutil.copy(os.path.join(folder, "c.mkv"), os.path.join(folder, "d.mkv"))
+        win.load_files([os.path.join(folder, "a.mkv"), os.path.join(folder, "c.mkv")])
+        win.rescan_playlist()
+        started["rescan_at"] = GLib.get_monotonic_time()
+
+    def record_picked():
+        result["picked_after_refresh"] = names()
 
     started = {}
     steps += [
@@ -97,6 +105,7 @@ def main(folder):
         ("jump", lambda: playing_file() == "a.mkv", record_jump),
         ("watch_add", lambda: "c.mkv" in names(), record_added),
         ("watch_remove", lambda: "b.mkv" not in names(), record_removed),
+        ("picked", lambda: GLib.get_monotonic_time() - started.get("rescan_at", 1e18) > 1_500_000, record_picked),
     ]
 
     def tick():

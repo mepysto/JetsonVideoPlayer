@@ -44,3 +44,4 @@ def test_player_plays_folder_and_switches_subtitles(smoke_result):
     # 폴더 감시: 재생을 멈추지 않고 재생목록 갱신
     assert r["after_add"] == {"playlist": ["a.mkv", "b.mkv", "c.mkv"], "file": "a.mkv"}
     assert r["after_remove"] == {"playlist": ["a.mkv", "c.mkv"], "file": "a.mkv"}
+    assert r["picked_after_refresh"] == ["a.mkv", "c.mkv"]

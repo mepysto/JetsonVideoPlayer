@@ -41,13 +41,23 @@ MATRIX_FIX = _FROM_YCC_2020 @ _TO_YCC_709
 
 
 def transfer_of_caps(caps):
-    """caps의 colorimetry → "pq" / "hlg" / None"""
+    """caps의 colorimetry → "pq" / "hlg" / None
+
+    GStreamer는 colorimetry를 이름(bt2100-pq)이나 숫자(1:6:14:7 — 범위:행렬:전달:원색)로 적으므로
+    문자열 비교 대신 VideoColorimetry로 해석해 전달 특성을 봅니다.
+    """
     if caps is None or not caps.get_size():
         return None
-    colorimetry = caps.get_structure(0).get_string("colorimetry") or ""
-    if "smpte2084" in colorimetry or colorimetry == "bt2100-pq":
+    text = caps.get_structure(0).get_string("colorimetry")
+    if not text:
+        return None
+    from gi.repository import GstVideo
+    colorimetry = GstVideo.VideoColorimetry()
+    if not colorimetry.from_string(text):
+        return None
+    if colorimetry.transfer == GstVideo.VideoTransferFunction.SMPTE2084:
         return "pq"
-    if "arib-std-b67" in colorimetry or colorimetry == "bt2100-hlg":
+    if colorimetry.transfer == GstVideo.VideoTransferFunction.ARIB_STD_B67:
         return "hlg"
     return None
 

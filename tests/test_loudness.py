@@ -54,3 +54,43 @@ def test_measure_file_matches_bs1770_reference(tone_file):
     """997Hz 사인 두 채널 진폭 0.5 → BS.1770: 0 LUFS(진폭 1) - 6.02dB ≈ -6.0 LUFS"""
     lufs = measure_file(str(tone_file))
     assert lufs == pytest.approx(-6.02, abs=0.3)
+
+
+def _encode(path, desc):
+    p = Gst.parse_launch(desc.format(path=path))
+    p.set_state(Gst.State.PLAYING)
+    msg = p.get_bus().timed_pop_filtered(30 * Gst.SECOND, Gst.MessageType.EOS | Gst.MessageType.ERROR)
+    p.set_state(Gst.State.NULL)
+    if msg is None or msg.type != Gst.MessageType.EOS:
+        pytest.skip("테스트 파일을 만들 수 없습니다")
+
+
+def test_measure_skips_video_decoding(tmp_path, media_dir):
+    """영상 트랙은 디코딩하지 않습니다 (측정이 빠르고, 디코딩할 수 없는 영상 때문에 실패하지 않음)"""
+    from jetson_player.media.loudness import build_meter_pipeline
+    pipeline, sink = build_meter_pipeline(Gst.filename_to_uri(str(media_dir / "a.mkv")))
+    pipeline.set_state(Gst.State.PLAYING)
+    assert sink.emit("try-pull-sample", 5 * Gst.SECOND) is not None
+    names = []
+    it = pipeline.iterate_recurse()
+    while True:
+        res, el = it.next()
+        if res != Gst.IteratorResult.OK:
+            break
+        klass = el.get_factory().get_metadata("klass") if el.get_factory() else ""
+        names.append((el.get_factory().get_name() if el.get_factory() else "", klass))
+    pipeline.set_state(Gst.State.NULL)
+    assert not [n for n, k in names if "Decoder" in k and "Video" in k], names
+    assert [n for n, k in names if "Decoder" in k and "Audio" in k]
+
+
+def test_no_audio_is_none_but_failures_raise(tmp_path):
+    from jetson_player.media.loudness import LoudnessError
+    if not Gst.ElementFactory.find("vp8enc"):
+        pytest.skip("vp8enc 없음")
+    silent_video = tmp_path / "noaudio.mkv"
+    _encode(silent_video, "videotestsrc num-buffers=25 ! video/x-raw,width=160,height=120 ! vp8enc ! matroskamux "
+                          "! filesink location={path}")
+    assert measure_file(str(silent_video)) is None          # 오디오 없음 → 저장해도 되는 결과
+    with pytest.raises(LoudnessError):
+        measure_file(str(tmp_path / "missing.mkv"))         # 읽기 실패 → 저장하면 안 되는 실패

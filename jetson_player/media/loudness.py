@@ -97,6 +97,9 @@ def build_meter_pipeline(uri):
     src = Gst.ElementFactory.make("uridecodebin", None)
     src.set_property("uri", uri)
     src.set_property("caps", Gst.Caps.from_string("audio/x-raw"))
+    # caps만으로는 영상 디코더가 붙는 것을 막지 못합니다. 영상·자막 디코더는 고르지 않고 스트림을 그대로 내보내
+    # (연결하지 않고) 버립니다 — 측정이 빨라지고, NVDEC가 못 여는 영상 때문에 측정이 실패하지 않습니다.
+    src.connect("autoplug-select", _skip_non_audio_decoders)
     conv = Gst.ElementFactory.make("audioconvert", None)
     resample = Gst.ElementFactory.make("audioresample", None)
     caps = Gst.ElementFactory.make("capsfilter", None)
@@ -114,19 +117,38 @@ def build_meter_pipeline(uri):
     caps.link(kweight)
     kweight.link(sink)
 
+    streams = {"audio": False, "complete": False}   # 오디오 스트림을 봤는지, 모든 스트림이 나왔는지
+
     def on_pad(_src, pad):
         pad_caps = pad.get_current_caps() or pad.query_caps(None)
-        if pad_caps and pad_caps.get_structure(0).get_name().startswith("audio/"):
+        if pad_caps and pad_caps.get_structure(0).get_name() == "audio/x-raw":
+            streams["audio"] = True
             target = conv.get_static_pad("sink")
             if not target.is_linked():
                 pad.link(target)
 
     src.connect("pad-added", on_pad)
+    src.connect("no-more-pads", lambda _src: streams.__setitem__("complete", True))
+    pipeline.streams = streams
     return pipeline, sink
 
 
+AUTOPLUG_TRY, AUTOPLUG_EXPOSE = 0, 1   # GstAutoplugSelectResult
+
+
+def _skip_non_audio_decoders(_bin, _pad, _caps, factory):
+    klass = factory.get_metadata("klass") or ""
+    if "Decoder" in klass and any(k in klass for k in ("Video", "Image", "Subtitle")):
+        return AUTOPLUG_EXPOSE
+    return AUTOPLUG_TRY
+
+
+class LoudnessError(Exception):
+    """측정 실패 (디코딩 오류, 시간 초과) — '오디오 없음'과 구분해 결과를 저장하지 않습니다."""
+
+
 def measure_file(path, cancelled=lambda: False, timeout_sec=900):
-    """파일 전체의 통합 음량(LUFS). 오디오가 없거나 실패하면 None"""
+    """파일 전체의 통합 음량(LUFS). 오디오가 없거나 무음이면 None, 측정하지 못하면 LoudnessError"""
     pipeline, sink = build_meter_pipeline(Gst.filename_to_uri(os.path.abspath(path)))
     meter = LoudnessMeter()
     bus = pipeline.get_bus()
@@ -146,8 +168,9 @@ def measure_file(path, cancelled=lambda: False, timeout_sec=900):
             msg = bus.pop_filtered(Gst.MessageType.EOS | Gst.MessageType.ERROR)
             if msg is not None:
                 if msg.type == Gst.MessageType.ERROR:
-                    log.debug(f"음량 측정 실패 ({os.path.basename(path)}): {msg.parse_error()[0].message}")
-                    return None
+                    if pipeline.streams["complete"] and not pipeline.streams["audio"]:
+                        return None      # 스트림을 다 확인했는데 오디오가 없는 파일
+                    raise LoudnessError(msg.parse_error()[0].message)
                 result = meter.integrated()
                 break
             if sink.get_property("eos"):
@@ -155,14 +178,14 @@ def measure_file(path, cancelled=lambda: False, timeout_sec=900):
                 break
             waited += 0.2
             if waited > timeout_sec:
-                break
+                raise LoudnessError("시간 초과")
     finally:
         pipeline.set_state(Gst.State.NULL)
     return result
 
 
 class LoudnessJob:
-    """백그라운드 음량 측정 (낮은 우선순위 스레드). on_done(lufs)는 작업 스레드에서 호출됩니다."""
+    """백그라운드 음량 측정 (낮은 우선순위 스레드). on_done(lufs, error)는 작업 스레드에서 호출됩니다."""
 
     def __init__(self, path, on_done):
         self.path = path
@@ -182,6 +205,9 @@ class LoudnessJob:
             os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 15)   # 재생을 방해하지 않게
         except (AttributeError, OSError):
             pass
-        lufs = measure_file(self.path, cancelled=lambda: self.cancelled)
+        try:
+            lufs, error = measure_file(self.path, cancelled=lambda: self.cancelled), None
+        except LoudnessError as e:
+            lufs, error = None, str(e)
         if not self.cancelled:
-            self.on_done(lufs)
+            self.on_done(lufs, error)

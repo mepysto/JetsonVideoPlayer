@@ -205,7 +205,11 @@ def _parse_style(fields, values, legacy):
 # ---- 재정의 태그 ---------------------------------------------------------------
 
 _BLOCK = re.compile(r"\{([^}]*)\}")
-_TAG = re.compile(r"\\(\d?[a-zA-Z]+)(\([^)]*\)|[^\\]*)")
+# 태그 이름 뒤에 글자가 바로 붙는 경우(\fnComic Sans, \rSign)가 있어 알려진 태그 이름을 긴 것부터 맞춥니다.
+_TAG_NAMES = sorted("""1c 2c 3c 4c 1a 2a 3a 4a alpha xbord ybord bord xshad yshad shad blur be fscx fscy fsp fs fn fe
+    frx fry frz fr fax fay an a pos move org fade fad iclip clip kf ko k K q r b i u s p t c""".split(),
+                    key=len, reverse=True)
+_TAG = re.compile(r"\\(" + "|".join(_TAG_NAMES) + r")(\([^)]*\)|[^\\]*)")
 
 
 def _parse_text(text, style, styles, event):

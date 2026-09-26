@@ -48,4 +48,8 @@ def test_transfer_of_caps():
     assert hdr.transfer_of_caps(cap("bt2100-pq")) == "pq"
     assert hdr.transfer_of_caps(cap("bt2100-hlg")) == "hlg"
     assert hdr.transfer_of_caps(cap("bt709")) is None
+    # 전체 범위 등 이름 있는 조합이 아니면 숫자로 적힘 (범위:행렬:전달:원색)
+    assert hdr.transfer_of_caps(cap("1:6:14:7")) == "pq"
+    assert hdr.transfer_of_caps(cap("1:6:15:7")) == "hlg"
+    assert hdr.transfer_of_caps(cap("2:4:5:2")) is None
     assert hdr.transfer_of_caps(Gst.Caps.from_string("video/x-raw")) is None and hdr.transfer_of_caps(None) is None

@@ -111,3 +111,17 @@ def test_matroska_blocks_and_dedupe():
     live.add_events([ev])
     live.add_events([matroska_block_to_event("7,0,Sign,,0,0,0,,{\\an5}Center", s.styles, 1000, 2000)])
     assert len(live.active_at(1500)) == 1
+
+
+def test_tag_arguments_that_start_with_letters():
+    """\\fnComic Sans, \\rSign처럼 인자가 영문자로 시작해도 태그 이름과 구분합니다."""
+    s = parse_ass(r"""[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, Bold
+Style: Default,Arial,40,&H00FFFFFF,0
+Style: Sign,Impact,60,&H0000FFFF,-1
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,{\fnComic Sans}Hello {\rSign}World {\r\fscx120\blur2\b1}bold
+""")
+    runs = [(r.text, r.font, r.size, r.bold) for r in s.events[0].runs]
+    assert runs == [("Hello ", "Comic Sans", 40.0, False), ("World ", "Impact", 60.0, True), ("bold", "Arial", 40.0, True)]

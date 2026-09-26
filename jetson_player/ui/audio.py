@@ -73,7 +73,11 @@ class AudioEffectsMixin:
             self._apply_measured_loudness(path, lufs)
             return
 
-        def done(value):
+        def done(value, error):
+            if error:
+                # 측정 실패는 저장하지 않습니다 (다음 재생 때 다시 측정). 이번에는 이득 없이 재생.
+                log.info(f"🔊 [음량 평준화] 측정 실패 ({os.path.basename(path)}): {error}")
+                return
             loudness_cache.store(path, value)
             GLib.idle_add(lambda: (self._apply_measured_loudness(path, value), False)[1])
 

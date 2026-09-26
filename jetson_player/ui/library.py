@@ -142,6 +142,7 @@ class LibraryMixin:
             return
         prev_input, prev_single = self.input_path, self.is_single_file_mode
         self.input_path = input_path
+        self.playlist_from_files = False
         if not self.build_playlist(scanned):
             # 기존 재생목록을 유지하고 앱을 종료하지 않습니다.
             self.input_path, self.is_single_file_mode = prev_input, prev_single
@@ -193,7 +194,8 @@ class LibraryMixin:
         self.input_path = os.path.dirname(valid_files[0]) if len(valid_files) > 1 else valid_files[0]
         self.current_index = 0
         self.is_single_file_mode = (len(valid_files) == 1)
-        self.stop_folder_watch()   # 직접 고른 파일 목록은 폴더 감시 대상이 아님
+        self.playlist_from_files = True   # 직접 고른 파일 목록: 폴더 감시·새로고침 대상이 아님 (폴더 전체로 바뀌지 않게)
+        self.stop_folder_watch()
         self.populate_playlist_tree()
         self.refresh_playlist_ui()
         if getattr(self, "placeholder_box", None):

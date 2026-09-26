@@ -31,7 +31,7 @@ class FolderWatchMixin:
         """현재 재생목록 폴더(input_path)를 감시합니다. 폴더가 아니면(단일 파일·파일 목록) 감시하지 않습니다."""
         self.stop_folder_watch()
         root = self.input_path
-        if self.is_single_file_mode or not root or not os.path.isdir(root):
+        if not self._playlist_is_folder():
             return
         dirs = None if is_gvfs_path(root) else _watched_dirs(root, MAX_WATCHED_DIRS)
         if dirs is None:
@@ -50,6 +50,12 @@ class FolderWatchMixin:
             monitors.append(mon)
         self._folder_monitors = monitors
         log.debug(f"📂 폴더 감시: {len(monitors)}개 폴더 ({root})")
+
+    def _playlist_is_folder(self):
+        """폴더를 열어 만든 재생목록인지 (단일 파일·직접 고른 파일 목록·M3U는 아님)"""
+        root = self.input_path
+        return bool(root) and os.path.isdir(root) and not self.is_single_file_mode \
+            and not getattr(self, "playlist_from_files", False)
 
     def stop_folder_watch(self):
         for mon in getattr(self, "_folder_monitors", []):
@@ -90,7 +96,7 @@ class FolderWatchMixin:
     def rescan_playlist(self, quiet=False):
         """재생목록 폴더를 다시 읽어 추가·삭제된 영상을 반영합니다 (재생은 계속됩니다)."""
         root = self.input_path
-        if self.is_single_file_mode or not root or not os.path.isdir(root):
+        if not self._playlist_is_folder():
             if not quiet:
                 self.show_osd("ℹ️ 폴더로 연 재생목록만 새로고침할 수 있습니다.")
             return
