@@ -3,7 +3,7 @@ import JetsonPlayer
 import QtQuick.Controls.Basic
 
 // ⋯ 더 보기 메뉴: 자주 쓰지 않는 기능과 설정을 한곳에 (파이썬 버전 ui/menu.py와 같은 구성)
-Menu {
+JMenu {
     id: menu
     readonly property bool hasVideo: App.hasVideo
 
@@ -20,7 +20,7 @@ Menu {
 
     // 2) 재생·화면·소리 설정
     MenuItem { text: "🌙 야간 모드: 대사 크게·폭음 작게 (E)"; checkable: true; checked: App.nightMode; onTriggered: App.toggleNightMode() }
-    Menu {
+    JMenu {
         title: App.sleepMenuLabel
         Repeater {
             model: [[0, "끄기"], [15, "15분 후"], [30, "30분 후"], [60, "60분 후"], [-1, "현재 영상이 끝나면"]]
@@ -31,7 +31,7 @@ Menu {
             }
         }
     }
-    Menu {
+    JMenu {
         title: "🔄 화면 회전 (V)"
         Repeater {
             model: [["identity", "원래대로"], ["90r", "오른쪽으로 90°"], ["180", "180°"], ["90l", "왼쪽으로 90°"],
@@ -47,7 +47,7 @@ Menu {
     MenuItem { text: "🎨 ASS 자막을 원래 글꼴·색·위치로"; checkable: true; checked: App.settings.subtitle_ass_styles; onTriggered: App.toggleAssStyles() }
     MenuItem { text: "🌈 HDR 영상 톤매핑 (SDR 화면에서 자연스러운 색)"; checkable: true; checked: App.settings.hdr_tonemap; onTriggered: App.toggleHdrTonemap() }
     MenuItem { text: App.loudnessMenuLabel; checkable: true; checked: App.settings.loudness_normalize; onTriggered: App.toggleLoudness() }
-    Menu {
+    JMenu {
         title: "🎚️ EQ: " + App.eqPresetName
         Repeater {
             model: App.eqPresets()
@@ -59,9 +59,9 @@ Menu {
         }
     }
     MenuItem { text: "🔈 HDMI 패스스루 (AC3/DTS 원음 → AV 리시버, 실험적)"; checkable: true; checked: App.settings.audio_passthrough; onTriggered: App.togglePassthrough() }
-    Menu {
+    JMenu {
         title: "🤖 AI 자막 설정"
-        Menu {
+        JMenu {
             title: "인식 언어"
             Repeater {
                 model: App.ai.languages()
@@ -72,7 +72,7 @@ Menu {
                 }
             }
         }
-        Menu {
+        JMenu {
             title: "인식 모델"
             Repeater {
                 model: App.ai.models()
@@ -86,7 +86,7 @@ Menu {
         MenuItem { text: "영어로 번역하며 인식"; checkable: true; checked: App.settings.whisper_translate; onTriggered: App.toggleSetting("whisper_translate") }
         MenuItem { text: "YouTube 영상은 자동 생성"; checkable: true; checked: App.settings.youtube_auto_ai_subtitles; onTriggered: App.toggleSetting("youtube_auto_ai_subtitles") }
         MenuItem { text: "AI 자막을 만들면 자동으로 번역"; checkable: true; checked: App.settings.whisper_auto_translate; onTriggered: App.toggleSetting("whisper_auto_translate") }
-        Menu {
+        JMenu {
             title: "번역할 언어"
             Repeater {
                 model: [["ko", "한국어"], ["en", "영어"], ["ja", "일본어"], ["zh", "중국어"]]
@@ -97,7 +97,7 @@ Menu {
                 }
             }
         }
-        Menu {
+        JMenu {
             title: "번역 엔진"
             Repeater {
                 model: [["auto", "자동"], ["local", "로컬 번역 모델 (NLLB-200)"], ["claude", "Claude API"]]
@@ -109,7 +109,7 @@ Menu {
             }
         }
     }
-    Menu {
+    JMenu {
         title: "🖥️ 화면 모드"
         Repeater {
             model: [["auto", "자동 (키오스크면 TV)"], ["desktop", "데스크톱"], ["tv", "TV (리모컨·큰 글씨)"]]

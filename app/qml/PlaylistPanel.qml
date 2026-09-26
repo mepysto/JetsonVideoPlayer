@@ -113,7 +113,7 @@ Rectangle {
         }
     }
 
-    Menu {
+    JMenu {
         id: rowMenu
         property var row: null
         MenuItem { text: "▶️ 지금 재생"; enabled: rowMenu.row && !rowMenu.row.isFolder; onTriggered: App.playIndex(rowMenu.row.playlistIndex) }

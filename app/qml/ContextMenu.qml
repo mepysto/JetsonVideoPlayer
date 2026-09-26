@@ -3,11 +3,11 @@ import JetsonPlayer
 import QtQuick.Controls.Basic
 
 // 영상 우클릭 빠른 조작 메뉴
-Menu {
+JMenu {
     MenuItem { text: App.playing ? "⏸ 일시정지 (Space)" : "▶ 재생 (Space)"; onTriggered: App.togglePlayPause() }
     MenuItem { text: "⏮ 이전 영상 (P)"; onTriggered: App.playPrevious() }
     MenuItem { text: "⏭ 다음 영상 (N)"; onTriggered: App.playNext() }
-    Menu {
+    JMenu {
         title: "⚡ 재생 속도 (" + App.rate.toFixed(2) + "x)"
         Repeater {
             model: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
