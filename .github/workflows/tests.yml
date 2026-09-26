@@ -6,10 +6,49 @@ on:
   pull_request:
 
 jobs:
-  test:
-    # 모듈 단위 테스트 + GStreamer 파이프라인 테스트(fakesink) + 가상 디스플레이(Xvfb)에서 창 전체를 띄우는 스모크 테스트.
-    # Jetson 전용 경로(NVDEC, nvvidconv)는 CI에서 다루지 않습니다.
+  cpp:
+    # C++/Qt 앱: 빌드 + QtTest 단위 테스트 + 실제 앱을 띄워 웹 리모컨 API로 조작하는 e2e 테스트 (Xvfb, Mesa GL).
+    # Jetson 전용 경로(NVDEC, NVMM)는 CI에서 다루지 않습니다 — 소프트웨어 디코딩·업로드 경로를 검증합니다.
     runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libass-dev \
+            libegl-dev libgles-dev libxcb-cursor0 libxkbcommon-x11-0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools \
+            fonts-noto-cjk xvfb dbus-x11 python3-pytest
+
+      - name: Install Qt (6.8 LTS — the minimum the app supports)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          cache: true
+
+      - name: Build
+        run: |
+          cmake -S app -B app/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build app/build -j4
+
+      - name: Unit tests (ctest)
+        working-directory: app/build
+        run: QT_QPA_PLATFORM=offscreen ctest --output-on-failure -j2
+
+      - name: End-to-end tests (real app under Xvfb)
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- \
+            env JVP_HW_VIDEO=0 python3 -m pytest -q app/tests/e2e
+
+  python-legacy:
+    # 이전 Python/GTK 버전 (legacy/python): 모듈 단위 테스트 + GStreamer 파이프라인 + Xvfb 스모크 테스트
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: legacy/python
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +67,8 @@ jobs:
             jetson_player/subtitles jetson_player/ui tests scripts/check_deps.py
 
       - name: Shell script syntax
-        run: for f in install.sh uninstall.sh bin/jetson-player scripts/*.sh; do bash -n "$f"; done
+        working-directory: .
+        run: for f in install.sh uninstall.sh scripts/*.sh legacy/python/*.sh legacy/python/bin/jetson-player app/packaging/*.sh app/packaging/jetson-player-kiosk; do bash -n "$f"; done
 
       - name: Unit and integration tests
         run: xvfb-run -a python3 -m pytest -q tests

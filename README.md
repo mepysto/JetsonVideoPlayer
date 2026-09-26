@@ -2,23 +2,27 @@
 
 [![tests](https://github.com/mepysto/JetsonVideoPlayer/actions/workflows/tests.yml/badge.svg)](https://github.com/mepysto/JetsonVideoPlayer/actions/workflows/tests.yml)
 
-NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.265/H.264/VP9/AV1 영상을 재생하는 GTK3 + GStreamer 영상 플레이어입니다.
-영상 위 자막 렌더러, GPU(Whisper) AI 자막 생성, 타임라인 썸네일·장면 챕터, 스마트폰 웹 리모컨, 시스템 미디어 키 연동을 제공합니다.
+NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC)로 4K H.265/H.264/VP9/AV1 영상을 재생하는 **C++ / Qt 6 / QML + GStreamer** 영상 플레이어입니다.
+NVDEC 출력을 복사 없이(zero-copy) 화면에 올리고, libass 자막, GPU(Whisper) AI 자막·번역, 타임라인 썸네일·장면 챕터,
+스마트폰 웹 리모컨, 시스템 미디어 키, **TV 화면과 데스크톱 없는 전용 기기(키오스크) 모드**를 제공합니다.
+
+> 이전 Python/GTK 버전은 [`legacy/python/`](legacy/python)에 보관되어 있습니다 (`jetson-player-py` 명령, 기능 동결).
+> 설정·이어보기·북마크·썸네일·AI 자막 파일은 두 버전이 같은 위치·형식을 쓰므로 그대로 이어집니다.
 
 ---
 
 ## 주요 기능
 
 ### 1. 하드웨어 가속 재생
-- 디코딩은 NVDEC이 맡고, `nvvidconv`(VIC)가 GTK GL 화면으로 넘깁니다. 4K H.265 24fps 재생 시 CPU 사용량은 코어 약 0.9개입니다(소프트웨어 디코딩은 약 2.3개).
-- 재생 전에 코덱·색 샘플링·비트 깊이로 NVDEC 지원 여부를 판별합니다(H.264 8-bit, HEVC/VP9 최대 12-bit, AV1 최대 10-bit, 4:2:0). 지원하지 않는 형식은 처음부터 소프트웨어로 재생해 시작할 때 끊기지 않습니다.
+- 디코딩은 NVDEC이 맡고, `nvvidconv`(VIC)가 만든 GPU 메모리(NVMM) 프레임을 **복사 없이** EGLImage로 Qt Quick 화면에 올립니다. 4K H.265 재생 시 CPU 사용량은 **코어 약 0.13개**, 메모리 약 0.7GB입니다(이전 Python 버전 0.9개·1.1GB).
+- 재생 전에 코덱·색 샘플링·비트 깊이로 NVDEC 지원 여부를 판별합니다(H.264 8-bit, HEVC/VP9 최대 12-bit, AV1 최대 10-bit, 4:2:0). 디코딩 없이 컨테이너만 읽어(parsebin) 판별하므로 NVDEC가 못 푸는 형식(HEVC 4:4:4 등)도 정확히 알아내고, 처음부터 소프트웨어로 재생해 시작할 때 끊기지 않습니다.
 - 판별이 어려운 파일에서 하드웨어 경로가 실패하면 해당 파일만 소프트웨어 경로로 자동 재시도합니다. 환경 변수 `JVP_HW_VIDEO=0`으로 하드웨어 경로를 끌 수 있습니다.
 - **🌈 HDR 톤매핑**: HDR10(PQ)·HLG 영상을 SDR 화면에 맞게 GPU 셰이더로 변환합니다. 그대로 보이면 색이 바래고 밋밋해지는 문제를 막습니다(BT.2408 기준 백색 203nit, 밝은 부분만 부드럽게 압축, BT.2020→BT.709 색역). NVDEC 경로·소프트웨어 경로 모두 지원하며 4K에서도 프레임 드롭이 없었습니다. `⋯` 메뉴에서 끌 수 있고, `I` HUD에 HDR 여부가 표시됩니다.
 - `I` 키 HUD에 **실제로 동작 중인 디코더**, SoC 온도, GPU 부하, RAM 사용량이 표시됩니다.
 
 ### 2. 자막
 - **외부 자막**(SMI/SRT/VTT/ASS), **MKV 내장 자막**, **AI 자막**을 모두 영상 위 오버레이로 직접 그립니다(외곽선, 언어별 색상, 레터박스 인식).
-- **ASS/SSA 스타일**: 외부 `.ass`/`.ssa` 파일과 MKV 내장 ASS 자막을 원래 글꼴·색·외곽선·그림자·위치(`\pos`, `\an`, 여백)·불투명 상자로 그립니다. 애니메이션 효과(`\t`, `\fad`, 노래방 `\k`)와 그림(`\p`)은 지원하지 않습니다. `⋯` 메뉴에서 끄면 다른 자막과 같은 모양으로 표시합니다.
+- **ASS/SSA 스타일**: 외부 `.ass`/`.ssa` 파일과 MKV 내장 ASS 자막을 **libass**로 그려 원래 글꼴·색·외곽선·그림자·위치는 물론 애니메이션(`\t`, `\fad`, `\move`), 노래방(`\k`), 그림(`\p`)까지 그대로 재현합니다. `⋯` 메뉴에서 끄면 다른 자막과 같은 모양으로 표시합니다.
 - 여러 언어를 동시에 표시할 수 있고(언어 뱃지 `[KR]`, `[EN]` 등), 싱크·크기 조절이 파이프라인 재시작 없이 **즉시** 반영됩니다.
 - **🤖 AI 자막 (`G`)**: Orin GPU에서 whisper.cpp로 음성을 인식합니다.
   - 지금 보고 있는 위치부터 먼저 인식해 약 5초 안에 첫 자막이 나오고, 11분 영상 전체는 약 45초가 걸립니다.
@@ -84,15 +88,28 @@ NVIDIA Jetson(Orin)의 하드웨어 디코더(NVDEC, `nvv4l2decoder`)로 4K H.26
 
 ---
 
+### 9. TV 화면 · 전용 기기(키오스크) 모드
+- **TV 화면** (`jetson-player --tv`, 또는 `⋯` → 🖥️ 화면 모드): 리모컨·키보드 방향키만으로 조작하는 큰 글씨 화면입니다. 홈(이어보기·재생목록·열기 타일) → OK로 재생, 재생 중 OK로 조작 패널, ←/→ 탐색, ↑/↓ 볼륨, Back으로 닫기, Menu(M)로 설정.
+- **키오스크 모드**: `.deb` 패키지로 설치한 뒤 `sudo jetson-player-kiosk enable [사용자] [미디어 폴더]` → 재부팅하면 데스크톱(GNOME) 없이 곧바로 플레이어가 전체화면(Qt EGLFS, KMS 직접 출력)으로 뜹니다. 메모리와 부팅 시간이 줄고, 앱이 비정상 종료되면 자동으로 다시 시작합니다. `sudo jetson-player-kiosk disable`로 데스크톱으로 돌아갑니다. 설정: `/etc/default/jetson-player-kiosk`.
+
+---
+
 ## 설치 및 실행
 
+처음 한 번:
 ```bash
-./install.sh                     # 실행 환경 점검 + ~/.local/bin 에 jetson-player 등록 (시스템 전체: sudo ./install.sh --system)
-./install.sh --set-default       # 영상 파일을 더블클릭하면 이 플레이어로 열리도록 기본 앱 지정 (선택)
+./scripts/install_build_deps.sh  # 빌드 도구·GStreamer·libass 개발 패키지 (sudo)
+./scripts/setup_qt.sh            # 최신 Qt(6.11)를 ~/Qt 에 설치 (우분투 apt의 Qt 6.4는 너무 오래됨, 약 1.7GB)
+```
+
+설치 (둘 중 하나):
+```bash
+./install.sh                     # 빌드 후 ~/.local 에 설치 → jetson-player 명령, 앱 메뉴 항목 (시스템 전체: sudo ./install.sh --system)
+./install.sh --deb               # Qt를 포함한 .deb 패키지를 만들어 설치 (/opt/jetson-player, 키오스크 서비스 포함)
+./install.sh --set-default       # (선택) 영상 파일을 더블클릭하면 이 플레이어로 열리도록 기본 앱 지정
 ./scripts/setup_whisper.sh       # (선택) AI 자막 엔진: whisper.cpp CUDA 빌드 + small 모델 (Orin Nano에서 빌드 약 1시간)
 ./scripts/setup_whisper.sh large-v3-turbo-q5_0   # (선택) 더 정확한 인식 모델 추가
 ./scripts/setup_translator.sh    # (선택) 자막 번역 엔진: NLLB-200 번역 모델 (약 650MB, 몇 분)
-python3 scripts/check_deps.py    # 실행 환경만 다시 점검
 ./uninstall.sh                   # 제거 (설정·기록은 유지)
 ```
 
@@ -102,9 +119,10 @@ jetson-player /path/to/video.mp4       # 파일 재생
 jetson-player /path/to/video-folder    # 폴더(하위 폴더 포함) 재생목록
 jetson-player /path/to/list.m3u8       # M3U 재생목록
 jetson-player "https://youtu.be/..."   # YouTube 받아서 재생
+jetson-player --tv                     # TV 화면 (리모컨·큰 글씨)   --kiosk: 전체화면 고정
 ```
 
-**필요 패키지**: Python 3, PyGObject(GTK 3, GStreamer 1.0), NVIDIA JetPack GStreamer 플러그인(`nvv4l2decoder`, `nvvidconv`), numpy, dbus-python(MPRIS용), yt-dlp(YouTube용, 선택).
+**필요 패키지**: Qt 6.8 이상(Quick, QuickControls2, Network, DBus), GStreamer 1.0 개발 패키지, libass, NVIDIA JetPack GStreamer 플러그인(`nvv4l2decoder`, `nvvidconv`)과 Jetson Multimedia API(`nvbufsurface.h`, 없으면 복사 경로로 빌드), yt-dlp(YouTube용, 선택).
 
 ---
 
@@ -186,45 +204,30 @@ jetson-player "https://youtu.be/..."   # YouTube 받아서 재생
 ## 프로젝트 구조 (개발자용)
 
 ```
-jetson_player.py            # 실행 진입점 (bin/jetson-player가 실행). `python3 -m jetson_player`도 가능
-jetson_player/
-  __init__.py               # PATH/DISPLAY 환경 설정, gi 라이브러리 버전 고정 (GTK 로드 전에 실행)
-  app.py                    # 명령줄 처리, 종료 신호 처리, GTK 메인 루프
-  log.py                    # 로그 설정 (터미널 + 회전 로그 파일)
-  settings.py               # 사용자 설정 (settings.json)
-  shortcuts.py              # 단축키 정의 테이블 (키 처리 · 도움말 · README 표의 단일 출처)
-  storage.py                # 이어보기/시청 완료/북마크/최근 기록/HW 캐시 (JSON, 원자적 저장)
-  library.py                # 영상 파일 탐색 · 정렬
-  youtube.py                # YouTube URL 처리, yt-dlp 다운로드 대기열
-  network.py                # 네트워크 폴더 (GVfs 마운트, 주소↔로컬 경로)
-  mpris.py                  # MPRIS2 D-Bus 서비스
-  system.py                 # 파일 관리자 연동, Jetson 온도/GPU/RAM, 로컬 IP
-  ai/whisper.py             # AI 자막 (whisper.cpp 실행, 음성 추출, SRT 저장)
-  ai/translate.py           # 자막 번역 (NLLB 로컬 / Claude API), 문장 재분할
-  media/codecs.py           # NVDEC 지원 형식 판별
-  media/gst_setup.py        # NVDEC 우선순위, HW 영상 출력(nvvidconv) 구성
-  media/thumbnails.py       # 썸네일 생성, 정밀 장면 분석
-  media/scenes.py           # 장면 전환 검출 (중앙값/MAD 기준)
-  media/loudness.py         # 음량 측정 (BS.1770 K-가중 + 게이팅)
-  media/hdr.py              # HDR(PQ/HLG) → SDR 톤매핑 셰이더와 참조 계산
-  subtitles/parse.py        # 자막 파일 탐색 · 파싱 · 언어 감지
-  subtitles/ass.py          # ASS/SSA 스타일·재정의 태그·위치 해석
-  subtitles/opensubtitles.py # OpenSubtitles.com API (검색·다운로드·파일 해시)
-  subtitles/timeline.py     # 재생 위치별 표시 대사 조회
-  remote/                   # 웹 리모컨: HTTP 핸들러, PIN 인증, SSE, 정적 페이지
-  ui/window.py              # 메인 창: 상태 초기화, 키 처리, 종료
-  subtitles/search.py       # 대사 검색 색인 (재생목록 전체 자막)
-  ui/*.py                   # 기능별 mixin (state, playback, search, controls, timeline, playlist, subtitles,
-                            #   subtitle_overlay, ai, viewing, library, features, remote, youtube, menu, layout)
-  ui/style.css              # GTK 테마
-  vendor/qrcodegen.py       # QR 코드 생성 (MIT, Project Nayuki)
-scripts/setup_whisper.sh    # AI 자막 엔진 설치
-scripts/setup_translator.sh # 자막 번역 엔진 설치
-scripts/check_deps.py       # 실행 환경 점검
-.github/workflows/tests.yml # CI: 정적 검사 + 테스트
-tests/                      # pytest (GTK 없이 실행되는 모듈 테스트)
+app/                          # C++ / Qt 6 / QML 앱 (CMake)
+  src/main.cpp                # 명령줄, 로그, 종료 신호, QML 엔진
+  src/core/                   # GUI 없는 로직 — 설정, 저장소(JSON), 재생목록·M3U, 코덱 판별, 네트워크 주소,
+                              #   단축키 표, 로그, 자막 파싱·타임라인·대사 검색, libass 렌더러
+  src/media/                  # GStreamer — PlayerEngine(playbin, 오디오 효과, 내장 자막), FrameBridge(appsink→렌더 스레드),
+                              #   VideoItem(NVMM EGLImage·YUV 업로드·HDR 셰이더·회전), MediaProbe, 음량·썸네일·장면 분석
+  src/services/               # 웹 리모컨(HTTP·SSE·PIN), MPRIS, 네트워크 마운트(GIO), QR, whisper.cpp, 번역, YouTube, OpenSubtitles
+  src/ui/                     # QML에 보이는 컨트롤러 — AppController(싱글톤 App: 재생 정책·재생목록·서비스),
+                              #   자막·AI·YouTube·온라인 자막 컨트롤러, 재생목록 트리 모델, 자막 오버레이
+  qml/                        # 화면 — Main, DesktopLayout(상단바·영상·재생목록·컨트롤), tv/(TV 화면), dialogs/, components/
+  resources/remote/           # 웹 리모컨 페이지 (index/login/share.html)
+  tools/nllb_worker.py        # 로컬 번역 보조 프로세스
+  tests/                      # QtTest 단위 테스트 (ctest), e2e/ — 실제 앱을 띄워 리모컨 API로 조작하는 pytest
+  packaging/                  # .deb 빌드, 데스크톱 항목, 키오스크 systemd 서비스
+scripts/                      # 빌드 도구·Qt·AI 엔진 설치
+legacy/python/                # 이전 Python/GTK 버전 (보관, jetson-player-py)
+.github/workflows/tests.yml   # CI: C++ 빌드·단위·e2e 테스트 + 이전 Python 버전 테스트
 ```
 
-테스트: `python3 -m pytest tests` (창을 띄우는 스모크 테스트는 `xvfb-run`이 있으면 가상 디스플레이에서 실행, 없으면 건너뜀)
+빌드와 테스트:
+```bash
+cmake -S app -B app/build -G Ninja && ninja -j3 -C app/build      # ~/Qt/<버전> 을 자동으로 찾습니다
+(cd app/build && QT_QPA_PLATFORM=offscreen ctest)                # 단위 테스트
+python3 -m pytest app/tests/e2e                                   # 실제 앱 e2e (화면 필요)
+```
 
-로그: 터미널과 `~/.cache/jetson_video_player/player.log`(1MB × 4개 회전)에 기록합니다. `⋯` 메뉴 → **📄 로그 파일 보기**로 열 수 있고, `JVP_LOG_LEVEL=DEBUG jetson-player …`로 자세한 로그를 볼 수 있습니다. `JVP_VIDEO_SINK=gtk`는 OpenGL 없이 재생합니다(진단용).
+로그: 터미널과 `~/.cache/jetson_video_player/player.log`(1MB × 4개 회전)에 기록합니다. `⋯` 메뉴 → **📄 로그 파일 보기**로 열 수 있고, `jetson-player --log-level DEBUG …`(또는 `JVP_LOG_LEVEL=DEBUG`)로 자세한 로그를 볼 수 있습니다. `JVP_HW_VIDEO=0`은 NVMM 직접 출력을 끄고 복사 경로로 재생합니다(진단용).
