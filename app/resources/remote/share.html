@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0c1017">
+<title>Jetson Player — 링크 보내기</title>
+<link rel="icon" href="/icon.svg">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
+         min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { width: 100%; max-width: 380px; background: #141a24; border: 1px solid #232c3d; border-radius: 18px; padding: 26px 22px; text-align: center;
+          display: flex; flex-direction: column; gap: 14px; }
+  .title { font-size: 17px; font-weight: 800; color: #e9ff5b; letter-spacing: 1px; }
+  .url { font: 12px monospace; color: #94a3b8; word-break: break-all; background: #0f141d; border: 1px solid #232c3d; border-radius: 10px; padding: 10px; }
+  .msg { font-size: 15px; line-height: 1.5; min-height: 22px; }
+  .msg.err { color: #ff8a80; }
+  .msg.ok { color: #34d399; }
+  input { width: 100%; font-size: 32px; letter-spacing: 16px; text-align: center; padding: 12px 0 12px 16px; background: #0f141d;
+          color: #fff; border: 1px solid #2a3447; border-radius: 12px; outline: none; font-family: monospace; }
+  input:focus { border-color: #e9ff5b; }
+  button, a.btn { width: 100%; padding: 14px; font-size: 16px; font-weight: 800; border: 0; border-radius: 12px; background: #e9ff5b; color: #0c1017;
+                  text-decoration: none; display: block; }
+  a.btn.secondary { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; }
+  select { width: 100%; padding: 10px; border-radius: 10px; background: #0f141d; color: #f0f4fc; border: 1px solid #2a3447; font-size: 14px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="title">📺 JETSON 으로 보내기</div>
+  <div class="url" id="url"></div>
+  <select id="quality">
+    <option value="best" selected>최고 화질 (H.264)</option>
+    <option value="1080p">1080p</option>
+    <option value="720p">720p (빠름)</option>
+    <option value="audio">오디오만</option>
+  </select>
+  <div class="msg" id="msg"></div>
+  <form id="pinForm" hidden>
+    <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" placeholder="····">
+  </form>
+  <button id="send">⬇️ 받아서 재생</button>
+  <a class="btn secondary" href="/">리모컨 열기</a>
+</div>
+<script>
+// 공유 링크(?url= 또는 ?text= 안의 주소)를 같은 출처 POST로 플레이어에 보냅니다 (버튼을 눌렀을 때만).
+// 로그인 쿠키는 SameSite=Strict라 다른 앱에서 열린 첫 요청에는 실리지 않지만, 이 페이지의 fetch에는 실립니다.
+const $ = id => document.getElementById(id);
+const q = new URLSearchParams(location.search);
+const raw = q.get('url') || q.get('text') || '';
+const found = raw.match(/https?:\/\/\S+/);
+const link = found ? found[0] : raw.trim();
+$('url').textContent = link || '(보낼 링크가 없습니다)';
+
+function show(text, cls) { const m = $('msg'); m.textContent = text; m.className = 'msg ' + (cls || ''); }
+
+async function send() {
+  if (!link) { show('보낼 링크가 없습니다.', 'err'); return; }
+  $('send').disabled = true;
+  try {
+    const r = await fetch('/api/cmd', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ action: 'yt', url: link, quality: $('quality').value }) });
+    if (r.status === 401) {
+      show('플레이어의 4자리 PIN을 입력하세요.');
+      $('pinForm').hidden = false; $('send').hidden = true; $('pin').focus();
+    } else if (r.ok) {
+      show('✅ 보냈습니다. 받는 대로 재생합니다.', 'ok');
+      $('send').hidden = true;
+    } else {
+      show('보내지 못했습니다 (' + r.status + ').', 'err');
+    }
+  } catch (e) {
+    show('플레이어에 연결할 수 없습니다.', 'err');
+  }
+  $('send').disabled = false;
+}
+
+$('pin').addEventListener('input', async () => {
+  const pin = $('pin');
+  pin.value = pin.value.replace(/\D/g, '').slice(0, 4);
+  if (pin.value.length !== 4) return;
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: pin.value }) })
+    .catch(() => null);
+  if (r && r.ok) { $('pinForm').hidden = true; send(); return; }
+  show(r && r.status === 429 ? '시도 횟수를 초과했습니다. 5분 후 다시 시도하세요.' : 'PIN이 올바르지 않습니다.', 'err');
+  pin.value = '';
+});
+$('pinForm').addEventListener('submit', e => e.preventDefault());
+// 다른 사이트가 이 주소로 이동시켜 몰래 보내지 못하도록 자동 전송하지 않고 버튼을 눌러야 보냅니다.
+$('send').addEventListener('click', send);
+if (!link) $('send').hidden = true;
+</script>
+</body>
+</html>

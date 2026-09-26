@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0c1017">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Jetson Player Remote</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  body { background: #0c1017; color: #f0f4fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
+         display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+         padding: calc(12px + env(safe-area-inset-top, 0px)) 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
+  .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 12px; }
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 4px 2px; }
+  .title { font-size: 16px; font-weight: 800; color: #e9ff5b; letter-spacing: 1px; }
+  .badge { background: #1f2937; color: #9ca3af; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .badge.online { background: #064e3b; color: #34d399; }
+  .card { background: #141a24; border: 1px solid #232c3d; border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .card-title-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card-title { font-size: 14px; font-weight: 700; color: #cbd5e1; }
+  .muted { font-size: 12px; color: #94a3b8; }
+  .now { display: flex; gap: 12px; align-items: center; }
+  .thumb { width: 128px; aspect-ratio: 16 / 9; border-radius: 8px; background: #0f141d center/cover no-repeat; flex: none; border: 1px solid #232c3d; }
+  .now-playing-title { font-size: 15px; font-weight: 700; color: #fff; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .chapter { font-size: 12px; color: #e9ff5b; margin-top: 4px; }
+  .time-row { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; font-family: monospace; }
+  .seek-wrap { position: relative; }
+  .seek-preview { position: absolute; bottom: 26px; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 2px;
+                  background: #0c1017ee; border: 1px solid #3b4455; border-radius: 8px; padding: 4px; pointer-events: none; }
+  .seek-preview img { width: 144px; aspect-ratio: 16 / 9; border-radius: 4px; background: #0f141d; object-fit: cover; }
+  .seek-preview span { font: 700 12px monospace; color: #e9ff5b; }
+  input[type=range] { width: 100%; height: 6px; border-radius: 3px; -webkit-appearance: none; appearance: none; background: #2a3447; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #e9ff5b; }
+  .btn-row { display: flex; justify-content: space-around; align-items: center; gap: 8px; }
+  button { background: #1c2433; color: #f0f4fc; border: 1px solid #2d3748; border-radius: 12px; padding: 10px 12px; font-size: 14px; font-weight: 700;
+           display: flex; align-items: center; justify-content: center; gap: 4px; }
+  button:active { background: #2d3748; transform: scale(0.97); }
+  button.on { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; }
+  button.primary { background: #e9ff5b; color: #0c1017; border-color: #e9ff5b; width: 62px; height: 62px; border-radius: 31px; font-size: 24px; }
+  button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { padding: 8px 10px; font-size: 12px; border-radius: 10px; flex: 1 1 auto; }
+  .vol-row { display: flex; align-items: center; gap: 12px; }
+  .vol-label { font-size: 13px; font-weight: 700; color: #e9ff5b; min-width: 64px; text-align: right; }
+  .speed-badge { background: #232d3f; color: #e9ff5b; padding: 3px 8px; border-radius: 6px; font: 800 13px monospace; }
+  .list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; border: 1px solid #232c3d; border-radius: 10px; }
+  .list .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; border-top: 1px solid #161c28; }
+  .list .row:first-child { border-top: 0; }
+  .list .row:active { background: #1c2432; }
+  .list .row.active { color: #e9ff5b; font-weight: 700; }
+  .list .row .t { font: 12px monospace; color: #94a3b8; flex: none; }
+  .mark-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .mark-thumb { width: 72px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; flex: none; background: #0f141d; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .empty { font-size: 12px; color: #64748b; padding: 10px; text-align: center; }
+  .progress { width: 100%; height: 6px; background: #222c3d; border-radius: 3px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0%; background: #e9ff5b; transition: width 0.2s; }
+  .search-input, select, input[type=url], input[type=text] { user-select: text; -webkit-user-select: text; width: 100%; background: #161c28; color: #f0f4fc; border: 1px solid #2a3447; border-radius: 8px; padding: 9px 12px; font-size: 14px; outline: none; }
+  .search-input:focus, input[type=url]:focus { border-color: #e9ff5b; }
+  .folder-group { margin-bottom: 8px; border: 1px solid #232c3d; border-radius: 10px; overflow: hidden; background: #0f141d; }
+  .folder-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #19202c; font-size: 13px; font-weight: 700; color: #cbd5e1; }
+  .folder-header.has-active { color: #e9ff5b; border-left: 3px solid #e9ff5b; }
+  .folder-items { display: none; flex-direction: column; }
+  .folder-items.open { display: flex; }
+  .playlist-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; font-size: 12px; color: #94a3b8; border-top: 1px solid #161c28; }
+  .playlist-item img { width: 64px; aspect-ratio: 16 / 9; border-radius: 4px; object-fit: cover; background: #161c28; flex: none; }
+  .playlist-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .playlist-item.active { background: #222b3a; color: #e9ff5b; font-weight: bold; border-left: 3px solid #e9ff5b; }
+  .playlist-item button { padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+  details summary { list-style: none; cursor: pointer; }
+  details summary::-webkit-details-marker { display: none; }
+  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: #1c2433; color: #e9ff5b;
+           border: 1px solid #3b4455; border-radius: 10px; padding: 8px 14px; font-size: 13px; font-weight: 700; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="title">⚡ JETSON REMOTE</div>
+    <div id="statusBadge" class="badge">연결 중...</div>
+  </div>
+
+  <!-- 현재 재생 -->
+  <div class="card">
+    <div class="now">
+      <div id="nowThumb" class="thumb"></div>
+      <div style="min-width:0">
+        <div id="trackTitle" class="now-playing-title">재생 중인 영상 없음</div>
+        <div id="chapterName" class="chapter"></div>
+      </div>
+    </div>
+    <div class="time-row"><span id="curTime">00:00</span><span id="durTime">00:00</span></div>
+    <div class="seek-wrap">
+      <div id="seekPreview" class="seek-preview"><img id="seekImg" alt=""><span id="seekTime">00:00</span></div>
+      <input type="range" id="progressBar" min="0" max="1000" value="0" step="1">
+    </div>
+    <div class="btn-row">
+      <button onclick="cmd('prev')">⏮</button>
+      <button onclick="cmd('seek', {delta: -10})">⏪ 10</button>
+      <button id="playBtn" class="primary" onclick="cmd('play_pause')">▶</button>
+      <button onclick="cmd('seek', {delta: 10})">10 ⏩</button>
+      <button onclick="cmd('next')">⏭</button>
+    </div>
+  </div>
+
+  <!-- 볼륨 / 속도 -->
+  <div class="card">
+    <div class="vol-row">
+      <button id="muteBtn" onclick="cmd('mute')" style="font-size:18px">🔊</button>
+      <input type="range" id="volBar" min="0" max="200" value="100" step="1">
+      <span id="volVal" class="vol-label">100%</span>
+    </div>
+    <div class="card-title-row"><span class="card-title">⚡ 재생 속도</span><span id="speedVal" class="speed-badge">1.0x</span></div>
+    <div class="chips" id="speedChips"></div>
+  </div>
+
+  <!-- 자막 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">💬 자막</span><button id="subToggle" onclick="cmd('subtitles')" style="padding:6px 10px;font-size:12px">켜기/끄기</button></div>
+    <div id="subList" class="list"></div>
+    <div class="grid3">
+      <button onclick="cmd('sub_sync', {delta: -500})">-0.5초</button>
+      <button id="subSyncVal" onclick="cmd('sub_sync_reset')">0.0s</button>
+      <button onclick="cmd('sub_sync', {delta: 500})">+0.5초</button>
+    </div>
+    <button id="aiBtn" onclick="cmd('ai_subtitles')">🤖 AI 자막 생성</button>
+    <div id="aiProgress" class="progress" style="display:none"><div></div></div>
+    <button id="trBtn" onclick="cmd('translate')">🌐 한국어로 번역</button>
+    <div id="trProgress" class="progress" style="display:none"><div></div></div>
+  </div>
+
+  <!-- 챕터 / 북마크 / 구간 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">📑 챕터 · 🔖 북마크</span><button onclick="cmd('bookmark_add')" style="padding:6px 10px;font-size:12px">＋ 북마크</button></div>
+    <div id="markList" class="list"></div>
+    <div class="grid3">
+      <button id="abA" onclick="cmd('ab_a')">[A] 시작</button>
+      <button id="abB" onclick="cmd('ab_b')">[B] 끝</button>
+      <button onclick="cmd('ab_clear')">구간 해제</button>
+    </div>
+  </div>
+
+  <!-- 화면 / 편의 -->
+  <div class="card">
+    <div class="card-title">🎛️ 화면 · 소리 · 편의</div>
+    <div class="grid">
+      <button onclick="cmd('fullscreen')">📺 전체화면</button>
+      <button id="repeatBtn" onclick="cmd('repeat')">🔁 반복</button>
+      <button id="nightBtn" onclick="cmd('night')">🌙 야간 모드</button>
+      <button onclick="cmd('rotate')">🔄 화면 회전</button>
+      <button id="audioBtn" onclick="cmd('audio_cycle')">🎵 음성 트랙</button>
+      <button onclick="cmd('screenshot')">📸 캡처</button>
+      <button id="loudBtn" onclick="cmd('loudness')" style="grid-column: span 2">🔊 음량 평준화</button>
+    </div>
+    <div class="card-title-row"><span class="muted">🎚️ EQ</span></div>
+    <div class="chips" id="eqChips"></div>
+    <div class="card-title-row"><span class="muted">⏾ 수면 타이머</span><span id="sleepVal" class="muted"></span></div>
+    <div class="chips" id="sleepChips"></div>
+  </div>
+
+  <!-- 유튜브 -->
+  <div class="card">
+    <div class="card-title">📺 유튜브 받아서 재생</div>
+    <input type="url" id="ytUrlInput" placeholder="유튜브 링크 붙여넣기">
+    <div style="display:flex; gap:8px">
+      <select id="ytQuality" style="flex:1">
+        <option value="best" selected>최고 화질 (H.264)</option>
+        <option value="1080p">1080p</option>
+        <option value="720p">720p (빠름)</option>
+        <option value="audio">오디오만</option>
+      </select>
+      <button onclick="submitYt()" class="on" style="flex:none">⬇️ 받아서 재생</button>
+    </div>
+    <details class="muted" id="shareTools">
+      <summary>🔗 다른 앱에서 바로 보내는 방법</summary>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px; line-height:1.5">
+        <div>유튜브 앱에서 <b>공유 → 링크 복사</b> 후 위 입력칸을 누르고 붙여넣으면 바로 보냅니다.</div>
+        <div>브라우저로 보던 페이지는 아래 <b>북마클릿</b>을 북마크로 저장해 두고, 주소창에 북마크 이름(예: <b>jetson</b>)을 입력해 실행하면 보낼 수 있습니다.</div>
+        <input type="text" id="bookmarklet" readonly style="font:11px monospace">
+        <button onclick="copyBookmarklet()" style="padding:8px">📋 북마클릿 복사</button>
+      </div>
+    </details>
+    <div id="ytBox" style="display:none; flex-direction:column; gap:6px">
+      <div class="card-title-row"><span id="ytTitle" class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><span id="ytPct" class="muted"></span></div>
+      <div class="progress"><div id="ytBar"></div></div>
+      <div class="card-title-row"><span id="ytSpeed" class="muted"></span><button class="danger" onclick="cmd('yt_cancel')" style="padding:4px 10px;font-size:12px">취소</button></div>
+      <div id="ytQueue" class="list"></div>
+    </div>
+  </div>
+
+  <!-- 대사 검색 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">🔎 대사 검색</span><span id="lineSearchInfo" class="muted"></span></div>
+    <input type="search" id="lineSearch" class="search-input" placeholder="자막 대사로 장면 찾기 (재생목록 전체)" oninput="onLineSearch(this.value)">
+    <div id="lineResults" class="list" style="display:none"></div>
+  </div>
+
+  <!-- 재생목록 -->
+  <div class="card">
+    <div class="card-title-row"><span class="card-title">📂 재생목록</span><span id="playlistTotalCount" class="muted"></span></div>
+    <input type="search" id="playlistSearch" class="search-input" placeholder="🔍 영상 제목 검색..." oninput="onSearch(this.value)">
+    <div id="playlistContainer"></div>
+  </div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const progress = $('progressBar'), volBar = $('volBar');
+let S = {};                       // 최신 상태
+let thumbs = { positions: [], video: -1 };
+let isSeeking = false, isVolDragging = false;
+let playlistGroups = [], openFolders = new Set(), searchQuery = '';
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmt(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(s).padStart(2, '0');
+}
+let toastTimer;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1500); }
+
+async function cmd(action, params = {}) {
+  if (navigator.vibrate) navigator.vibrate(12);
+  try {
+    const r = await fetch('/api/cmd', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...params }) });
+    if (r.status === 401) location.reload();
+  } catch (e) { toast('연결이 끊어졌습니다'); }
+}
+
+// ---- 썸네일 --------------------------------------------------------------
+function thumbIndexAt(sec) {
+  const p = thumbs.positions;
+  if (!p.length) return -1;
+  let best = 0;
+  for (let i = 1; i < p.length; i++) if (Math.abs(p[i] - sec) < Math.abs(p[best] - sec)) best = i;
+  return best;
+}
+// 장면 시작 미리보기: 그 시각 이후의 첫 썸네일 (없으면 가장 가까운 것)
+function thumbIndexAfter(sec) {
+  const p = thumbs.positions;
+  for (let i = 0; i < p.length; i++) if (p[i] >= sec - 0.05) return i;
+  return thumbIndexAt(sec);
+}
+let lastMarkKey = '';
+function thumbUrl(i) { return `/api/thumb?i=${i}&v=${thumbs.video}`; }
+let lastThumb = '';
+function updateNowThumb(sec) {
+  const i = thumbIndexAt(sec);
+  const url = i >= 0 ? thumbUrl(i) : '';
+  if (url !== lastThumb) { lastThumb = url; $('nowThumb').style.backgroundImage = url ? `url("${url}")` : 'none'; }
+}
+
+// ---- 진행바 (드래그 중 썸네일 미리보기) ------------------------------------
+function showSeekPreview() {
+  const sec = (progress.value / 1000) * (S.duration_sec || 0);
+  const box = $('seekPreview');
+  box.style.display = 'flex';
+  box.style.left = Math.min(92, Math.max(8, progress.value / 10)) + '%';
+  $('seekTime').textContent = fmt(sec);
+  const i = thumbIndexAt(sec);
+  $('seekImg').style.display = i >= 0 ? 'block' : 'none';
+  if (i >= 0) $('seekImg').src = thumbUrl(i);
+}
+progress.addEventListener('input', () => { isSeeking = true; showSeekPreview(); });
+progress.addEventListener('change', () => {
+  cmd('seek_to', { percent: progress.value / 10 });
+  $('seekPreview').style.display = 'none';
+  setTimeout(() => { isSeeking = false; }, 400);
+});
+volBar.addEventListener('input', () => { isVolDragging = true; volLabel(volBar.value); });
+volBar.addEventListener('change', () => { cmd('volume', { val: Number(volBar.value) }); setTimeout(() => { isVolDragging = false; }, 400); });
+function volLabel(v) { const l = $('volVal'); l.textContent = v + '%' + (v > 100 ? ' 부스트' : ''); l.style.color = v > 100 ? '#ff9800' : '#e9ff5b'; }
+
+// ---- 고정 버튼 ------------------------------------------------------------
+[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].forEach(s => {
+  const b = document.createElement('button'); b.textContent = s + 'x'; b.dataset.speed = s;
+  b.onclick = () => cmd('speed', { val: s }); $('speedChips').appendChild(b);
+});
+[['flat', '기본'], ['dialogue', '대사 강조'], ['bass', '저음'], ['treble', '고음'], ['quiet', '작은 볼륨']].forEach(([k, label]) => {
+  const b = document.createElement('button'); b.textContent = label; b.dataset.eq = k;
+  b.onclick = () => cmd('eq', { val: k }); $('eqChips').appendChild(b);
+});
+[[0, '끄기'], [15, '15분'], [30, '30분'], [60, '60분'], [-1, '영상 끝']].forEach(([m, label]) => {
+  const b = document.createElement('button'); b.textContent = label; b.dataset.min = m;
+  b.onclick = () => cmd('sleep', { minutes: m }); $('sleepChips').appendChild(b);
+});
+
+// 링크를 붙여넣으면 바로 보냅니다 (입력칸에 직접 타이핑할 때는 버튼으로 보냄).
+$('ytUrlInput').addEventListener('paste', () => setTimeout(() => {
+  if (/^https?:\/\/\S+$/.test($('ytUrlInput').value.trim())) submitYt();
+}, 0));
+$('bookmarklet').value = "javascript:location='" + location.origin + "/share?url='+encodeURIComponent(location.href)";
+function copyBookmarklet() {
+  const el = $('bookmarklet'); el.select();
+  try { document.execCommand('copy'); toast('📋 복사했습니다. 새 북마크의 주소로 붙여넣으세요'); }
+  catch (e) { toast('길게 눌러 직접 복사하세요'); }
+}
+
+function submitYt() {
+  const url = $('ytUrlInput').value.trim();
+  if (!url) { toast('유튜브 링크를 입력하세요'); return; }
+  cmd('yt', { url, quality: $('ytQuality').value });
+  $('ytUrlInput').value = '';
+  toast('⬇️ 요청을 보냈습니다');
+}
+
+// ---- 상태 렌더링 -------------------------------------------------------
+function renderStatus(d) {
+  S = d;
+  $('trackTitle').textContent = d.title || '대기 화면';
+  $('chapterName').textContent = d.chapter ? '📑 ' + d.chapter : '';
+  $('curTime').textContent = fmt(d.position_sec);
+  $('durTime').textContent = fmt(d.duration_sec);
+  $('playBtn').textContent = d.is_playing ? 'Ⅱ' : '▶';
+  $('muteBtn').textContent = d.is_muted ? '🔇' : '🔊';
+  if (!isSeeking && d.duration_sec > 0) progress.value = Math.round(d.position_sec / d.duration_sec * 1000);
+  if (!isVolDragging) { volBar.value = d.volume; volLabel(d.volume); }
+  updateNowThumb(d.position_sec);
+
+  const sp = d.speed || 1;
+  $('speedVal').textContent = sp.toFixed(2) + 'x';
+  document.querySelectorAll('#speedChips button').forEach(b => b.classList.toggle('on', Math.abs(b.dataset.speed - sp) < 0.02));
+
+  const repeatNames = { all: '전체 반복', one: '한 곡 반복', none: '순차 후 정지', shuffle: '셔플' };
+  $('repeatBtn').textContent = '🔁 ' + (repeatNames[d.repeat_mode] || '반복');
+  $('nightBtn').classList.toggle('on', !!d.night_mode);
+  const ld = d.loudness || {};
+  $('loudBtn').classList.toggle('on', !!ld.on);
+  $('loudBtn').textContent = '🔊 음량 평준화' + (ld.on && ld.lufs != null ? ` (${Math.round(ld.lufs)} LUFS → ${ld.gain_db >= 0 ? '+' : ''}${ld.gain_db.toFixed(0)}dB)` : '');
+  document.querySelectorAll('#eqChips button').forEach(b => b.classList.toggle('on', b.dataset.eq === d.eq_preset));
+  $('audioBtn').textContent = d.audio && d.audio.total > 1 ? `🎵 음성 ${d.audio.current}/${d.audio.total}` : '🎵 음성 트랙';
+
+  // 수면 타이머
+  const sl = d.sleep || {};
+  document.querySelectorAll('#sleepChips button').forEach(b => b.classList.toggle('on', Number(b.dataset.min) === (sl.minutes || 0)));
+  $('sleepVal').textContent = sl.remaining ? `${fmt(sl.remaining)} 남음` : (sl.minutes === -1 ? '영상이 끝나면 정지' : '');
+
+  // 자막
+  $('subSyncVal').textContent = ((d.subtitle_offset_ms || 0) / 1000).toFixed(1) + 's';
+  const subs = d.subtitle_tracks || [];
+  $('subList').innerHTML = subs.length ? subs.map(t =>
+    `<div class="row ${t.active ? 'active' : ''}" onclick="cmd('sub_toggle_track', {index: ${t.index}})">
+       <span style="display:flex;gap:8px;align-items:center;min-width:0"><span class="dot" style="background:${esc(t.color)}"></span>
+       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.label)}</span></span><span>${t.active ? '✓' : ''}</span></div>`).join('')
+    : `<div class="empty">${d.embedded_subtitles ? `내장 자막 ${d.embedded_subtitles}개 (켜기/끄기 버튼)` : '자막 없음 — 🤖 AI 자막을 만들어 보세요'}</div>`;
+  const ai = d.ai || {};
+  $('aiBtn').textContent = ai.running ? `⏹ AI 자막 취소 (${Math.round((ai.fraction || 0) * 100)}%)` : (ai.available ? '🤖 AI 자막 생성' : '🤖 AI 자막 (엔진 미설치)');
+  $('aiBtn').classList.toggle('danger', !!ai.running);
+  $('aiProgress').style.display = ai.running ? 'block' : 'none';
+  $('aiProgress').firstElementChild.style.width = Math.round((ai.fraction || 0) * 100) + '%';
+  const tr = d.translate || {};
+  $('trBtn').textContent = tr.running ? `⏹ 번역 취소 (${Math.round((tr.fraction || 0) * 100)}%)` : (tr.available ? '🌐 켜 둔 자막을 한국어로 번역' : '🌐 번역 (엔진 미설치)');
+  $('trBtn').classList.toggle('danger', !!tr.running);
+  $('trProgress').style.display = tr.running ? 'block' : 'none';
+  $('trProgress').firstElementChild.style.width = Math.round((tr.fraction || 0) * 100) + '%';
+
+  // 챕터 + 북마크
+  const marks = [...(d.chapters || []).map(c => ({ ...c, kind: '📑' })), ...(d.bookmarks || []).map(b => ({ sec: b.sec, title: b.label, kind: '🔖' }))]
+    .sort((a, b) => a.sec - b.sec);
+  // 목록이 바뀔 때만 다시 그립니다 (썸네일 이미지가 매번 새로 만들어지지 않도록)
+  const markKey = JSON.stringify([marks, d.chapter, thumbs.video, thumbs.positions.length]);
+  if (markKey !== lastMarkKey) {
+    lastMarkKey = markKey;
+    $('markList').innerHTML = marks.length ? marks.map(m => {
+      const ti = m.kind === '📑' ? thumbIndexAfter(m.sec) : -1;
+      const img = ti >= 0 ? `<img class="mark-thumb" loading="lazy" src="${thumbUrl(ti)}" onerror="this.remove()">` : '';
+      return `<div class="row ${m.kind === '📑' && m.title === d.chapter ? 'active' : ''}" onclick="cmd('seek_abs', {sec: ${m.sec}})">
+         <span class="mark-title">${img}<span>${m.kind} ${esc(m.title)}</span></span><span class="t">${fmt(m.sec)}</span></div>`;
+    }).join('') : '<div class="empty">챕터/북마크가 없습니다</div>';
+  }
+  const ab = d.ab || {};
+  $('abA').classList.toggle('on', ab.a != null);
+  $('abB').classList.toggle('on', !!ab.active);
+
+  // 유튜브
+  const yt = d.yt_download || {};
+  const busy = yt.active || (yt.queue && yt.queue.length);
+  $('ytBox').style.display = busy ? 'flex' : 'none';
+  if (busy) {
+    $('ytTitle').textContent = yt.active ? (yt.title || '준비 중...') : '대기 중';
+    $('ytPct').textContent = yt.active ? (yt.percent || 0).toFixed(0) + '%' : '';
+    $('ytBar').style.width = (yt.percent || 0) + '%';
+    $('ytSpeed').textContent = yt.active && yt.speed ? `${yt.speed} · 남은 ${yt.eta}` : '';
+    $('ytQueue').innerHTML = (yt.queue || []).map((q, i) =>
+      `<div class="row"><span>🕒 ${i + 1}. ${esc(q.url.split('v=').pop())} (${esc(q.quality)})</span>
+         <button class="danger" style="padding:2px 8px;font-size:11px" onclick="cmd('yt_remove', {url: '${esc(q.url)}'})">✕</button></div>`).join('');
+  }
+  $('playlistTotalCount').textContent = d.total_videos ? `총 ${d.total_videos}개` : '';
+}
+
+// ---- 재생목록 ---------------------------------------------------------------
+// ---- 대사 검색 --------------------------------------------------------------
+let lineSearchTimer = null, lineSearchSeq = 0;
+function onLineSearch(q) {
+  clearTimeout(lineSearchTimer);
+  lineSearchTimer = setTimeout(() => runLineSearch(q.trim()), 250);
+}
+async function runLineSearch(q, retry = 0) {
+  const box = $('lineResults'), info = $('lineSearchInfo'), seq = ++lineSearchSeq;
+  if (!q) { box.style.display = 'none'; info.textContent = ''; return; }
+  let d;
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+    if (r.status === 401) { location.reload(); return; }
+    d = await r.json();
+  } catch (e) { toast('연결이 끊어졌습니다'); return; }
+  if (seq !== lineSearchSeq) return;   // 더 새 검색이 있음
+  info.textContent = d.indexing ? '색인 중…' : (d.results.length ? d.results.length + '개' : '');
+  box.style.display = 'flex';
+  box.innerHTML = d.results.length ? d.results.map(h =>
+    `<div class="row" onclick="cmd('play_at', {index: ${h.index}, sec: ${h.sec}}); toast('▶ ${fmt(h.sec)}')">
+       <span style="min-width:0"><span class="t">${fmt(h.sec)}</span> <small class="muted">${esc(h.name)}${h.current ? ' · 지금 영상' : ''}</small><br>${esc(h.text)}</span></div>`).join('')
+    : `<div class="empty">${d.indexing ? '자막을 색인하는 중입니다…' : '찾은 대사가 없습니다.'}</div>`;
+  if (d.indexing && retry < 5) setTimeout(() => { if (seq === lineSearchSeq) runLineSearch(q, retry + 1); }, 1200);
+}
+
+function onSearch(q) { searchQuery = (q || '').trim().toLowerCase(); renderPlaylist(); }
+function toggleFolder(name) { openFolders.has(name) ? openFolders.delete(name) : openFolders.add(name); renderPlaylist(); }
+function renderPlaylist() {
+  const c = $('playlistContainer');
+  if (!playlistGroups.length) { c.innerHTML = '<div class="empty">재생목록이 비어 있습니다.</div>'; return; }
+  let html = '', total = 0;
+  playlistGroups.forEach((g, gi) => {
+    const items = searchQuery ? g.items.filter(it => it.name.toLowerCase().includes(searchQuery)) : g.items;
+    if (!items.length) return;
+    total += items.length;
+    const open = searchQuery || openFolders.has(g.folder);
+    html += `<div class="folder-group"><div class="folder-header ${g.has_active ? 'has-active' : ''}" onclick='toggleFolder(${JSON.stringify(g.folder)})'>
+               <span>${esc(g.folder)} <small style="opacity:.7">(${items.length})</small></span><span>${open ? '▼' : '▶'}</span></div>
+             <div class="folder-items ${open ? 'open' : ''}">`;
+    items.forEach(it => {
+      html += `<div class="playlist-item ${it.active ? 'active' : ''}" onclick="cmd('play_index', {index: ${it.index}})">
+                 ${it.thumb ? `<img loading="lazy" src="/api/thumb?p=${it.index}&v=${it.thumb}" onerror="this.remove()">` : ''}
+                 <span class="name">${it.watched ? '✓ ' : ''}${it.index + 1}. ${esc(it.name)}</span>
+                 <button onclick="event.stopPropagation(); cmd('queue_next', {index: ${it.index}}); toast('다음에 재생')">⏭</button></div>`;
+    });
+    html += '</div></div>';
+  });
+  c.innerHTML = total ? html : '<div class="empty">검색 결과가 없습니다.</div>';
+}
+
+// ---- 실시간 연결 (SSE + 자동 복구) ----------------------------------------------
+// 폰은 화면이 꺼지거나 앱이 백그라운드로 가면 연결을 조용히 끊습니다. 서버가 5초마다 ping을 보내므로
+// 12초간 아무 이벤트도 없으면 끊긴 것으로 보고 다시 연결합니다. SSE가 계속 실패하면 1초 폴링으로 전환합니다.
+let es = null, lastEvent = 0, sseFailures = 0, pollTimer = null, reconnectTimer = null;
+
+function handleEvent(name, data) {
+  lastEvent = Date.now();
+  if (name === 'status') { renderStatus(JSON.parse(data)); setOnline(true); sseFailures = 0; }
+  else if (name === 'thumbs') { thumbs = JSON.parse(data); lastThumb = ''; updateNowThumb(S.position_sec || 0); }
+  else if (name === 'playlist') {
+    playlistGroups = JSON.parse(data);
+    playlistGroups.forEach(g => { if (g.has_active) openFolders.add(g.folder); });
+    renderPlaylist();
+  }
+}
+
+async function pollOnce() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    if (r.status === 401) { location.reload(); return false; }
+    const d = await r.json();
+    const groups = d.playlist_groups; delete d.playlist_groups;
+    handleEvent('status', JSON.stringify(d));
+    if (groups && JSON.stringify(groups) !== JSON.stringify(playlistGroups)) handleEvent('playlist', JSON.stringify(groups));
+    return true;
+  } catch (e) { setOnline(false); return false; }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  $('statusBadge').textContent = '연결됨 (폴링)';
+  pollTimer = setInterval(pollOnce, 1000);
+}
+
+function connect() {
+  if (es) { es.close(); es = null; }
+  clearTimeout(reconnectTimer);
+  if (sseFailures >= 3) { startPolling(); return; }
+  es = new EventSource('/api/events');
+  lastEvent = Date.now();
+  ['status', 'thumbs', 'playlist', 'ping'].forEach(name => es.addEventListener(name, e => handleEvent(name, e.data)));
+  // 연결 직후 데이터가 늦으면 상태를 한 번 직접 받아 화면을 채웁니다.
+  setTimeout(() => { if (Date.now() - lastEvent >= 3000) pollOnce(); }, 3000);
+  es.onerror = async () => {
+    sseFailures++;
+    setOnline(false);
+    if (es) { es.close(); es = null; }
+    const ok = await pollOnce();          // 401이면 로그인 화면으로
+    reconnectTimer = setTimeout(connect, ok ? 1000 : 2000);
+  };
+}
+
+// 연결 감시: 12초 동안 아무 이벤트(ping 포함)가 없으면 재연결
+setInterval(() => { if (!pollTimer && Date.now() - lastEvent > 12000) { sseFailures++; connect(); } }, 4000);
+// 폰 화면이 다시 켜지거나 앱으로 돌아오면 즉시 재연결
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { sseFailures = 0; if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } pollOnce(); connect(); }
+});
+window.addEventListener('online', () => { sseFailures = 0; connect(); });
+
+function setOnline(on) { const b = $('statusBadge'); if (pollTimer && on) return; b.textContent = on ? '연결됨' : '재연결 중...'; b.className = 'badge' + (on ? ' online' : ''); }
+connect();
+</script>
+</body>
+</html>
