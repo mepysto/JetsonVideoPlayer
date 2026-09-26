@@ -26,7 +26,16 @@ public:
     SubtitleTrack(const QString &label, const QString &color, const SubtitleEvents &events = {},
                   std::shared_ptr<AssRenderer> ass = nullptr);
 
-    QString label() const { return m_label; }
+    QString label() const
+    {
+        QMutexLocker lock(&m_mutex);
+        return m_label;
+    }
+    void setLabel(const QString &label)   // AI 자막 완성·번역 중단 등 (트랙은 그대로 두고 이름만)
+    {
+        QMutexLocker lock(&m_mutex);
+        m_label = label;
+    }
     QString color() const { return m_color; }
 
     // ASS 원래 스타일·위치로 그리는 트랙이면 libass 렌더러 (없으면 통일된 자막 모양으로 activeLines가 그림)
@@ -44,7 +53,7 @@ public:
     std::optional<qint64> nextChangeAfter(qint64 tMs) const;
 
 private:
-    const QString m_label;
+    QString m_label;
     const QString m_color;
     mutable QMutex m_mutex;
     std::shared_ptr<AssRenderer> m_ass;

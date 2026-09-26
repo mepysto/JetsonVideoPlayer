@@ -64,7 +64,8 @@ void rollover(State &s)
     QFile::remove(first);
     QFile::rename(s.path, first);
     s.file.setFileName(s.path);
-    s.file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+    // 다시 열지 못하면 파일 기록만 빠지고 stderr 출력은 계속됩니다
+    (void)s.file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
 }
 
 void handler(QtMsgType type, const QMessageLogContext &context, const QString &msg)

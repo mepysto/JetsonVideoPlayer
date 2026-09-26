@@ -2,14 +2,14 @@
 file(GLOB_RECURSE CORE_SOURCES CONFIGURE_DEPENDS core/*.cpp core/*.h)
 file(GLOB_RECURSE MEDIA_SOURCES CONFIGURE_DEPENDS media/*.cpp media/*.h)
 file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS services/*.cpp services/*.h)
-file(GLOB_RECURSE UI_SOURCES CONFIGURE_DEPENDS ui/*.cpp ui/*.h)
+# QML 타입(영상 아이템)은 QML 모듈 쪽에 둡니다
+list(FILTER MEDIA_SOURCES EXCLUDE REGEX "/VideoItem\\.(cpp|h)$")
 
-add_library(jvpcore STATIC ${CORE_SOURCES} ${MEDIA_SOURCES} ${SERVICE_SOURCES} ${UI_SOURCES})
+add_library(jvpcore STATIC ${CORE_SOURCES} ${MEDIA_SOURCES} ${SERVICE_SOURCES})
 target_include_directories(jvpcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/core
-                           ${CMAKE_CURRENT_SOURCE_DIR}/media ${CMAKE_CURRENT_SOURCE_DIR}/services ${CMAKE_CURRENT_SOURCE_DIR}/ui)
+                           ${CMAKE_CURRENT_SOURCE_DIR}/media ${CMAKE_CURRENT_SOURCE_DIR}/services)
 target_link_libraries(jvpcore PUBLIC Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::DBus Qt6::Concurrent
                       PkgConfig::GST PkgConfig::ASS PkgConfig::GIO PkgConfig::EGL)
-# 웹 리모컨 페이지: 파이썬 버전의 정적 파일 그대로 → qrc:/remote/ (같은 API를 쓰므로 수정 없이 동작)
 set(REMOTE_STATIC_DIR ${CMAKE_SOURCE_DIR}/resources/remote)
 qt_add_resources(jvpcore "remote_static" PREFIX "/remote" BASE ${REMOTE_STATIC_DIR}
   FILES ${REMOTE_STATIC_DIR}/index.html ${REMOTE_STATIC_DIR}/login.html ${REMOTE_STATIC_DIR}/share.html
@@ -20,20 +20,27 @@ if(JVP_HAVE_NVMM)
   target_link_libraries(jvpcore PUBLIC ${NVBUFSURFACE_LIB})
 endif()
 
+# 앱: QML 모듈 JetsonPlayer (QML 파일 + QML에 보이는 C++ 타입)
 qt_add_executable(jetson-player main.cpp)
-# QML 파일은 app/qml 아래 상대 경로 그대로 qrc:/ 에 올립니다 (예: qrc:/Main.qml, qrc:/components/Osd.qml)
-file(GLOB_RECURSE QML_FILES CONFIGURE_DEPENDS RELATIVE ${CMAKE_SOURCE_DIR}/qml ${CMAKE_SOURCE_DIR}/qml/*.qml ${CMAKE_SOURCE_DIR}/qml/*.js)
-set(QML_ABS)
+file(GLOB_RECURSE UI_SOURCES CONFIGURE_DEPENDS ui/*.cpp ui/*.h)
+file(GLOB_RECURSE QML_FILES CONFIGURE_DEPENDS RELATIVE ${CMAKE_SOURCE_DIR}/qml ${CMAKE_SOURCE_DIR}/qml/*.qml)
+set(QML_SOURCES)
 foreach(f ${QML_FILES})
-  set_source_files_properties(${CMAKE_SOURCE_DIR}/qml/${f} PROPERTIES QT_RESOURCE_ALIAS ${f})
-  list(APPEND QML_ABS ${CMAKE_SOURCE_DIR}/qml/${f})
+  set(abs ${CMAKE_SOURCE_DIR}/qml/${f})
+  # 모듈 안 경로는 app/qml 기준 상대 경로 그대로 (components/JButton.qml 등)
+  set_source_files_properties(${abs} PROPERTIES QT_RESOURCE_ALIAS ${f})
+  if(f STREQUAL "components/Theme.qml")
+    set_source_files_properties(${abs} PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+  endif()
+  list(APPEND QML_SOURCES ${abs})
 endforeach()
 qt_add_qml_module(jetson-player
   URI JetsonPlayer
+  DEPENDENCIES QtQuick
   VERSION 1.0
-  QML_FILES ${QML_ABS}
-  RESOURCE_PREFIX /
-  NO_RESOURCE_TARGET_PATH
-  NO_PLUGIN_OPTIONAL
+  QML_FILES ${QML_SOURCES}
+  SOURCES ${UI_SOURCES} media/VideoItem.cpp media/VideoItem.h
 )
-target_link_libraries(jetson-player PRIVATE jvpcore)
+target_include_directories(jetson-player PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui)
+target_link_libraries(jetson-player PRIVATE jvpcore Qt6::QuickControls2)
+target_compile_definitions(jetson-player PRIVATE JVP_VERSION="${PROJECT_VERSION}")

@@ -2,6 +2,7 @@
 // GStreamer appsink(스트리밍 스레드) → Qt Quick 렌더 스레드로 최신 영상 프레임을 넘기는 다리.
 // 프레임은 GstSample 참조로만 넘기므로 복사가 없습니다 (NVMM이면 GPU 메모리 그대로).
 
+#include <QImage>
 #include <QObject>
 #include <QSize>
 #include <atomic>
@@ -35,6 +36,9 @@ public:
 
     // [렌더 스레드] 가장 최근 프레임의 참조를 가져옵니다 (sample은 호출자가 unref).
     VideoFrame takeLatest(quint64 knownSerial);
+
+    // 가장 최근 프레임을 원래 해상도의 RGB 이미지로 복사합니다 (스크린샷). 없으면 null 이미지
+    QImage snapshot();
 
     quint64 renderedFrames() const { return m_rendered; }
     void markRendered() { ++m_rendered; }

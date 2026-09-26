@@ -609,12 +609,12 @@ void VideoItem::setHdrMatrixFix(bool fix)
     update();
 }
 
-void VideoItem::setRotation(const QString &r)
+void VideoItem::setOrientation(const QString &r)
 {
     if (r == m_rotation)
         return;
     m_rotation = r;
-    emit rotationChanged();
+    emit orientationChanged();
     emit videoRectChanged();
     update();
 }

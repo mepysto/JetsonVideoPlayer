@@ -59,7 +59,8 @@ class TestSubtitleParse : public QObject
     {
         const QString p = m_dir + QLatin1Char('/') + name;
         QFile f(p);
-        f.open(QIODevice::WriteOnly);
+        if (!f.open(QIODevice::WriteOnly))
+            qFatal("테스트 파일을 만들 수 없습니다");
         f.write(data);
         return p;
     }

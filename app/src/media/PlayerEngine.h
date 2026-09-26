@@ -61,6 +61,7 @@ public:
     void setLoudnessGainDb(double db);
 
     FrameBridge *frameBridge() const { return m_bridge; }
+    bool saveCurrentFrame(const QString &path);   // 원래 해상도의 현재 프레임을 PNG로 (스크린샷)
     QString activeVideoDecoder() const;
     bool usingHwOutput() const { return m_hwOutput; }
     bool passthroughActive() const { return m_passthrough; }

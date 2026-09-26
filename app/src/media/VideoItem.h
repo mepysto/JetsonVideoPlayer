@@ -4,6 +4,7 @@
 // - 시스템 메모리 I420/NV12/RGBA: 평면별 텍스처 업로드 + 셰이더에서 YUV→RGB
 // HDR(PQ/HLG) 톤매핑, 회전·반전, 레터박스를 셰이더/정점에서 처리합니다.
 
+#include <QtQml/qqmlregistration.h>
 #include <QPointer>
 #include <QQuickItem>
 
@@ -17,7 +18,7 @@ class VideoItem : public QQuickItem {
     Q_PROPERTY(QObject *bridge READ bridge WRITE setBridge NOTIFY bridgeChanged)
     Q_PROPERTY(int hdrMode READ hdrMode WRITE setHdrMode NOTIFY hdrChanged)          // 0 SDR, 1 PQ, 2 HLG
     Q_PROPERTY(bool hdrMatrixFix READ hdrMatrixFix WRITE setHdrMatrixFix NOTIFY hdrChanged)
-    Q_PROPERTY(QString rotation READ rotation WRITE setRotation NOTIFY rotationChanged) // identity, 90r, 180, 90l, horiz, vert
+    Q_PROPERTY(QString orientation READ orientation WRITE setOrientation NOTIFY orientationChanged) // identity, 90r, 180, 90l, horiz, vert
     Q_PROPERTY(QRectF videoRect READ videoRect NOTIFY videoRectChanged)            // 아이템 안에서 영상이 그려지는 영역
     Q_PROPERTY(QSizeF videoSize READ videoSize NOTIFY videoRectChanged)
 
@@ -30,15 +31,15 @@ public:
     void setHdrMode(int mode);
     bool hdrMatrixFix() const { return m_hdrFix; }
     void setHdrMatrixFix(bool fix);
-    QString rotation() const { return m_rotation; }
-    void setRotation(const QString &r);
+    QString orientation() const { return m_rotation; }
+    void setOrientation(const QString &r);
     QRectF videoRect() const;
     QSizeF videoSize() const { return m_videoSize; }
 
 signals:
     void bridgeChanged();
     void hdrChanged();
-    void rotationChanged();
+    void orientationChanged();
     void videoRectChanged();
 
 protected:

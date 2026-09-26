@@ -2,6 +2,9 @@
 
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
+#ifdef JVP_HAVE_NVMM
+#include <nvbufsurface.h>
+#endif
 
 namespace jvp {
 
@@ -94,6 +97,59 @@ void FrameBridge::clear()
         gst_sample_unref(m_latest.sample);
     m_latest = {};
     m_size = {};
+}
+
+QImage FrameBridge::snapshot()
+{
+    VideoFrame f;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        f = m_latest;
+        if (!f.sample)
+            return {};
+        gst_sample_ref(f.sample);
+    }
+    QImage out;
+    GstBuffer *buf = gst_sample_get_buffer(f.sample);
+#ifdef JVP_HAVE_NVMM
+    if (f.format == FrameFormat::NvmmRgba && buf) {
+        // GPU 메모리(NvBufSurface)를 CPU로 매핑해 복사합니다.
+        GstMapInfo map;
+        if (gst_buffer_map(buf, &map, GST_MAP_READ)) {
+            auto *surf = reinterpret_cast<NvBufSurface *>(map.data);
+            if (surf && surf->numFilled > 0 && NvBufSurfaceMap(surf, 0, 0, NVBUF_MAP_READ) == 0) {
+                NvBufSurfaceSyncForCpu(surf, 0, 0);
+                const NvBufSurfaceParams &p = surf->surfaceList[0];
+                const QImage view(static_cast<const uchar *>(p.mappedAddr.addr[0]), int(p.width), int(p.height),
+                                  int(p.planeParams.pitch[0]), QImage::Format_RGBA8888);
+                out = view.convertToFormat(QImage::Format_RGB888);
+                NvBufSurfaceUnMap(surf, 0, 0);
+            }
+            gst_buffer_unmap(buf, &map);
+        }
+        gst_sample_unref(f.sample);
+        return out;
+    }
+#endif
+    // 시스템 메모리 프레임: GStreamer로 RGB 변환
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "RGB", nullptr);
+    GError *err = nullptr;
+    GstSample *rgb = gst_video_convert_sample(f.sample, caps, 3 * GST_SECOND, &err);
+    gst_caps_unref(caps);
+    g_clear_error(&err);
+    if (rgb) {
+        GstVideoInfo info;
+        GstBuffer *rb = gst_sample_get_buffer(rgb);
+        GstMapInfo map;
+        if (gst_video_info_from_caps(&info, gst_sample_get_caps(rgb)) && rb && gst_buffer_map(rb, &map, GST_MAP_READ)) {
+            out = QImage(map.data, GST_VIDEO_INFO_WIDTH(&info), GST_VIDEO_INFO_HEIGHT(&info),
+                         GST_VIDEO_INFO_PLANE_STRIDE(&info, 0), QImage::Format_RGB888).copy();
+            gst_buffer_unmap(rb, &map);
+        }
+        gst_sample_unref(rgb);
+    }
+    gst_sample_unref(f.sample);
+    return out;
 }
 
 } // namespace jvp

@@ -568,4 +568,10 @@ void PlayerEngine::handleMessage(GstMessage *msg)
     }
 }
 
+bool PlayerEngine::saveCurrentFrame(const QString &path)
+{
+    const QImage img = m_bridge ? m_bridge->snapshot() : QImage();
+    return !img.isNull() && img.save(path, "PNG");
+}
+
 } // namespace jvp

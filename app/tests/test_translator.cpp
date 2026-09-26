@@ -266,9 +266,9 @@ private slots:
         QVERIFY(!localAvailable());
         QDir().mkpath(dir + "/pylib/ctranslate2");
         QDir().mkpath(dir + "/model");
-        QFile(dir + "/model/model.bin").open(QIODevice::WriteOnly);
+        QVERIFY(QFile(dir + "/model/model.bin").open(QIODevice::WriteOnly));
         QVERIFY(!localAvailable());   // 토크나이저 모델 없음
-        QFile(dir + "/model/sentencepiece.bpe.model").open(QIODevice::WriteOnly);
+        QVERIFY(QFile(dir + "/model/sentencepiece.bpe.model").open(QIODevice::WriteOnly));
         QVERIFY(localAvailable());
         QCOMPARE(resolveBackend("auto"), QString("local"));
         QCOMPARE(resolveBackend("claude"), QString());

@@ -34,7 +34,8 @@ class TestDialogueIndex : public QObject
     {
         for (const char *name : {"a.mkv", "b.mkv"}) {
             QFile f(m_dir + QLatin1Char('/') + QLatin1String(name));
-            f.open(QIODevice::WriteOnly);
+            if (!f.open(QIODevice::WriteOnly))
+                qFatal("테스트 파일을 만들 수 없습니다");
             f.write("x");
         }
         srt("a.ko.srt", {{1, QStringLiteral("안녕하세요 여러분")}, {5, QStringLiteral("오늘은\n날씨가 좋네요")}});
@@ -133,7 +134,7 @@ private slots:
     void limit()
     {
         QFile v(m_dir + "/a.mkv");
-        v.open(QIODevice::WriteOnly);
+        QVERIFY(v.open(QIODevice::WriteOnly));
         v.write("x");
         v.close();
         QList<QPair<int, QString>> lines;
