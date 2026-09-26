@@ -23,5 +23,7 @@ QtObject {
     readonly property int radius: 7
     // TV(10-foot) 모드에서는 글자와 터치 영역을 키웁니다
     property real scale: 1.0
+    // TV 모드: 리모컨 방향키로 옮긴 초점도 테두리로 보여줍니다 (데스크톱은 Tab 이동일 때만)
+    property bool tv: false
     function px(v) { return Math.round(v * scale) }
 }

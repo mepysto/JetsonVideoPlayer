@@ -19,7 +19,7 @@ Rectangle {
         RowLayout {
             spacing: Theme.px(10)
             Text { text: App.positionText; color: Theme.muted; font.pixelSize: Theme.px(12); font.family: Theme.mono }
-            SeekBar { Layout.fillWidth: true }
+            SeekBar { Layout.fillWidth: true; enabled: App.hasVideo }
             Text {
                 text: App.durationText; color: Theme.muted; font.pixelSize: Theme.px(12); font.family: Theme.mono
                 MouseArea { anchors.fill: parent; onClicked: App.toggleRemainingTime() }
@@ -27,28 +27,31 @@ Rectangle {
         }
         RowLayout {
             spacing: Theme.px(4)
-            JIconButton { text: "⏮"; ToolTip.text: "이전 영상 (P)"; onClicked: App.playPrevious() }
-            JButton { text: "↶ 10"; ToolTip.text: "10초 뒤로 (←)"; onClicked: App.seekRelative(-10) }
+            JIconButton { text: "⏮"; enabled: App.playlist.count > 1; ToolTip.text: "이전 영상 (P)"; onClicked: App.playPrevious() }
+            JButton { text: "↶ 10"; enabled: App.hasVideo; ToolTip.text: "10초 뒤로 (←)"; onClicked: App.seekRelative(-10) }
             JButton {
                 primary: true; text: App.playing ? "⏸" : "▶"
+                enabled: App.hasVideo
+                ToolTip.text: (App.playing ? "일시정지" : "재생") + " (Space)"
                 implicitWidth: Theme.px(40); implicitHeight: Theme.px(40)
                 font.pixelSize: Theme.px(16)
                 onClicked: App.togglePlayPause()
             }
-            JButton { text: "10 ↷"; ToolTip.text: "10초 앞으로 (→)"; onClicked: App.seekRelative(10) }
-            JIconButton { text: "⏭"; ToolTip.text: "다음 영상 (N)"; onClicked: App.playNext() }
-            JButton { text: "·"; ToolTip.text: "한 프레임 뒤로 (Ctrl+←)"; onClicked: App.frameStep(-1) }
+            JButton { text: "10 ↷"; enabled: App.hasVideo; ToolTip.text: "10초 앞으로 (→)"; onClicked: App.seekRelative(10) }
+            JIconButton { text: "⏭"; enabled: App.playlist.count > 1; ToolTip.text: "다음 영상 (N)"; onClicked: App.playNext() }
+            JIconButton { text: "‹"; enabled: App.hasVideo; ToolTip.text: "한 프레임 뒤로 (Ctrl+←)"; onClicked: App.frameStep(-1) }
             JButton {
                 id: speedBtn
                 text: "⚡ " + App.rate.toFixed(App.rate % 0.25 === 0 && App.rate % 0.5 !== 0 ? 2 : 1) + "x"
+                enabled: App.hasVideo
                 fg: Theme.accent; font.bold: true
                 ToolTip.text: "재생 속도 (↑/↓, R: 1.0x)"
                 onClicked: speedPopup.open()
                 SpeedPopup { id: speedPopup; y: -height - 6 }
             }
-            JButton { text: "·"; ToolTip.text: "한 프레임 앞으로 (Ctrl+→)"; onClicked: App.frameStep(1) }
+            JIconButton { text: "›"; enabled: App.hasVideo; ToolTip.text: "한 프레임 앞으로 (Ctrl+→)"; onClicked: App.frameStep(1) }
             Item { Layout.fillWidth: true }
-            JIconButton { text: App.muted || App.volume === 0 ? "🔇" : "🔊"; onClicked: App.toggleMute() }
+            JIconButton { text: App.muted || App.volume === 0 ? "🔇" : "🔊"; ToolTip.text: "음소거 (M)"; onClicked: App.toggleMute() }
             JSlider {
                 Layout.preferredWidth: Theme.px(110)
                 from: 0; to: 200; stepSize: 1
@@ -60,6 +63,7 @@ Rectangle {
             JButton {
                 id: subBtn
                 text: App.subtitleButtonText
+                enabled: App.hasVideo
                 ToolTip.text: "자막 선택·크기·싱크 (C)"
                 onClicked: subPopup.open()
                 SubtitlePopup { id: subPopup; y: -height - 6; x: -width + subBtn.width }

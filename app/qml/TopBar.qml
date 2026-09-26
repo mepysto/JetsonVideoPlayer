@@ -30,7 +30,7 @@ Rectangle {
         JButton { id: ytBtn; text: "▶️ 유튜브"; ToolTip.text: "유튜브 영상 받아서 재생"; onClicked: ytPopup.open() }
         Sep {}
         JButton {
-            text: ({ "all": "🔁", "one": "🔂", "none": "➡️", "shuffle": "🔀" })[App.repeatMode] || "🔁"
+            text: ({ "all": "🔁 전체 반복", "one": "🔂 1곡 반복", "none": "➡️ 순차 재생", "shuffle": "🔀 셔플" })[App.repeatMode] || "🔁 전체 반복"
             ToolTip.text: "재생 모드: " + App.repeatModeLabel + " (Shift+R)"
             onClicked: App.cycleRepeatMode()
         }
@@ -42,9 +42,10 @@ Rectangle {
             font.pixelSize: Theme.px(13)
             elide: Text.ElideMiddle
         }
-        JButton { text: "✕"; ToolTip.text: "종료 (Q / Esc)"; onClicked: App.quit() }
         JButton { id: moreBtn; text: "⋯"; ToolTip.text: "더 보기: 북마크, 캡처, 리모컨, HUD, AI 자막, 화면·소리 설정, 도움말"; onClicked: moreMenu.popup(moreBtn, 0, moreBtn.height) }
         JButton { text: "☷  재생목록"; ToolTip.text: "재생목록 열기/닫기"; onClicked: App.sidebarVisible = !App.sidebarVisible }
+        Sep {}
+        JButton { text: "✕"; ToolTip.text: "종료 (Q / Esc)"; onClicked: App.quit() }
     }
 
     HistoryPopup { id: historyPopup; parent: recentBtn; y: recentBtn.height + 4 }

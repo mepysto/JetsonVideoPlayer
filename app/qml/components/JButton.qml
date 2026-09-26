@@ -9,6 +9,7 @@ Button {
     property bool tool: false          // 작은 도구 버튼 (재생목록 도구 등)
     property bool active: false        // 켜진 상태 강조
     property int textAlign: Text.AlignHCenter
+    readonly property bool focusRing: visualFocus || (Theme.tv && activeFocus)
     property color fg: primary || active ? "#111318" : (tool ? "#a0aec0" : Theme.textSoft)
     font.pixelSize: Theme.px(tool ? 11 : 13)
     font.bold: primary
@@ -27,13 +28,13 @@ Button {
     }
     background: Rectangle {
         radius: control.primary ? height / 2 : (control.tool ? 5 : Theme.radius)
-        color: control.primary ? (control.hovered ? Theme.accentHover : Theme.accent)
+        color: control.primary ? (!control.enabled ? "#2d3748" : control.hovered ? Theme.accentHover : Theme.accent)
              : control.active ? Theme.accent
              : control.down ? "#2d3748"
-             : control.hovered || control.visualFocus ? Theme.hover
+             : control.hovered || control.focusRing ? Theme.hover
              : control.tool ? "#1a202c" : "transparent"
-        border.color: control.visualFocus ? Theme.accent : "transparent"
-        border.width: control.visualFocus ? 2 : 0
+        border.color: control.focusRing ? Theme.accent : "transparent"
+        border.width: control.focusRing ? 2 : 0
     }
     ToolTip.visible: hovered && ToolTip.text.length > 0
     ToolTip.delay: 600

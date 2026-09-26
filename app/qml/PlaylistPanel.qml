@@ -29,6 +29,7 @@ Rectangle {
         }
         RowLayout {
             spacing: 4
+            visible: App.playlist.count > 0
             JButton { tool: true; text: "전체 펼치기"; onClicked: App.playlist.expandAll() }
             JButton { tool: true; text: "전체 접기"; onClicked: App.playlist.collapseAll() }
             Item { Layout.fillWidth: true }
@@ -43,6 +44,31 @@ Rectangle {
             model: App.playlist
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { }
+
+            // 빈 재생목록 안내 (검색 결과가 없을 때와 구분)
+            Column {
+                visible: list.count === 0
+                anchors.centerIn: parent
+                width: parent.width - Theme.px(20)
+                spacing: Theme.px(10)
+                Text {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: search.text.length ? "‘" + search.text + "’와 일치하는 영상이 없습니다"
+                                             : "폴더나 파일을 열면\n영상 목록이 여기에 표시됩니다"
+                    color: Theme.muted
+                    font.pixelSize: Theme.px(12)
+                    lineHeight: 1.3
+                }
+                JButton {
+                    visible: !search.text.length
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    tool: true
+                    text: "📁 폴더 열기"
+                    onClicked: App.requestDialog("openFolder")
+                }
+            }
             currentIndex: App.playlist.activeRow
             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
             delegate: Rectangle {
@@ -116,18 +142,18 @@ Rectangle {
     JMenu {
         id: rowMenu
         property var row: null
-        MenuItem { text: "▶️ 지금 재생"; enabled: rowMenu.row && !rowMenu.row.isFolder; onTriggered: App.playIndex(rowMenu.row.playlistIndex) }
-        MenuItem {
+        JMenuItem { text: "▶️ 지금 재생"; enabled: rowMenu.row && !rowMenu.row.isFolder; onTriggered: App.playIndex(rowMenu.row.playlistIndex) }
+        JMenuItem {
             text: rowMenu.row && rowMenu.row.queuePosition > 0 ? "✕ 대기열에서 제거" : "⏭ 다음에 재생 (대기열 추가)"
             enabled: rowMenu.row && !rowMenu.row.isFolder
             onTriggered: rowMenu.row.queuePosition > 0 ? App.unqueue(rowMenu.row.path) : App.queueNext(rowMenu.row.path)
         }
         MenuSeparator {}
-        MenuItem { text: "📂 파일 위치 열기 (파일 브라우저)"; onTriggered: App.openLocation(rowMenu.row.path) }
-        MenuItem { text: "📋 전체 경로 복사"; onTriggered: App.copyText(rowMenu.row.path, "📋 파일 경로가 복사되었습니다!") }
-        MenuItem { text: "📋 파일 이름 복사"; onTriggered: App.copyText(rowMenu.row.title, "📋 파일 이름이 복사되었습니다!") }
+        JMenuItem { text: "📂 파일 위치 열기 (파일 브라우저)"; onTriggered: App.openLocation(rowMenu.row.path) }
+        JMenuItem { text: "📋 전체 경로 복사"; onTriggered: App.copyText(rowMenu.row.path, "📋 파일 경로가 복사되었습니다!") }
+        JMenuItem { text: "📋 파일 이름 복사"; onTriggered: App.copyText(rowMenu.row.title, "📋 파일 이름이 복사되었습니다!") }
         MenuSeparator {}
-        MenuItem { text: "🔄 재생목록 새로고침 (F5)"; onTriggered: App.rescanPlaylist() }
-        MenuItem { text: "💾 재생목록 저장 (M3U)"; onTriggered: App.requestDialog("saveM3u") }
+        JMenuItem { text: "🔄 재생목록 새로고침 (F5)"; onTriggered: App.rescanPlaylist() }
+        JMenuItem { text: "💾 재생목록 저장 (M3U)"; onTriggered: App.requestDialog("saveM3u") }
     }
 }

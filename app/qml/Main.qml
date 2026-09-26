@@ -39,12 +39,13 @@ ApplicationWindow {
 
     Component.onCompleted: {
         Theme.scale = tvMode ? 1.6 : 1.0
+        Theme.tv = tvMode
         if (App.windowMaximized && !App.kiosk)
             win.showMaximized()
         if (App.kiosk)
             win.showFullScreen()
     }
-    onTvModeChanged: Theme.scale = tvMode ? 1.6 : 1.0
+    onTvModeChanged: { Theme.scale = tvMode ? 1.6 : 1.0; Theme.tv = tvMode }
 
     // 전체화면 / 미니 / 일반 창 전환은 컨트롤러 상태를 따라갑니다.
     Connections {
