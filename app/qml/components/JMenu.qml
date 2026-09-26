@@ -2,10 +2,10 @@ import QtQuick
 import JetsonPlayer
 import QtQuick.Controls.Basic
 
-// 메뉴: 가장 긴 항목에 맞춘 너비, 창 밖으로 나갈 수 있는 별도 팝업 창 (Qt 6.8+, 지원하지 않는 화면에서는 창 안에 그림)
+// 메뉴: 가장 긴 항목에 맞춘 너비 (창 너비를 넘지 않음)
+// Popup.Window(별도 창)는 Jetson X11에서 내용이 그려지지 않고 EGLFS 키오스크에서는 지원되지 않아 쓰지 않습니다.
 Menu {
     id: menu
-    popupType: Popup.Window
     width: {
         let w = Theme.px(200)
         for (let i = 0; i < count; ++i) {
@@ -13,6 +13,7 @@ Menu {
             if (it)
                 w = Math.max(w, it.implicitWidth)
         }
-        return w + leftPadding + rightPadding
+        w += leftPadding + rightPadding
+        return parent && parent.Window.window ? Math.min(w, parent.Window.window.width) : w
     }
 }
