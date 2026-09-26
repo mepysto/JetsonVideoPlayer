@@ -62,6 +62,8 @@ if(JVP_DEPLOY_QT)
     TARGET jetson-player
     OUTPUT_SCRIPT jvp_deploy_script
     NO_TRANSLATIONS
+    # 기본 배포는 xcb만 넣으므로, 키오스크 서비스가 쓰는 EGLFS 플랫폼도 함께 넣습니다
+    INCLUDE_PLUGINS qeglfs
   )
   install(SCRIPT ${jvp_deploy_script})
 endif()

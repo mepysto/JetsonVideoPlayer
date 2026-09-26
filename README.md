@@ -122,6 +122,13 @@ jetson-player "https://youtu.be/..."   # YouTube 받아서 재생
 jetson-player --tv                     # TV 화면 (리모컨·큰 글씨)   --kiosk: 전체화면 고정
 ```
 
+**AppImage (설치 없이 실행)**: 파일 하나로 다른 Jetson에 옮겨 바로 실행할 수 있습니다. Qt·libass는 안에 들어 있고, GStreamer와 NVIDIA 드라이버는 보드(JetPack)의 것을 씁니다.
+```bash
+./app/packaging/build-appimage.sh      # → app/build-appimage/Jetson_Video_Player-<버전>-aarch64.AppImage
+chmod +x Jetson_Video_Player-*.AppImage && ./Jetson_Video_Player-*.AppImage /path/to/video-folder
+```
+실행하려면 보드에 `gstreamer1.0-plugins-{base,good,bad}`, `gstreamer1.0-libav`, `fuse3`(없으면 `--appimage-extract-and-run` 옵션으로 실행)가 있어야 합니다. 키오스크 서비스와 메뉴 항목 등록은 `.deb`로 설치하세요.
+
 **필요 패키지**: Qt 6.8 이상(Quick, QuickControls2, Network, DBus), GStreamer 1.0 개발 패키지, libass, NVIDIA JetPack GStreamer 플러그인(`nvv4l2decoder`, `nvvidconv`)과 Jetson Multimedia API(`nvbufsurface.h`, 없으면 복사 경로로 빌드), yt-dlp(YouTube용, 선택).
 
 ---
@@ -217,7 +224,7 @@ app/                          # C++ / Qt 6 / QML 앱 (CMake)
   resources/remote/           # 웹 리모컨 페이지 (index/login/share.html)
   tools/nllb_worker.py        # 로컬 번역 보조 프로세스
   tests/                      # QtTest 단위 테스트 (ctest), e2e/ — 실제 앱을 띄워 리모컨 API로 조작하는 pytest
-  packaging/                  # .deb 빌드, 데스크톱 항목, 키오스크 systemd 서비스
+  packaging/                  # .deb·AppImage 빌드, 데스크톱 항목, 키오스크 systemd 서비스
 scripts/                      # 빌드 도구·Qt·AI 엔진 설치
 legacy/python/                # 이전 Python/GTK 버전 (보관, jetson-player-py)
 .github/workflows/tests.yml   # CI: C++ 빌드·단위·e2e 테스트 + 이전 Python 버전 테스트
