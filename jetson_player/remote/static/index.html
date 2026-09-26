@@ -213,6 +213,10 @@
 <div id="toast" class="toast"></div>
 
 <script>
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('button.yt-remove');
+  if (btn) cmd('yt_remove', {url: btn.dataset.url});
+});
 const $ = (id) => document.getElementById(id);
 const progress = $('progressBar'), volBar = $('volBar');
 let S = {};                       // 최신 상태
@@ -393,7 +397,7 @@ function renderStatus(d) {
     $('ytSpeed').textContent = yt.active && yt.speed ? `${yt.speed} · 남은 ${yt.eta}` : '';
     $('ytQueue').innerHTML = (yt.queue || []).map((q, i) =>
       `<div class="row"><span>🕒 ${i + 1}. ${esc(q.url.split('v=').pop())} (${esc(q.quality)})</span>
-         <button class="danger" style="padding:2px 8px;font-size:11px" onclick="cmd('yt_remove', {url: '${esc(q.url)}'})">✕</button></div>`).join('');
+         <button class="danger yt-remove" style="padding:2px 8px;font-size:11px" data-url="${esc(q.url)}">✕</button></div>`).join('');
   }
   $('playlistTotalCount').textContent = d.total_videos ? `총 ${d.total_videos}개` : '';
 }
