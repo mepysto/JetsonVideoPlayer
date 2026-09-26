@@ -55,3 +55,6 @@ ENV/
 .DS_Store
 .pytest_cache/
 __pycache__/
+
+# C++ 앱 빌드 결과
+app/build/
