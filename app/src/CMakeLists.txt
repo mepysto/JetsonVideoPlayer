@@ -9,6 +9,11 @@ target_include_directories(jvpcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CU
                            ${CMAKE_CURRENT_SOURCE_DIR}/media ${CMAKE_CURRENT_SOURCE_DIR}/services ${CMAKE_CURRENT_SOURCE_DIR}/ui)
 target_link_libraries(jvpcore PUBLIC Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::DBus Qt6::Concurrent
                       PkgConfig::GST PkgConfig::ASS PkgConfig::GIO PkgConfig::EGL)
+# 웹 리모컨 페이지: 파이썬 버전의 정적 파일 그대로 → qrc:/remote/ (같은 API를 쓰므로 수정 없이 동작)
+set(REMOTE_STATIC_DIR ${CMAKE_SOURCE_DIR}/resources/remote)
+qt_add_resources(jvpcore "remote_static" PREFIX "/remote" BASE ${REMOTE_STATIC_DIR}
+  FILES ${REMOTE_STATIC_DIR}/index.html ${REMOTE_STATIC_DIR}/login.html ${REMOTE_STATIC_DIR}/share.html
+        ${REMOTE_STATIC_DIR}/icon.svg)
 if(JVP_HAVE_NVMM)
   target_compile_definitions(jvpcore PUBLIC JVP_HAVE_NVMM)
   target_include_directories(jvpcore PUBLIC ${JETSON_MMAPI_INCLUDE})
