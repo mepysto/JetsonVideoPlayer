@@ -299,3 +299,54 @@ def test_mpris_play_pause(player):
     if r.returncode != 0:
         pytest.skip(f"MPRIS 이름을 쓸 수 없음 (다른 플레이어 실행 중?): {r.stderr.strip()}")
     player.wait(lambda s: not s["is_playing"], what="MPRIS 일시정지")
+
+
+# ---- AI 자막 · 번역 (whisper.cpp / NLLB가 설치된 기기에서만) ----------------------------------
+
+REAL_DATA = Path.home() / ".local" / "share" / "jetson_video_player"
+
+
+@pytest.fixture
+def ai_home(home):
+    whisper = REAL_DATA / "whisper.cpp"
+    sample = whisper / "samples" / "jfk.wav"
+    if not sample.exists() or not list((whisper / "models").glob("ggml-*.bin")):
+        pytest.skip("whisper.cpp 또는 모델 없음 (scripts/setup_whisper.sh)")
+    data = home / ".local" / "share" / "jetson_video_player"
+    data.mkdir(parents=True)
+    for name in ("whisper.cpp", "nllb"):
+        if (REAL_DATA / name).exists():
+            (data / name).symlink_to(REAL_DATA / name)
+    return home
+
+
+def test_ai_subtitles_then_translation(ai_home, tmp_path):
+    speech = tmp_path / "speech" / "jfk.mkv"
+    speech.parent.mkdir()
+    wav = REAL_DATA / "whisper.cpp" / "samples" / "jfk.wav"
+    subprocess.run(["gst-launch-1.0", "-q", "-e", "videotestsrc", "num-buffers=275", "!",
+                    "video/x-raw,width=320,height=240,framerate=25/1", "!", "x264enc", "speed-preset=ultrafast", "!",
+                    "h264parse", "!", "matroskamux", "name=m", "!", "filesink", f"location={speech}",
+                    "filesrc", f"location={wav}", "!", "wavparse", "!", "audioconvert", "!", "vorbisenc", "!", "m."],
+                   check=True, timeout=120)
+    p = Player(ai_home, speech)
+    try:
+        p.wait(lambda s: s["duration_sec"] > 0 and s["ai"]["available"], what="재생 시작")
+        p.cmd("play_pause")   # 인식이 끝날 때까지 멈춰 두어도 됩니다
+        p.cmd("ai_subtitles")
+        s = p.wait(lambda s: not s["ai"]["running"] and any(t["label"].startswith("🤖 AI") and "(" in t["label"]
+                                                           and "생성 중" not in t["label"] for t in s["subtitle_tracks"]),
+                   timeout=120, what="AI 자막 완성")
+        assert "fellow Americans" in p.output() or any("영어" in t["label"] for t in s["subtitle_tracks"])
+        srt = list((speech.parent).glob("*.srt"))
+        assert srt and "country" in srt[0].read_text()
+        if not s["translate"]["available"]:
+            pytest.skip("번역 엔진 없음")
+        p.cmd("translate")
+        s = p.wait(lambda s: not s["translate"]["running"] and any(t["label"].startswith("🌐") and "번역 중" not in t["label"]
+                                                                  for t in s["subtitle_tracks"]),
+                   timeout=180, what="번역 완성")
+        ko = [f for f in speech.parent.glob("*.srt") if ".ko." in f.name]
+        assert ko and any("가" <= ch <= "힣" for ch in ko[0].read_text()), "한국어 번역 파일"
+    finally:
+        p.quit()
