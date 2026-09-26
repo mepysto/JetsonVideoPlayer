@@ -3,6 +3,10 @@ project(jetson-player VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# aarch64 GCC의 ABI 변경 안내(note: parameter passing ... changed in GCC 10.1)는 경고가 아니므로 끕니다
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options(-Wno-psabi)
+endif()
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()

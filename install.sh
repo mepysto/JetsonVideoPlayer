@@ -33,7 +33,8 @@ fi
 for tool in cmake ninja pkg-config; do
     command -v "$tool" >/dev/null || { echo "❌ $tool 이 없습니다: ./scripts/install_build_deps.sh"; exit 1; }
 done
-if ! ls -d "$HOME"/Qt/6.*/gcc_arm64 "$HOME"/Qt/6.*/gcc_64 >/dev/null 2>&1 && [ -z "${CMAKE_PREFIX_PATH:-}" ]; then
+QT_FOUND=$(compgen -G "$HOME/Qt/6.*/gcc_arm64" || compgen -G "$HOME/Qt/6.*/gcc_64" || true)
+if [ -z "$QT_FOUND" ] && [ -z "${CMAKE_PREFIX_PATH:-}" ]; then
     echo "❌ 최신 Qt(6.8 이상)가 없습니다: ./scripts/setup_qt.sh"
     exit 1
 fi
