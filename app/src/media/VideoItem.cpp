@@ -9,7 +9,9 @@
 #include <QSGTexture>
 #include <QtQuick/qsgtexture_platform.h>
 #include <QLoggingCategory>
+#include <QElapsedTimer>
 #include <QHash>
+#include <QScreen>
 #include <array>
 
 #include <EGL/egl.h>
@@ -151,8 +153,14 @@ public:
         QString rotation;
         int hdr = 0;
         bool fixm = false;
+        qint64 vsyncNs = 16666667;   // 화면 갱신 주기
     };
-    void setParams(const Params &p) { m_params = p; }
+    void setParams(const Params &p)
+    {
+        if (p.rotation != m_params.rotation || p.hdr != m_params.hdr || p.fixm != m_params.fixm)
+            m_dirty = true;
+        m_params = p;
+    }
     // 동기화 단계(렌더 스레드, GL 컨텍스트 활성)에서 그릴 대상 텍스처를 미리 준비합니다.
     void prepareTarget()
     {
@@ -163,12 +171,16 @@ public:
     QSize textureSize() const { return m_fboSize; }
     bool hasFrame() const { return m_ready; }
     void render();
+    void paceBeforeSwap();
+    void markSwapped() { m_lastSwapNs = g_get_monotonic_time() * 1000; }
     void releaseResources();
 
 private:
     bool ensurePrograms(QOpenGLExtraFunctions *f);
     void ensureFbo(QOpenGLExtraFunctions *f, const QSize &size);
     GLuint compile(QOpenGLExtraFunctions *f, const QByteArray &vs, const QByteArray &fs);
+    VideoFrame pickFrame();
+    void adaptPhase(qint64 slackNs);
     void acceptFrame(QOpenGLExtraFunctions *f, VideoFrame frame);
     void dropFrame();
     bool importNvmm(QOpenGLExtraFunctions *f);
@@ -195,6 +207,14 @@ private:
     YuvMatrix m_yuv = matrixFor(0.2126, 0.0722);
     float m_offset[3] = {0, 0, 0};
     float m_scale[3] = {1, 1, 1};
+
+    // 프레임 선택 시점 조정 (pickFrame 참고)
+    qint64 m_phaseAdj = 0;              // 판정 시각 보정 (±vsync/2)
+    QList<qint64> m_slacks;             // 최근 프레임들의 (판정 시각 − 보여야 할 시각)
+    QElapsedTimer m_sinceNewFrame;      // 마지막으로 새 프레임을 보여 준 뒤 지난 시간
+    bool m_dirty = true;                // FBO를 다시 그려야 하는지 (새 프레임·크기·회전·HDR 변경)
+    bool m_continuous = false;          // 이번 프레임 뒤에 곧바로 다음 프레임을 그리는지
+    qint64 m_lastSwapNs = 0;            // 마지막 화면 교체가 끝난 시각 (단조 시계)
 };
 
 GLuint VideoRenderer::compile(QOpenGLExtraFunctions *f, const QByteArray &vs, const QByteArray &fs)
@@ -383,6 +403,7 @@ void VideoRenderer::acceptFrame(QOpenGLExtraFunctions *f, VideoFrame frame)
 {
     dropFrame();
     m_frame = frame;
+    m_dirty = true;
     if (frame.format == FrameFormat::NvmmRgba) {
         m_ready = importNvmm(f);
         if (!m_ready)
@@ -404,6 +425,7 @@ void VideoRenderer::ensureFbo(QOpenGLExtraFunctions *f, const QSize &size)
         f->glGenTextures(1, &m_fboTex);
     }
     m_fboSize = size;
+    m_dirty = true;
     f->glBindTexture(GL_TEXTURE_2D, m_fboTex);
     f->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size.width(), size.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -424,15 +446,18 @@ void VideoRenderer::render()
     GLint prevFbo = 0;
     f->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
     if (ensurePrograms(f)) {
-        VideoFrame next = m_params.bridge->takeLatest(m_frame.serial);
+        VideoFrame next = pickFrame();
         if (next.sample)
             acceptFrame(f, next);
     }
     const QSize target = m_params.targetSize;
     const bool external = m_frame.format == FrameFormat::NvmmRgba;
     const GLuint prog = external ? m_progExternal : m_progPlanar;
-    if (m_ready && prog && !target.isEmpty()) {
+    if (!target.isEmpty() && target != m_fboSize)
         ensureFbo(f, target);
+    // 새 프레임이 없는 vsync에는 FBO에 있는 그림을 그대로 씁니다 (매 vsync 4K 텍스처를 다시 그리지 않게).
+    if (m_dirty && m_ready && prog && !target.isEmpty()) {
+        m_dirty = false;
         f->glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
         f->glViewport(0, 0, target.width(), target.height());
 
@@ -496,6 +521,78 @@ void VideoRenderer::render()
     }
     f->glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
     m_window->endExternalCommands();
+    // 재생 중에는 vsync마다 다시 그려 프레임을 제때 바꿉니다 (렌더 스레드에서 부르면 GUI 동기화 없이 다시 그림).
+    // 새 프레임이 한동안 없으면(일시정지·끝) 멈추고, 새 프레임이 오면 frameReady → update()로 다시 시작합니다.
+    m_continuous = m_params.bridge->hasPending() || (m_sinceNewFrame.isValid() && m_sinceNewFrame.elapsed() < 250);
+    if (m_continuous)
+        m_window->update();
+}
+
+// NVIDIA EGL은 화면 교체(swap)에서 vsync를 기다리는 동안 CPU를 계속 돌립니다 (매 vsync 그리면 코어 하나 100%).
+// 다음 vsync 직전까지 잠들어 두어 드라이버가 기다리는 시간을 줄입니다.
+// swap이 기다리지 않는 환경(vsync 없는 가상 화면 등)에서도 이 덕분에 초당 화면 주기만큼만 그립니다.
+void VideoRenderer::paceBeforeSwap()
+{
+    if (!m_continuous || !m_lastSwapNs)
+        return;
+    constexpr qint64 kMarginNs = 2 * GST_MSECOND;   // 잠에서 깨는 지연을 감안한 여유
+    const qint64 wake = m_lastSwapNs + m_params.vsyncNs - kMarginNs;
+    const qint64 wait = wake - g_get_monotonic_time() * 1000;
+    if (wait > 0 && wait < m_params.vsyncNs)
+        g_usleep(gulong(wait / 1000));
+}
+
+// 다음 vsync에 보여야 할 프레임을 고릅니다.
+// 이 렌더링 결과는 약 한 vsync 뒤에 화면에 나오므로 "지금 + vsync" 시점까지 보여야 할 프레임 중 가장 늦은 것.
+// 24fps를 60Hz로 보이면 프레임의 절반이 vsync 경계에 정확히 걸려, 판정 시각이 1ms만 흔들려도
+// 2:3 순서가 깨집니다 (끊겨 보임). 그래서 판정 시각을 프레임들이 경계에서 가장 멀어지는 쪽으로 옮깁니다.
+VideoFrame VideoRenderer::pickFrame()
+{
+    GstClockTime now = 0;
+    if (!m_params.bridge->runningTimeNow(&now))
+        return m_params.bridge->takeFrame(std::nullopt);   // 일시정지·준비 중: 가장 최근 프레임 (탐색 미리보기)
+    const qint64 target = qint64(now) + m_params.vsyncNs + m_phaseAdj;
+    VideoFrame f = m_params.bridge->takeFrame(GstClockTime(qMax<qint64>(0, target)));
+    if (f.sample) {
+        m_sinceNewFrame.start();
+        if (GST_CLOCK_TIME_IS_VALID(f.runningTime))
+            adaptPhase(target - qint64(f.runningTime));
+    }
+    return f;
+}
+
+void VideoRenderer::adaptPhase(qint64 slackNs)
+{
+    const qint64 period = m_params.vsyncNs;
+    if (slackNs < 0 || slackNs > 4 * period)
+        return;   // 늦게 도착한 프레임 등은 판단에서 뺍니다
+    m_slacks << slackNs % period;
+    if (m_slacks.size() < 48)
+        return;
+    // 판정 시각을 adj만큼 옮기면 각 프레임의 여유는 (slack + adj) mod period가 됩니다.
+    // 경계(0 또는 period)까지의 가장 작은 거리가 가장 커지는 adj를 찾습니다.
+    auto margin = [&](qint64 adj) {
+        qint64 worst = period;
+        for (qint64 sl : std::as_const(m_slacks)) {
+            const qint64 v = ((sl + adj) % period + period) % period;
+            worst = qMin(worst, qMin(v, period - v));
+        }
+        return worst;
+    };
+    const qint64 current = margin(0);
+    qint64 bestAdj = 0, best = current;
+    for (qint64 adj = -period / 2; adj < period / 2; adj += period / 64) {
+        if (const qint64 m = margin(adj); m > best) {
+            best = m;
+            bestAdj = adj;
+        }
+    }
+    // 지금도 충분히 여유가 있으면 그대로 둡니다 (옮기는 순간 한 번은 순서가 바뀌므로).
+    if (current < period / 4 && best > current + period / 16) {
+        m_phaseAdj += bestAdj;
+        m_phaseAdj = ((m_phaseAdj + period / 2) % period + period) % period - period / 2;
+    }
+    m_slacks.clear();
 }
 
 void VideoRenderer::releaseResources()
@@ -536,6 +633,10 @@ public:
         setOwnsTexture(true);
         setFiltering(QSGTexture::Linear);
         QObject::connect(window, &QQuickWindow::beforeRendering, m_renderer, [r = m_renderer] { r->render(); },
+                         Qt::DirectConnection);
+        QObject::connect(window, &QQuickWindow::afterRendering, m_renderer, [r = m_renderer] { r->paceBeforeSwap(); },
+                         Qt::DirectConnection);
+        QObject::connect(window, &QQuickWindow::frameSwapped, m_renderer, [r = m_renderer] { r->markSwapped(); },
                          Qt::DirectConnection);
     }
     ~VideoNode() override { delete m_renderer; }
@@ -655,6 +756,8 @@ QSGNode *VideoItem::updatePaintNode(QSGNode *old, UpdatePaintNodeData *)
     p.rotation = m_rotation;
     p.hdr = m_hdrMode;
     p.fixm = m_hdrFix;
+    if (const QScreen *screen = window()->screen(); screen && screen->refreshRate() > 1)
+        p.vsyncNs = qint64(1e9 / screen->refreshRate());
     node->sync(p, rect);
     if (!node->texture()) {
         delete node;   // GL 컨텍스트가 없는 드문 경우: 다음 동기화에서 다시

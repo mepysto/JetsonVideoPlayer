@@ -58,6 +58,9 @@ void PlayerEngine::initGStreamer()
     }
 }
 
+// 오디오 싱크의 drift-tolerance (마이크로초): 시스템 시계와 이 값의 절반 넘게 어긋나면 재생 위치를 고칩니다 (기본 40ms)
+constexpr gint64 kAudioDriftToleranceUs = 100000;
+
 PlayerEngine::PlayerEngine(QObject *parent) : QObject(parent), m_bridge(new FrameBridge(this))
 {
     initGStreamer();
@@ -74,6 +77,8 @@ GstElement *PlayerEngine::buildVideoSink(bool hw)
     if (hw && hasElement("nvvidconv")) {
         // VIC 하드웨어가 NV12/P010 → RGBA 변환, 결과는 GPU 메모리(NVMM)에 그대로 → EGLImage로 화면에
         conv = gst_element_factory_make("nvvidconv", "hw_conv");
+        // 기본 4개로는 화면에 있는 프레임 + 미리 받아 둔 프레임(FrameBridge 대기열)을 잡고 있을 때 모자랍니다.
+        g_object_set(conv, "output-buffers", 6u, nullptr);
         caps = gst_caps_from_string("video/x-raw(memory:NVMM),format=RGBA");
     } else {
         conv = gst_element_factory_make("videoconvert", "sw_conv");
@@ -139,6 +144,15 @@ bool PlayerEngine::open(const QString &uri, const OpenOptions &opt)
     m_pipeline = gst_element_factory_make("playbin", "player");
     if (!m_pipeline)
         return false;
+    // 파이프라인 시계를 시스템 시계로 둡니다. 기본값인 오디오(PulseAudio/PipeWire) 시계는 보고 시각이
+    // 1~2초마다 10~25ms씩 튀어, 영상 프레임을 고르는 기준(vsync)과의 위상이 흔들려 끊겨 보입니다.
+    // 오디오 싱크가 시스템 시계에 맞춥니다 (drift-tolerance는 onDeepElementAdded 참고).
+    // 패스스루는 압축 오디오를 그대로 내보내므로 오디오 시계를 그대로 씁니다.
+    if (!opt.passthrough) {
+        GstClock *clock = gst_system_clock_obtain();
+        gst_pipeline_use_clock(GST_PIPELINE(m_pipeline), clock);
+        gst_object_unref(clock);
+    }
     m_hwOutput = opt.hwOutput && hasElement("nvvidconv");
     m_passthrough = opt.passthrough;
     m_keepAssRaw = opt.keepAssRaw;
@@ -401,6 +415,11 @@ void PlayerEngine::onDeepElementAdded(GstBin *, GstBin *, GstElement *element, g
         set("drop-frame-interval", 0);
         set("max-errors", -1);
     }
+    // 시스템 시계에 맞출 때, 오디오 장치가 보고하는 시각의 흔들림(±20ms)에는 반응하지 않고
+    // 실제로 쌓인 어긋남만 고칩니다 (기본 40ms면 몇 초마다 재생 위치를 옮겨 소리가 튈 수 있음).
+    if (!e->m_passthrough && klass.contains(QLatin1String("Sink")) && klass.contains(QLatin1String("Audio"))
+        && g_object_class_find_property(G_OBJECT_GET_CLASS(element), "drift-tolerance"))
+        g_object_set(element, "drift-tolerance", gint64(kAudioDriftToleranceUs), nullptr);
     if (name == QLatin1String("dav1ddec") && g_object_class_find_property(G_OBJECT_GET_CLASS(element), "max-threads"))
         g_object_set(element, "max-threads", 6, nullptr);
     if (klass.contains(QLatin1String("Decoder")) && klass.contains(QLatin1String("Video"))) {
