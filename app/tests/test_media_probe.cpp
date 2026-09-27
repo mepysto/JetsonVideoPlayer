@@ -3,6 +3,7 @@
 #include "PlayerEngine.h"
 #include "Storage.h"
 
+#include <QElapsedTimer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -61,7 +62,11 @@ private slots:
             p.waitForFinished(60000);
             if (QFileInfo(path).size() == 0)
                 QSKIP("x264enc/avenc_aac 없음");
+            QElapsedTimer timer;
+            timer.start();
             const auto info = probe::videoCodec(path);
+            // 스트림 정보가 나오면 바로 끝나야 합니다 (예전에는 ASYNC_DONE을 못 받아 제한시간 3초를 다 기다렸습니다).
+            QVERIFY2(timer.elapsed() < 1000, qPrintable(QStringLiteral("%1 ms").arg(timer.elapsed())));
             QVERIFY(info.has_value());
             QCOMPARE(info->codec, QStringLiteral("h264"));
             QCOMPARE(probe::audioCodec(path), QStringLiteral("audio/mpeg"));

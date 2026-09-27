@@ -34,11 +34,34 @@ struct ProbeState {
     GstElement *pipeline = nullptr;
     GMutex lock;
     QList<GstPad *> pads;
+    QList<GstCaps *> caps;   // 패드마다 처음 흘러온 CAPS 이벤트 (패드가 나온 직후에는 아직 caps가 없습니다)
 };
+
+void wakeWaiter(ProbeState *st)
+{
+    // 버스에서 기다리는 쪽을 깨워 준비 상태를 다시 확인하게 합니다.
+    gst_element_post_message(st->pipeline, gst_message_new_application(nullptr, gst_structure_new_empty("jvp-probe")));
+}
+
+GstPadProbeReturn onPadEvent(GstPad *, GstPadProbeInfo *info, gpointer data)
+{
+    GstEvent *ev = GST_PAD_PROBE_INFO_EVENT(info);
+    if (GST_EVENT_TYPE(ev) != GST_EVENT_CAPS)
+        return GST_PAD_PROBE_OK;
+    auto *st = static_cast<ProbeState *>(data);
+    GstCaps *caps = nullptr;
+    gst_event_parse_caps(ev, &caps);
+    g_mutex_lock(&st->lock);
+    st->caps << gst_caps_ref(caps);
+    g_mutex_unlock(&st->lock);
+    wakeWaiter(st);
+    return GST_PAD_PROBE_REMOVE;
+}
 
 void onParsedPad(GstElement *, GstPad *pad, gpointer data)
 {
     auto *st = static_cast<ProbeState *>(data);
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, onPadEvent, st, nullptr);
     GstElement *sink = gst_element_factory_make("fakesink", nullptr);
     g_object_set(sink, "sync", FALSE, nullptr);
     gst_bin_add(GST_BIN(st->pipeline), sink);
@@ -49,6 +72,7 @@ void onParsedPad(GstElement *, GstPad *pad, gpointer data)
     g_mutex_lock(&st->lock);
     st->pads << GST_PAD(gst_object_ref(pad));
     g_mutex_unlock(&st->lock);
+    wakeWaiter(st);
 }
 
 void probe(const QString &path, int timeoutSec, ProbeResult &out)
@@ -71,41 +95,93 @@ void probe(const QString &path, int timeoutSec, ProbeResult &out)
     g_signal_connect(parse, "pad-added", G_CALLBACK(onParsedPad), &st);
 
     gst_element_set_state(st.pipeline, GST_STATE_PAUSED);
+    // 싱크는 패드가 나온 뒤에 붙으므로 파이프라인이 ASYNC_DONE을 보내지 않을 때가 많습니다.
+    // parsebin이 알려 준 스트림 수(STREAM_COLLECTION)만큼 패드가 나오고 모두 caps를 받으면 바로 끝냅니다.
     GstBus *bus = gst_element_get_bus(st.pipeline);
-    GstMessage *msg = gst_bus_timed_pop_filtered(bus, GstClockTime(timeoutSec) * GST_SECOND,
-                                                 GstMessageType(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-    if (msg) {
-        out.ok = GST_MESSAGE_TYPE(msg) != GST_MESSAGE_ERROR;
-        if (!out.ok) {
+    const gint64 deadline = g_get_monotonic_time() + gint64(timeoutSec) * G_USEC_PER_SEC;
+    int expected = -1;
+    for (;;) {
+        const gint64 left = deadline - g_get_monotonic_time();
+        if (left <= 0)
+            break;
+        GstMessage *msg = gst_bus_timed_pop_filtered(
+            bus, GstClockTime(left) * GST_USECOND,
+            GstMessageType(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR | GST_MESSAGE_EOS
+                           | GST_MESSAGE_STREAM_COLLECTION | GST_MESSAGE_APPLICATION));
+        if (!msg)
+            break;
+        bool done = false;
+        switch (GST_MESSAGE_TYPE(msg)) {
+        case GST_MESSAGE_ERROR: {
             GError *err = nullptr;
             gst_message_parse_error(msg, &err, nullptr);
             qCDebug(lcProbe) << "스트림 분석 실패" << path << (err ? err->message : "");
             g_clear_error(&err);
+            done = true;
+            break;
+        }
+        case GST_MESSAGE_STREAM_COLLECTION: {
+            GstStreamCollection *c = nullptr;
+            gst_message_parse_stream_collection(msg, &c);
+            if (c) {
+                expected = int(gst_stream_collection_get_size(c));
+                gst_object_unref(c);
+            }
+            break;
+        }
+        case GST_MESSAGE_APPLICATION:
+            break;
+        default:   // ASYNC_DONE, EOS
+            out.ok = true;
+            done = true;
+            break;
         }
         gst_message_unref(msg);
+        if (!done && expected > 0) {
+            g_mutex_lock(&st.lock);
+            done = st.pads.size() >= expected && st.caps.size() >= st.pads.size();
+            g_mutex_unlock(&st.lock);
+        }
+        if (done)
+            break;
     }
     gst_object_unref(bus);
     // NULL로 내리면 패드의 caps가 지워지므로 먼저 읽습니다.
+    // CAPS 이벤트로 받은 것을 쓰고, 시간 안에 오지 않았으면 패드에 있는 caps로 대신합니다.
     g_mutex_lock(&st.lock);
-    for (GstPad *pad : std::as_const(st.pads)) {
-        GstCaps *caps = gst_pad_get_current_caps(pad);
-        if (!caps)
-            caps = gst_pad_query_caps(pad, nullptr);
-        if (caps && gst_caps_get_size(caps) > 0) {
+    QList<GstCaps *> found = st.caps;
+    st.caps.clear();
+    if (found.size() < st.pads.size()) {
+        for (GstPad *pad : std::as_const(st.pads)) {
+            GstCaps *caps = gst_pad_get_current_caps(pad);
+            if (!caps)
+                caps = gst_pad_query_caps(pad, nullptr);
+            if (caps)
+                found << caps;
+        }
+    }
+    for (GstCaps *caps : std::as_const(found)) {
+        if (gst_caps_get_size(caps) > 0) {
             const QByteArray name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
             if (name.startsWith("video/") && !out.video)
                 out.video = gst_caps_ref(caps);
             else if (name.startsWith("audio/") && !out.audio)
                 out.audio = gst_caps_ref(caps);
         }
-        if (caps)
-            gst_caps_unref(caps);
-        gst_object_unref(pad);
+        gst_caps_unref(caps);
     }
+    for (GstPad *pad : std::as_const(st.pads))
+        gst_object_unref(pad);
+    st.pads.clear();
     // 스트림이 하나라도 나왔으면 (끝까지 준비되지 않았어도) 결과로 씁니다.
     out.ok = out.ok || out.video || out.audio;
     g_mutex_unlock(&st.lock);
     gst_element_set_state(st.pipeline, GST_STATE_NULL);
+    // 결과를 읽은 뒤 스트리밍 스레드가 더 넣은 것 (NULL로 내리면 스레드가 끝나므로 이제 잠금 없이 정리)
+    for (GstCaps *caps : std::as_const(st.caps))
+        gst_caps_unref(caps);
+    for (GstPad *pad : std::as_const(st.pads))
+        gst_object_unref(pad);
     gst_object_unref(st.pipeline);
     g_mutex_clear(&st.lock);
 }
