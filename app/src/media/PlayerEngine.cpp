@@ -540,7 +540,12 @@ void PlayerEngine::handleMessage(GstMessage *msg)
         if (GST_MESSAGE_SRC(msg) == GST_OBJECT(m_pipeline)) {
             GstState oldState, newState, pending;
             gst_message_parse_state_changed(msg, &oldState, &newState, &pending);
-            const bool playing = newState == GST_STATE_PLAYING;
+            // 메시지는 메인 루프에서 늦게 처리되므로, 그사이 pause()/play()로 목표가 바뀌었을 수 있습니다.
+            // (예: 여는 중 PLAYING으로 가던 알림이 일시정지 뒤에 도착) 지금 목표가 PLAYING일 때만 재생 중으로 봅니다.
+            GST_OBJECT_LOCK(m_pipeline);
+            const GstState target = GST_STATE_TARGET(m_pipeline);
+            GST_OBJECT_UNLOCK(m_pipeline);
+            const bool playing = newState == GST_STATE_PLAYING && target == GST_STATE_PLAYING;
             if (playing != m_playing) {
                 m_playing = playing;
                 emit playingChanged(playing);
