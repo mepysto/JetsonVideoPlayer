@@ -975,26 +975,34 @@ void AppController::cycleRotation()
 void AppController::updateHdr()
 {
     // 디코딩된 영상의 전달 특성(PQ/HLG)에 맞춰 톤매핑 셰이더를 고릅니다 (preroll 때).
+    // 톤매핑은 사용자가 메뉴에서 켰을 때만 합니다.
+    const QString prevTransfer = m_hdrTransfer;   // 새 영상을 열면 비워집니다
     m_hdrTransfer = m_engine->videoTransfer();
-    const QString mode = Settings::instance()->boolValue(QStringLiteral("hdr_tonemap")) ? m_hdrTransfer : QString();
+    const QString mode = Settings::instance()->boolValue(QStringLiteral("hdr_tonemap_enabled")) ? m_hdrTransfer : QString();
     // HW(NVMM) 경로는 VIC가 BT.709 행렬로 RGB를 만들므로 BT.2020 행렬로 다시 맞춥니다.
     const bool fix = m_engine->usingHwOutput();
-    if (mode == m_hdrMode && fix == m_hdrMatrixFix)
-        return;
-    m_hdrMode = mode;
-    m_hdrMatrixFix = fix;
-    emit viewChanged();
-    if (!mode.isEmpty()) {
-        const QString name = mode == QLatin1String("pq") ? QStringLiteral("HDR10 (PQ)") : QStringLiteral("HLG");
-        showOsd(QStringLiteral("🌈 %1 영상 — SDR 화면에 맞게 톤매핑합니다").arg(name), 2500);
-        qCInfo(lcApp).noquote() << "🌈 [HDR 톤매핑]" << name << (fix ? "HW" : "SW") << "경로";
+    if (mode != m_hdrMode || fix != m_hdrMatrixFix) {
+        m_hdrMode = mode;
+        m_hdrMatrixFix = fix;
+        emit viewChanged();
     }
+    // 탐색할 때마다 preroll이 다시 오므로, 영상을 처음 알아봤을 때만 알립니다.
+    if (m_hdrTransfer.isEmpty() || m_hdrTransfer == prevTransfer)
+        return;
+    const QString name = m_hdrTransfer == QLatin1String("pq") ? QStringLiteral("HDR10 (PQ)") : QStringLiteral("HLG");
+    if (mode.isEmpty()) {
+        showOsd(QStringLiteral("🌈 %1 영상 — 색이 흐리면 메뉴에서 HDR 톤매핑을 켜세요").arg(name), 3000);
+        qCInfo(lcApp).noquote() << "🌈 [HDR]" << name << "영상 — 톤매핑 꺼짐 (메뉴에서 켤 수 있음)";
+        return;
+    }
+    showOsd(QStringLiteral("🌈 %1 영상 — SDR 화면에 맞게 톤매핑합니다").arg(name), 2500);
+    qCInfo(lcApp).noquote() << "🌈 [HDR 톤매핑]" << name << (fix ? "HW" : "SW") << "경로";
 }
 
 void AppController::toggleHdrTonemap()
 {
-    const bool on = !Settings::instance()->boolValue(QStringLiteral("hdr_tonemap"));
-    Settings::instance()->setValue(QStringLiteral("hdr_tonemap"), on);
+    const bool on = !Settings::instance()->boolValue(QStringLiteral("hdr_tonemap_enabled"));
+    Settings::instance()->setValue(QStringLiteral("hdr_tonemap_enabled"), on);
     m_hdrMode = on ? m_hdrTransfer : QString();
     emit viewChanged();
     showOsd(on ? QStringLiteral("🌈 HDR 톤매핑 ON") : QStringLiteral("🌈 HDR 톤매핑 OFF (HDR 원본 값 그대로)"));

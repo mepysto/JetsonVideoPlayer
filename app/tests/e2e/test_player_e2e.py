@@ -289,6 +289,43 @@ def test_bad_path_exits_with_error(home):
     assert r.returncode == 1 and "재생할 수 있는 영상이 없습니다" in r.stderr
 
 
+def make_hdr_clip(path, seconds=4):
+    """HDR10(PQ) 10비트 HEVC mp4 (x265, 소프트웨어 인코더)"""
+    cmd = (f"-q -e videotestsrc pattern=smpte num-buffers={seconds * 25} ! "
+           f"video/x-raw,width=640,height=360,framerate=25/1 ! videoconvert ! "
+           f"video/x-raw,format=I420_10LE,colorimetry=bt2100-pq ! x265enc speed-preset=ultrafast ! h265parse ! "
+           f"mp4mux ! filesink location={shlex.quote(str(path))}")
+    subprocess.run(["gst-launch-1.0", *shlex.split(cmd)], check=True, timeout=120)
+
+
+@pytest.mark.skipif(subprocess.run(["gst-inspect-1.0", "x265enc"], capture_output=True).returncode != 0,
+                    reason="x265enc 없음")
+@pytest.mark.parametrize("saved, tonemapped", [
+    ({}, False),                              # 기본값: 톤매핑하지 않음
+    ({"hdr_tonemap": True}, False),           # 예전 버전이 저장한 기본값(켜짐)은 따르지 않음
+    ({"hdr_tonemap_enabled": True}, True),    # 사용자가 켠 경우에만
+])
+def test_hdr_tonemap_only_when_enabled(tmp_path, saved, tonemapped):
+    clip = tmp_path / "media" / "hdr.mp4"
+    clip.parent.mkdir()
+    make_hdr_clip(clip)
+    home = tmp_path / "home"
+    cfg = home / ".config" / "jetson_video_player"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text(json.dumps(saved))
+    p = Player(home, clip)
+    try:
+        p.wait(lambda s: s["duration_sec"] > 0, what="재생 시작")
+        deadline = time.time() + 10
+        while "HDR" not in p.output() and time.time() < deadline:
+            time.sleep(0.2)
+        out = p.output()
+        assert ("[HDR 톤매핑] HDR10 (PQ)" in out) == tonemapped, out
+        assert ("[HDR] HDR10 (PQ) 영상 — 톤매핑 꺼짐" in out) == (not tonemapped), out
+    finally:
+        p.quit()
+
+
 def test_mpris_play_pause(player):
     if shutil.which("gdbus") is None:
         pytest.skip("gdbus 없음")

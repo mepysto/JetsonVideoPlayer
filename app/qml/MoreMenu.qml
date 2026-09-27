@@ -45,7 +45,7 @@ JMenu {
     }
     JMenuItem { text: "⏭ 다음 영상 5초 카운트다운"; checkable: true; checked: App.settings.autoplay_countdown; onTriggered: App.toggleSetting("autoplay_countdown") }
     JMenuItem { text: "🎨 ASS 자막을 원래 글꼴·색·위치로"; checkable: true; checked: App.settings.subtitle_ass_styles; onTriggered: App.toggleAssStyles() }
-    JMenuItem { text: "🌈 HDR 영상 톤매핑 (SDR 화면에서 자연스러운 색)"; checkable: true; checked: App.settings.hdr_tonemap; onTriggered: App.toggleHdrTonemap() }
+    JMenuItem { text: "🌈 HDR 영상 톤매핑 (SDR 화면에서 자연스러운 색)"; checkable: true; checked: App.settings.hdr_tonemap_enabled; onTriggered: App.toggleHdrTonemap() }
     JMenuItem { text: App.loudnessMenuLabel; checkable: true; checked: App.settings.loudness_normalize; onTriggered: App.toggleLoudness() }
     JMenu {
         title: "🎚️ EQ: " + App.eqPresetName

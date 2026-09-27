@@ -43,7 +43,9 @@ const QList<Entry> &defaults()
         {"eq_preset", QStringLiteral("flat")},
         {"opensubtitles_languages", QStringLiteral("ko,en")},
         {"audio_passthrough", false},
-        {"hdr_tonemap", true},
+        // HDR 톤매핑은 사용자가 켤 때만 (기본 꺼짐). 예전 키 "hdr_tonemap"은 기본 켜짐으로 저장돼 있어
+        // 이름을 바꿔 기존 설정 파일의 값을 버립니다.
+        {"hdr_tonemap_enabled", false},
         {"remote_pin", QString()},
         {"remote_lan_only", true},
         {"mini_width", 480},
