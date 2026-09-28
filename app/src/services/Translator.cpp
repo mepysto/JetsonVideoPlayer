@@ -53,15 +53,70 @@ QPair<QString, QString> nllbPaths() { return {nllbHome() + QStringLiteral("/pyli
 
 QString nllbCode(const QString &lang)
 {
-    static const QHash<QString, QString> codes{{"ko", "kor_Hang"}, {"en", "eng_Latn"}, {"ja", "jpn_Jpan"},
-                                               {"zh", "zho_Hans"}, {"es", "spa_Latn"}, {"fr", "fra_Latn"},
-                                               {"de", "deu_Latn"}, {"ru", "rus_Cyrl"}};
+    // tools/nllb_worker.py의 NLLB_CODES와 같게 유지합니다 (test_translator가 확인).
+    static const QHash<QString, QString> codes{
+        {"ko", "kor_Hang"}, {"en", "eng_Latn"}, {"ja", "jpn_Jpan"}, {"zh", "zho_Hans"}, {"zh-TW", "zho_Hant"},
+        {"es", "spa_Latn"}, {"fr", "fra_Latn"}, {"de", "deu_Latn"}, {"ru", "rus_Cyrl"}, {"vi", "vie_Latn"},
+        {"th", "tha_Thai"}, {"id", "ind_Latn"}, {"it", "ita_Latn"}, {"pt", "por_Latn"}};
     return codes.value(lang);
 }
 
 QList<QPair<QString, QString>> targetLanguages()
 {
-    return {{"ko", "Korean (한국어)"}, {"en", "English"}, {"ja", "Japanese (日本語)"}, {"zh", "Simplified Chinese (简体中文)"}};
+    // 설정 translate_target의 허용값(Settings.cpp)과 같게 유지합니다 (test_translator가 확인).
+    return {{"ko", "Korean (한국어)"},
+            {"en", "English"},
+            {"ja", "Japanese (日本語)"},
+            {"zh", "Simplified Chinese (简体中文)"},
+            {"zh-TW", "Traditional Chinese (繁體中文)"},
+            {"es", "Spanish (Español)"},
+            {"fr", "French (Français)"},
+            {"de", "German (Deutsch)"},
+            {"ru", "Russian (Русский)"},
+            {"vi", "Vietnamese (Tiếng Việt)"},
+            {"th", "Thai (ภาษาไทย)"},
+            {"id", "Indonesian (Bahasa Indonesia)"}};
+}
+
+QString targetLanguageLabel(const QString &code)
+{
+    if (code == QLatin1String("zh"))
+        return QStringLiteral("중국어 (간체)");
+    return languageName(code);
+}
+
+QString detectScriptLanguage(const QStringList &texts)
+{
+    // 글자 수를 세어 가장 많은 문자 체계로 정합니다. 가나는 일본어 문장에 조금만 섞여도 일본어로 봅니다
+    // (한자가 많은 일본어 문장을 중국어로 오판하지 않게). 영어 이름 등이 섞여도 되도록 비율로 판단합니다.
+    int hangul = 0, kana = 0, han = 0, thai = 0, cyrillic = 0, latin = 0;
+    for (const QString &t : texts) {
+        for (const QChar c : t) {
+            const char16_t u = c.unicode();
+            if ((u >= 0xAC00 && u <= 0xD7A3) || (u >= 0x1100 && u <= 0x11FF) || (u >= 0x3130 && u <= 0x318F))
+                ++hangul;
+            else if (u >= 0x3040 && u <= 0x30FF)
+                ++kana;
+            else if (u >= 0x4E00 && u <= 0x9FFF)
+                ++han;
+            else if (u >= 0x0E00 && u <= 0x0E7F)
+                ++thai;
+            else if (u >= 0x0400 && u <= 0x04FF)
+                ++cyrillic;
+            else if (c.isLetter() && u < 0x0250)
+                ++latin;
+        }
+    }
+    const int total = hangul + kana + han + thai + cyrillic + latin;
+    if (total == 0)
+        return {};
+    if (kana * 20 >= total && kana + han >= hangul)
+        return QStringLiteral("ja");
+    const QList<QPair<int, QString>> scripts{{hangul, "ko"}, {han, "zh"}, {thai, "th"}, {cyrillic, "ru"}};
+    for (const auto &[count, code] : scripts)
+        if (count * 2 >= total)
+            return code;
+    return {};
 }
 
 QString targetLanguageName(const QString &code)

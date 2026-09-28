@@ -96,7 +96,7 @@ const QHash<QString, QStringList> &choices()
     static const QHash<QString, QStringList> c = {
         {"repeat_mode", {"all", "one", "none", "shuffle"}},
         {"playlist_sort", {"name", "mtime", "size"}},
-        {"translate_target", {"ko", "en", "ja", "zh"}},
+        {"translate_target", {"ko", "en", "ja", "zh", "zh-TW", "es", "fr", "de", "ru", "vi", "th", "id"}},
         {"translate_backend", {"auto", "local", "claude"}},
         {"eq_preset", {"flat", "dialogue", "bass", "treble", "quiet"}},
         {"ui_mode", {"auto", "desktop", "tv"}},

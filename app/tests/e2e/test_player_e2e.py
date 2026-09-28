@@ -387,3 +387,33 @@ def test_ai_subtitles_then_translation(ai_home, tmp_path):
         assert ko and any("가" <= ch <= "힣" for ch in ko[0].read_text()), "한국어 번역 파일"
     finally:
         p.quit()
+
+
+def test_translate_to_chosen_language_detects_source(home, tmp_path):
+    # 언어 표시가 없는 한국어 자막을 웹 리모컨으로 고른 언어(일본어)로 번역합니다.
+    # 원문 언어는 자막 글자로 판별해야 합니다 (예전에는 모르면 영어로 가정).
+    if not (REAL_DATA / "nllb" / "model" / "model.bin").exists():
+        pytest.skip("NLLB 번역 모델 없음 (scripts/setup_translator.sh)")
+    data = home / ".local" / "share" / "jetson_video_player"
+    data.mkdir(parents=True)
+    (data / "nllb").symlink_to(REAL_DATA / "nllb")
+    media = tmp_path / "media"
+    media.mkdir()
+    make_clip(media / "clip.mp4", 30)   # 번역이 끝나기 전에 반복 재생으로 다시 열리지 않게 (다시 열면 번역 취소)
+    (media / "clip.srt").write_text("1\n00:00:01,000 --> 00:00:03,000\n오늘 날씨가 정말 좋네요.\n\n"
+                                    "2\n00:00:04,000 --> 00:00:06,000\n저녁에 같이 밥 먹을래요?\n", encoding="utf-8")
+    p = Player(home, media / "clip.mp4")
+    try:
+        p.wait(lambda s: s["duration_sec"] > 0 and s["translate"]["available"], what="재생 시작")
+        p.cmd("translate", lang="ja")
+        s = p.wait(lambda s: not s["translate"]["running"] and any(t["label"].startswith("🌐") and "번역 중" not in t["label"]
+                                                                  for t in s["subtitle_tracks"]),
+                   timeout=180, what="번역 완성")
+        assert any("일본어" in t["label"] for t in s["subtitle_tracks"]), s["subtitle_tracks"]
+        assert "[자막 번역 시작] ko → ja" in p.output()
+        ja = [f for f in media.glob("*.srt") if ".ja." in f.name]
+        assert ja and any("\u3040" <= ch <= "\u30ff" for ch in ja[0].read_text()), "일본어(가나) 번역 파일"
+    finally:
+        p.quit()
+    # 고른 언어를 기억합니다 (설정은 종료할 때 저장)
+    assert json.loads((home / ".config" / "jetson_video_player" / "settings.json").read_text())["translate_target"] == "ja"

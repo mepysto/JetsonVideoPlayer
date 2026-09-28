@@ -1,5 +1,6 @@
 // 자막 번역: tests/test_ai_translate.py 이식 + Claude API 요청 형태(가짜 서버) + NLLB 사이드카 통합 테스트
 #include "Translator.h"
+#include "Settings.h"
 #include "fake_http_server.h"
 #include "media_test_util.h"
 
@@ -121,6 +122,61 @@ private slots:
         QVERIFY(!parseTranslations(QStringLiteral("{\"translations\": [\"가\"]}"), 2));   // 개수 불일치
         QVERIFY(!parseTranslations("not json", 1));
         QVERIFY(!parseTranslations("{\"translations\": [1]}", 1));
+    }
+
+    void targetLanguagesCoverTwelveWithNllbCodes()
+    {
+        const QStringList expected{"ko", "en", "ja", "zh", "zh-TW", "es", "fr", "de", "ru", "vi", "th", "id"};
+        QStringList codes;
+        for (const auto &[code, promptName] : targetLanguages()) {
+            codes << code;
+            QVERIFY2(!nllbCode(code).isEmpty(), qPrintable(code));
+            QVERIFY2(!promptName.isEmpty(), qPrintable(code));
+            const QString label = targetLanguageLabel(code);   // 메뉴에 보일 한국어 이름
+            QVERIFY2(!label.isEmpty() && label != code, qPrintable(code));
+        }
+        QCOMPARE(codes, expected);
+        QCOMPARE(nllbCode("zh-TW"), QStringLiteral("zho_Hant"));
+        QCOMPARE(targetLanguageLabel("zh"), QStringLiteral("중국어 (간체)"));
+        QCOMPARE(targetLanguageLabel("zh-TW"), QStringLiteral("중국어 (번체)"));
+        QVERIFY(systemPrompt("zh-TW").contains("Traditional Chinese"));
+        QVERIFY(systemPrompt("vi").contains("Vietnamese"));
+    }
+
+    void settingsAcceptEveryTargetLanguage()
+    {
+        auto *s = jvp::Settings::instance();
+        for (const auto &lang : targetLanguages())
+            QCOMPARE(s->setValue("translate_target", lang.first).toString(), lang.first);
+        s->setValue("translate_target", "ko");
+    }
+
+    void nllbWorkerKnowsEveryLanguage()
+    {
+        // 사이드카(tools/nllb_worker.py)는 짧은 코드("vi")를 받아 스스로 NLLB 코드로 바꿉니다.
+        const QString script = nllbWorkerScript();
+        QVERIFY(!script.isEmpty());
+        QFile f(script);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QString src = QString::fromUtf8(f.readAll());
+        for (const auto &lang : targetLanguages()) {
+            const QString entry = QStringLiteral("\"%1\": \"%2\"").arg(lang.first, nllbCode(lang.first));
+            QVERIFY2(src.contains(entry), qPrintable(entry));
+        }
+    }
+
+    void detectScriptLanguageCases()
+    {
+        QCOMPARE(detectScriptLanguage({"안녕하세요", "오늘 날씨가 좋네요"}), QStringLiteral("ko"));
+        QCOMPARE(detectScriptLanguage({"こんにちは、元気ですか"}), QStringLiteral("ja"));
+        QCOMPARE(detectScriptLanguage({"日本語の字幕です"}), QStringLiteral("ja"));   // 한자가 많아도 가나가 있으면 일본어
+        QCOMPARE(detectScriptLanguage({"你好，今天天气很好"}), QStringLiteral("zh"));
+        QCOMPARE(detectScriptLanguage({"สวัสดีครับ"}), QStringLiteral("th"));
+        QCOMPARE(detectScriptLanguage({"Привет, как дела?"}), QStringLiteral("ru"));
+        QCOMPARE(detectScriptLanguage({"안녕 Tom", "OK 알겠어"}), QStringLiteral("ko"));   // 이름 등 영어가 섞여도
+        QCOMPARE(detectScriptLanguage({"Hello there", "How are you?"}), QString());      // 라틴 문자는 판별하지 않음
+        QCOMPARE(detectScriptLanguage({"<i>♪</i>", "123"}), QString());
+        QCOMPARE(detectScriptLanguage({}), QString());
     }
 
     void planBatchesStartsNearPosition()

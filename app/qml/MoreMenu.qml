@@ -13,6 +13,18 @@ JMenu {
     JMenuItem { text: "📸 스크린샷 캡처 (Ctrl+S)"; enabled: menu.hasVideo; onTriggered: App.captureScreenshot() }
     JMenuItem { text: App.ai.menuLabel; enabled: menu.hasVideo; onTriggered: App.startAiSubtitles() }
     JMenuItem { text: App.translation.menuLabel; enabled: menu.hasVideo; onTriggered: App.startTranslation() }
+    JMenu {
+        title: "🌐 다른 언어로 번역"
+        enabled: menu.hasVideo && !App.translation.running
+        Repeater {
+            model: App.translation.languages
+            JMenuItem {
+                required property var modelData
+                text: modelData.name; checkable: true; checked: App.settings.translate_target === modelData.code
+                onTriggered: App.startTranslationTo(modelData.code)
+            }
+        }
+    }
     JMenuItem { text: "📑 챕터 / 장면 목록 (K)"; enabled: menu.hasVideo; onTriggered: App.requestDialog("chapters", "") }
     JMenuItem { text: "🔎 대사 검색 (Ctrl+F)"; enabled: menu.hasVideo; onTriggered: App.requestDialog("search", "") }
     JMenuItem { text: "🌐 온라인 자막 찾기 (OpenSubtitles)..."; enabled: menu.hasVideo; onTriggered: App.requestDialog("onlineSubs", "") }
@@ -89,11 +101,11 @@ JMenu {
         JMenu {
             title: "번역할 언어"
             Repeater {
-                model: [["ko", "한국어"], ["en", "영어"], ["ja", "일본어"], ["zh", "중국어"]]
+                model: App.translation.languages
                 JMenuItem {
                     required property var modelData
-                    text: modelData[1]; checkable: true; checked: App.settings.translate_target === modelData[0]
-                    onTriggered: App.setSetting("translate_target", modelData[0])
+                    text: modelData.name; checkable: true; checked: App.settings.translate_target === modelData.code
+                    onTriggered: App.setSetting("translate_target", modelData.code)
                 }
             }
         }

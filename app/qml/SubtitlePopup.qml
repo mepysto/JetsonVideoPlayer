@@ -53,7 +53,26 @@ JPopup {
         JButton { tool: true; text: "0"; onClicked: App.subtitles.resetSync() }
     }
     JButton { width: pop.width - 2 * pop.padding; tool: true; text: App.ai.menuLabel; onClicked: { App.startAiSubtitles(); pop.close() } }
-    JButton { width: pop.width - 2 * pop.padding; tool: true; text: App.translation.menuLabel; onClicked: { App.startTranslation(); pop.close() } }
+    RowLayout {
+        width: pop.width - 2 * pop.padding
+        spacing: 4
+        JButton { Layout.fillWidth: true; tool: true; text: App.translation.menuLabel; onClicked: { App.startTranslation(); pop.close() } }
+        JButton {
+            tool: true; text: "언어 ▾"; enabled: !App.translation.running
+            onClicked: langMenu.popup(this, 0, height)
+            JMenu {
+                id: langMenu
+                Repeater {
+                    model: App.translation.languages
+                    JMenuItem {
+                        required property var modelData
+                        text: modelData.name; checkable: true; checked: App.settings.translate_target === modelData.code
+                        onTriggered: { App.startTranslationTo(modelData.code); pop.close() }
+                    }
+                }
+            }
+        }
+    }
     JButton { width: pop.width - 2 * pop.padding; tool: true; text: "🌐 온라인 자막 찾기..."; onClicked: { App.requestDialog("onlineSubs", ""); pop.close() } }
     Text { text: "S: 켜기/끄기 · [ ]: 크기 · Z/X ,/.: 싱크"; color: Theme.muted; font.pixelSize: Theme.px(11) }
 }

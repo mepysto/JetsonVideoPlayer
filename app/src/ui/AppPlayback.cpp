@@ -927,6 +927,7 @@ void AppController::toggleSubtitles() { m_subs->toggle(); }
 void AppController::startAiSubtitles() { m_ai->start(); }
 
 void AppController::startTranslation() { m_translation->start(); }
+void AppController::startTranslationTo(const QString &lang) { m_translation->startTo(lang); }
 
 void AppController::toggleAssStyles()
 {

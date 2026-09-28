@@ -112,7 +112,9 @@ QString languageName(const QString &code)
 {
     static const QHash<QString, QString> names{{"ko", "한국어"}, {"en", "영어"},       {"ja", "일본어"},
                                                {"zh", "중국어"}, {"es", "스페인어"}, {"fr", "프랑스어"},
-                                               {"de", "독일어"}, {"ru", "러시아어"}};
+                                               {"de", "독일어"}, {"ru", "러시아어"}, {"zh-TW", "중국어 (번체)"},
+                                               {"vi", "베트남어"}, {"th", "태국어"},     {"id", "인도네시아어"},
+                                               {"it", "이탈리아어"}, {"pt", "포르투갈어"}};
     return names.value(code, code);
 }
 

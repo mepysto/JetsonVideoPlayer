@@ -17,8 +17,10 @@ import os
 import sys
 
 NLLB_HOME = os.environ.get("JVP_NLLB_DIR", os.path.expanduser("~/.local/share/jetson_video_player/nllb"))
-NLLB_CODES = {"ko": "kor_Hang", "en": "eng_Latn", "ja": "jpn_Jpan", "zh": "zho_Hans",
-              "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn", "ru": "rus_Cyrl"}
+# C++ Translator.cpp의 nllbCode()와 같게 유지합니다 (test_translator가 확인).
+NLLB_CODES = {"ko": "kor_Hang", "en": "eng_Latn", "ja": "jpn_Jpan", "zh": "zho_Hans", "zh-TW": "zho_Hant",
+              "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn", "ru": "rus_Cyrl", "vi": "vie_Latn",
+              "th": "tha_Thai", "id": "ind_Latn", "it": "ita_Latn", "pt": "por_Latn"}
 
 
 def send(obj):

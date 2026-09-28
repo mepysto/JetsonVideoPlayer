@@ -271,6 +271,7 @@ public:
     Q_INVOKABLE void toggleSubtitles();
     Q_INVOKABLE void startAiSubtitles();
     Q_INVOKABLE void startTranslation();
+    Q_INVOKABLE void startTranslationTo(const QString &lang);   // 언어를 골라 바로 번역
     Q_INVOKABLE void toggleAssStyles();
 
     // 시청 설정

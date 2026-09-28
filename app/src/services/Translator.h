@@ -36,8 +36,11 @@ constexpr int kContextLines = 3;
 QString nllbHome();                         // $JVP_NLLB_DIR 또는 ~/.local/share/jetson_video_player/nllb
 QPair<QString, QString> nllbPaths();         // (pylib, model)
 QString nllbCode(const QString &lang);       // "ko" → "kor_Hang" (없으면 빈 문자열)
-QList<QPair<QString, QString>> targetLanguages();   // [("ko", "Korean (한국어)"), ...] 순서 유지
-QString targetLanguageName(const QString &code);
+QList<QPair<QString, QString>> targetLanguages();   // 번역할 수 있는 언어 [("ko", "Korean (한국어)"), ...] 메뉴 순서
+QString targetLanguageName(const QString &code);    // 번역 지시문에 쓰는 이름 ("Korean (한국어)")
+QString targetLanguageLabel(const QString &code);   // 메뉴에 보일 한국어 이름 ("중국어 (간체)")
+// 자막 글자로 원문 언어를 짐작합니다 (한글·가나·한자·태국·키릴 문자). 라틴 문자 등은 판별하지 못해 빈 문자열
+QString detectScriptLanguage(const QStringList &texts);
 bool localAvailable();
 bool claudeAvailable();
 QString resolveBackend(const QString &preference);  // "auto"/"local"/"claude" → "local"/"claude"/빈 문자열

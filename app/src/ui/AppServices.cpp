@@ -340,7 +340,9 @@ void AppController::handleRemoteCommand(const QVariantMap &p)
         {"night", &AppController::toggleNightMode}, {"rotate", &AppController::cycleRotation},
         {"loudness", &AppController::toggleLoudness}, {"yt_cancel", &AppController::cancelYoutube},
     };
-    if (auto fn = simple.value(action)) {
+    if (action == QLatin1String("translate") && p.contains(QStringLiteral("lang"))) {
+        startTranslationTo(p.value("lang").toString());   // {"action": "translate", "lang": "ja"}
+    } else if (auto fn = simple.value(action)) {
         (this->*fn)();
     } else if (action == QLatin1String("sub_sync_reset")) {
         m_subs->resetSync();

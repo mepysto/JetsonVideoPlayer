@@ -403,6 +403,9 @@ private Q_SLOTS:
         QCOMPARE(cmd.keys(), (QStringList{"action", "sec"}));
         QCOMPARE(cmd.value("action").toString(), QString("seek_abs"));
         QCOMPARE(cmd.value("sec").toInt(), 12);
+        // 번역할 언어를 고르는 명령 {"action": "translate", "lang": "ja"}
+        QCOMPARE(post(m_port, "/api/cmd", {{"action", "translate"}, {"lang", "ja"}}, cookie).status, 200);
+        QCOMPARE(m_backend->commands.last().value("lang").toString(), QString("ja"));
         QCOMPARE(post(m_port, "/api/other", {{"action", "x"}}, cookie).status, 404);
     }
 

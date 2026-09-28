@@ -193,7 +193,8 @@ const QStringList &RemoteServer::commandFields()
 {
     static const QStringList fields{QStringLiteral("action"), QStringLiteral("val"),     QStringLiteral("index"),
                                     QStringLiteral("delta"),  QStringLiteral("percent"), QStringLiteral("url"),
-                                    QStringLiteral("quality"), QStringLiteral("sec"),    QStringLiteral("minutes")};
+                                    QStringLiteral("quality"), QStringLiteral("sec"),    QStringLiteral("minutes"),
+                                    QStringLiteral("lang")};
     return fields;
 }
 

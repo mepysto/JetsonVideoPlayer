@@ -217,7 +217,28 @@ QString TranslationController::menuLabel() const
     if (running())
         return QStringLiteral("⏹ 자막 번역 취소 %1% (Shift+G)").arg(int(m_fraction * 100));
     const QString target = settings()->stringValue(QStringLiteral("translate_target"));
-    return QStringLiteral("🌐 자막을 %1로 번역 (Shift+G)").arg(ai::languageName(target));
+    return QStringLiteral("🌐 자막을 %1로 번역 (Shift+G)").arg(ai::targetLanguageLabel(target));
+}
+
+QVariantList TranslationController::languages() const
+{
+    QVariantList out;
+    for (const auto &lang : ai::targetLanguages())
+        out << QVariantMap{{"code", lang.first}, {"name", ai::targetLanguageLabel(lang.first)}};
+    return out;
+}
+
+void TranslationController::startTo(const QString &lang)
+{
+    if (running()) {
+        start();   // 진행 중이면 취소
+        return;
+    }
+    if (ai::targetLanguageName(lang).isEmpty())
+        return;
+    settings()->setValue(QStringLiteral("translate_target"), lang);
+    emit changed();
+    start();
 }
 
 void TranslationController::cancel()
@@ -228,17 +249,25 @@ void TranslationController::cancel()
 
 QString TranslationController::entryLanguage(int index) const
 {
-    // AI 자막은 감지된 언어, 외부 자막은 레이블의 언어, 모르면 영어
+    // AI 자막은 감지된 언어, 외부 자막은 레이블의 언어, 그래도 모르면 자막 글자로 짐작하고, 마지막으로 영어
     const auto entries = m_app->subtitleController()->entries();
     if (index < 0 || index >= entries.size())
         return QStringLiteral("en");
     if (!entries[index].lang.isEmpty())
         return entries[index].lang;
-    static const QStringList codes{"ko", "en", "ja", "zh", "es", "fr", "de", "it", "pt", "ru", "vi", "th", "id"};
+    // "중국어 (번체)"가 "중국어"보다 먼저 맞도록 번체를 앞에 둡니다
+    static const QStringList codes{"ko", "en", "ja", "zh-TW", "zh", "es", "fr", "de", "it", "pt", "ru", "vi", "th", "id"};
     for (const QString &c : codes)
         if (entries[index].label.contains(ai::languageName(c)))
             return c;
-    return QStringLiteral("en");
+    QStringList sample;
+    for (const SubtitleEvent &e : entries[index].track->events()) {
+        sample << e.text;
+        if (sample.size() >= 200)
+            break;
+    }
+    const QString detected = ai::detectScriptLanguage(sample);
+    return detected.isEmpty() ? QStringLiteral("en") : detected;
 }
 
 void TranslationController::start(SubtitleTrackPtr source)
@@ -266,7 +295,7 @@ void TranslationController::start(SubtitleTrackPtr source)
     }
     const QString target = settings()->stringValue(QStringLiteral("translate_target"));
     const QString sourceLang = entryLanguage(srcIndex);
-    const QString targetName = ai::languageName(target);
+    const QString targetName = ai::targetLanguageLabel(target);
     if (sourceLang == target) {
         m_app->showOsd(QStringLiteral("이미 %1 자막입니다.").arg(targetName), 2500);
         return;
@@ -290,6 +319,7 @@ void TranslationController::start(SubtitleTrackPtr source)
                                        m_app->positionNs() / 1'000'000, sourceLang, true, savePath, this);
     m_job = job;
     m_fraction = 0;
+    qCInfo(lcAi).noquote() << QStringLiteral("🌐 [자막 번역 시작] %1 → %2 (%3)").arg(sourceLang, target, backend);
     connect(job, &ai::TranslationJob::segments, this, [track](const ai::Segments &batch) {
         track->addEvents(toEvents(batch));
     });

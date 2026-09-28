@@ -56,13 +56,16 @@ class TranslationController : public QObject {
     QML_ANONYMOUS
     Q_PROPERTY(QString menuLabel READ menuLabel NOTIFY changed)
     Q_PROPERTY(bool running READ running NOTIFY changed)
+    Q_PROPERTY(QVariantList languages READ languages CONSTANT)   // [{code, name}] 번역할 수 있는 언어
 public:
     explicit TranslationController(AppController *app);
     ~TranslationController() override;
 
     QString menuLabel() const;
     bool running() const;
+    QVariantList languages() const;
     void start(SubtitleTrackPtr source = nullptr);   // Shift+G (진행 중이면 취소)
+    void startTo(const QString &lang);               // 번역할 언어를 바꾸고 바로 번역 (진행 중이면 취소)
     void cancel();
     QJsonObject remoteStatus() const;
 
