@@ -6,6 +6,9 @@
 #include "GstUtil.h"
 
 #include <QObject>
+#include <QTimer>
+#include <array>
+#include <atomic>
 #include <QVariantList>
 #include <gst/gst.h>
 
@@ -88,6 +91,7 @@ private:
     void handleMessage(GstMessage *msg);
     GstElement *buildVideoSink(bool hw);
     GstElement *buildAudioSink(bool passthrough, int avOffsetMs);
+    void checkVideoStall();   // 1초마다: 소리는 가는데 영상 프레임이 멈췄는지 기록 (진단용)
 
     GstElement *m_pipeline = nullptr;
     guint m_busWatch = 0;
@@ -104,6 +108,19 @@ private:
     GstElement *m_audioSink = nullptr;
     QString m_decoder;
     bool m_decoderIsHw = false;
+
+    // 영상 멈춤 감시 (checkVideoStall)
+    QTimer m_stallTimer;
+    quint64 m_lastReceived = 0, m_lastRendered = 0;
+    qint64 m_lastPos = -1;
+    qint64 m_stallSinceNs = -1;   // 멈춤이 시작된 재생 위치 (-1: 멈춤 아님)
+    int m_stallSeconds = 0;
+    bool m_lagging = false;   // 영상이 소리보다 1초 넘게 늦은 상태
+    // 영상 경로 단계별로 지나간 버퍼 수: 디코더 입력·출력, 변환(nvvidconv/videoconvert) 입력·출력
+    enum Stage { DecIn, DecOut, ConvIn, ConvOut, StageCount };
+    std::array<std::atomic<quint64>, StageCount> m_stageCount{};
+    std::array<quint64, StageCount> m_lastStageCount{};
+    void countBuffers(GstElement *element, const char *padName, Stage stage);
 };
 
 } // namespace jvp

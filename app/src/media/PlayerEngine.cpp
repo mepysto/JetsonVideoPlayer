@@ -64,6 +64,70 @@ constexpr gint64 kAudioDriftToleranceUs = 100000;
 PlayerEngine::PlayerEngine(QObject *parent) : QObject(parent), m_bridge(new FrameBridge(this))
 {
     initGStreamer();
+    m_stallTimer.setInterval(1000);
+    connect(&m_stallTimer, &QTimer::timeout, this, &PlayerEngine::checkVideoStall);
+    m_stallTimer.start();
+}
+
+// 재생 위치(오디오)는 1초 가까이 나아갔는데 영상 프레임이 새로 오지 않거나(디코더 쪽) 그려지지 않으면(렌더 쪽)
+// 영상 멈춤으로 보고 그때의 상태를 남깁니다. 풀리면 얼마나 멈췄는지 남깁니다.
+static QString hms(qint64 ms)
+{
+    const qint64 s = ms / 1000;
+    return QStringLiteral("%1:%2:%3").arg(s / 3600).arg(s / 60 % 60, 2, 10, QLatin1Char('0')).arg(s % 60, 2, 10, QLatin1Char('0'));
+}
+
+void PlayerEngine::checkVideoStall()
+{
+    const quint64 received = m_bridge->receivedFrames(), rendered = m_bridge->renderedFrames();
+    const qint64 pos = (m_pipeline && m_playing && !m_decoder.isEmpty()) ? position() : -1;
+    const bool advancing = pos >= 0 && m_lastPos >= 0 && pos - m_lastPos > 800 * GST_MSECOND
+                           && pos - m_lastPos < 3 * GST_SECOND;
+    const bool noNewFrames = received == m_lastReceived, noRender = rendered == m_lastRendered;
+    std::array<quint64, StageCount> stage{};
+    for (int i = 0; i < StageCount; ++i)
+        stage[i] = m_stageCount[i];
+    // 단계별 1초 동안 지나간 버퍼 수 (디코더 입력/출력/변환 입력/출력)와 누적 수
+    const QString stages = QStringLiteral("단계별 1초 증가 dec_in %1 dec_out %2 conv_in %3 conv_out %4 (누적 %5/%6/%7/%8)")
+                               .arg(stage[DecIn] - m_lastStageCount[DecIn]).arg(stage[DecOut] - m_lastStageCount[DecOut])
+                               .arg(stage[ConvIn] - m_lastStageCount[ConvIn]).arg(stage[ConvOut] - m_lastStageCount[ConvOut])
+                               .arg(stage[DecIn]).arg(stage[DecOut]).arg(stage[ConvIn]).arg(stage[ConvOut]);
+    m_lastStageCount = stage;
+    if (pos >= 0 && !noNewFrames) {
+        const qint64 lag = m_bridge->lagNs();
+        if (!m_lagging && lag > GST_SECOND) {
+            m_lagging = true;
+            qCWarning(lcEngine).noquote() << QStringLiteral("🐢 [영상 지연] %1 지점, 영상이 소리보다 %2ms 늦습니다 · 받은 %3 프레임 · %4")
+                                                 .arg(hms(pos / GST_MSECOND)).arg(lag / GST_MSECOND).arg(received).arg(stages);
+        } else if (m_lagging && lag >= 0 && lag < 200 * GST_MSECOND) {
+            m_lagging = false;
+            qCWarning(lcEngine).noquote() << QStringLiteral("🐢 [영상 지연 풀림] %1 지점").arg(hms(pos / GST_MSECOND));
+        }
+    }
+    if (pos >= 0)
+        qCDebug(lcEngine).noquote() << "video watchdog pos" << pos / GST_MSECOND << "received" << received << "rendered" << rendered << stages;
+    if (advancing && (noNewFrames || noRender)) {
+        ++m_stallSeconds;
+        if (m_stallSinceNs < 0) {
+            m_stallSinceNs = m_lastPos;
+            qCWarning(lcEngine).noquote()
+                << QStringLiteral("🎞️ [영상 멈춤] %1 지점, 디코더 출력 %2 · 화면 그리기 %3 · 받은 %4 / 그린 %5 프레임 · %6")
+                       .arg(hms(m_lastPos / GST_MSECOND), noNewFrames ? QStringLiteral("멈춤") : QStringLiteral("정상"),
+                            noRender ? QStringLiteral("멈춤") : QStringLiteral("정상"))
+                       .arg(received).arg(rendered).arg(m_bridge->debugState() + QStringLiteral(" · ") + stages);
+        }
+    } else if (m_stallSinceNs >= 0 && (!noNewFrames && !noRender)) {
+        qCWarning(lcEngine).noquote() << QStringLiteral("🎞️ [영상 멈춤 풀림] %1초 동안 멈췄습니다 (%2 지점부터)")
+                                             .arg(m_stallSeconds).arg(hms(m_stallSinceNs / GST_MSECOND));
+        m_stallSinceNs = -1;
+        m_stallSeconds = 0;
+    } else if (pos < 0) {
+        m_stallSinceNs = -1;
+        m_stallSeconds = 0;
+    }
+    m_lastReceived = received;
+    m_lastRendered = rendered;
+    m_lastPos = pos;
 }
 
 PlayerEngine::~PlayerEngine() { stop(); }
@@ -91,8 +155,24 @@ GstElement *PlayerEngine::buildVideoSink(bool hw)
     GstPad *pad = gst_element_get_static_pad(conv, "sink");
     gst_element_add_pad(bin, gst_ghost_pad_new("sink", pad));
     gst_object_unref(pad);
+    countBuffers(conv, "sink", ConvIn);
+    countBuffers(conv, "src", ConvOut);
     m_bridge->attach(sink);
     return bin;
+}
+
+void PlayerEngine::countBuffers(GstElement *element, const char *padName, Stage stage)
+{
+    GstPad *pad = gst_element_get_static_pad(element, padName);
+    if (!pad)
+        return;
+    gst_pad_add_probe(pad, GstPadProbeType(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST),
+                      +[](GstPad *, GstPadProbeInfo *, gpointer counter) {
+                          ++*static_cast<std::atomic<quint64> *>(counter);
+                          return GST_PAD_PROBE_OK;
+                      },
+                      &m_stageCount[stage], nullptr);
+    gst_object_unref(pad);
 }
 
 GstElement *PlayerEngine::buildAudioSink(bool passthrough, int avOffsetMs)
@@ -158,6 +238,9 @@ bool PlayerEngine::open(const QString &uri, const OpenOptions &opt)
     m_keepAssRaw = opt.keepAssRaw;
     m_rate = opt.rate;
     m_decoder.clear();
+    for (auto &c : m_stageCount)
+        c = 0;
+    m_lastStageCount = {};
 
     int flags = kFlagVideo | kFlagAudio | kFlagText | kFlagSoftVolume;
     if (m_hwOutput)
@@ -414,6 +497,8 @@ void PlayerEngine::onDeepElementAdded(GstBin *, GstBin *, GstElement *element, g
         set("num-extra-surfaces", kNvdecExtraSurfaces);
         set("drop-frame-interval", 0);
         set("max-errors", -1);
+        e->countBuffers(element, "sink", DecIn);
+        e->countBuffers(element, "src", DecOut);
     }
     // 시스템 시계에 맞출 때, 오디오 장치가 보고하는 시각의 흔들림(±20ms)에는 반응하지 않고
     // 실제로 쌓인 어긋남만 고칩니다 (기본 40ms면 몇 초마다 재생 위치를 옮겨 소리가 튈 수 있음).

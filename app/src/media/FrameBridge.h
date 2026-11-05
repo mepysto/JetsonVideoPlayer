@@ -56,6 +56,12 @@ public:
 
     quint64 renderedFrames() const { return m_rendered; }
     void markRendered() { ++m_rendered; }
+    // appsink에서 받은 프레임 수 (멈춤 진단: 디코더 쪽이 멈췄는지 렌더 쪽이 멈췄는지 가립니다)
+    quint64 receivedFrames() const { return m_received; }
+    // 멈춤 진단용 상태 문자열: 대기열 프레임들의 running time과 지금의 running time
+    QString debugState();
+    // 지금 running time - 가장 최근에 받은 프레임의 running time (ns). 재생 중이 아니면 -1
+    qint64 lagNs();
 
 signals:
     void frameReady();
@@ -74,6 +80,7 @@ private:
     QSize m_size;
     double m_par = 1.0;
     std::atomic<quint64> m_rendered{0};
+    std::atomic<quint64> m_received{0};
 };
 
 } // namespace jvp

@@ -1,5 +1,7 @@
 #include "FrameBridge.h"
 
+#include <QStringList>
+
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 #ifdef JVP_HAVE_NVMM
@@ -77,6 +79,7 @@ static FrameFormat formatOf(GstCaps *caps, int *w, int *h, double *par)
 
 void FrameBridge::push(GstSample *sample)
 {
+    ++m_received;
     VideoFrame f;
     f.sample = sample;
     f.format = formatOf(gst_sample_get_caps(sample), &f.width, &f.height, &f.pixelAspect);
@@ -162,6 +165,30 @@ VideoFrame FrameBridge::takeFrame(std::optional<GstClockTime> target)
     VideoFrame f = m_queue[pick];   // 대기열의 참조를 호출자에게 넘깁니다
     m_queue.erase(m_queue.begin(), m_queue.begin() + pick + 1);
     return f;
+}
+
+QString FrameBridge::debugState()
+{
+    GstClockTime now = GST_CLOCK_TIME_NONE;
+    const bool playing = runningTimeNow(&now);
+    auto ms = [](GstClockTime t) { return GST_CLOCK_TIME_IS_VALID(t) ? QString::number(qint64(t / GST_MSECOND)) : QStringLiteral("-"); };
+    QStringList rts;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const VideoFrame &f : m_queue)
+        rts << ms(f.runningTime);
+    return QStringLiteral("sinkPlaying=%1 now=%2ms queue=[%3] latestRt=%4ms")
+        .arg(playing).arg(ms(now), rts.join(','), ms(m_latest.runningTime));
+}
+
+qint64 FrameBridge::lagNs()
+{
+    GstClockTime now = GST_CLOCK_TIME_NONE;
+    if (!runningTimeNow(&now))
+        return -1;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!GST_CLOCK_TIME_IS_VALID(m_latest.runningTime))
+        return -1;
+    return qint64(now) - qint64(m_latest.runningTime);
 }
 
 bool FrameBridge::hasPending()
