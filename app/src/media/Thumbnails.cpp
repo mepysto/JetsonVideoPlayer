@@ -118,6 +118,34 @@ void onParsedPad(GstElement *, GstPad *pad, gpointer data)
     g_mutex_unlock(&st->lock);
 }
 
+// 패드들의 caps에서 첫 영상 스트림의 표시 크기를 읽습니다 (st.lock을 잡은 채 호출)
+bool readVideoSize(const QList<GstPad *> &pads, Probe &p)
+{
+    for (GstPad *pad : pads) {
+        GstCaps *caps = gst_pad_get_current_caps(pad);
+        if (!caps)
+            caps = gst_pad_query_caps(pad, nullptr);
+        bool found = false;
+        if (caps && gst_caps_get_size(caps) > 0) {
+            const GstStructure *s = gst_caps_get_structure(caps, 0);
+            int w = 0, h = 0, parN = 1, parD = 1;
+            if (g_str_has_prefix(gst_structure_get_name(s), "video/") && gst_structure_get_int(s, "width", &w)
+                && gst_structure_get_int(s, "height", &h) && w > 0 && h > 0) {
+                if (!gst_structure_get_fraction(s, "pixel-aspect-ratio", &parN, &parD) || parN <= 0 || parD <= 0)
+                    parN = parD = 1;
+                p.width = double(w) * parN / parD;
+                p.height = h;
+                found = true;
+            }
+        }
+        if (caps)
+            gst_caps_unref(caps);
+        if (found)
+            return true;
+    }
+    return false;
+}
+
 // 길이·크기·화소 비율을 디코딩 없이 읽습니다 (filesrc ! parsebin → 파싱된 caps + 길이 질의).
 // GstDiscoverer는 디코더까지 붙여, 우선순위를 올려 둔 NVDEC가 못 여는 형식(HEVC 4:4:4 12비트 등)에서 실패합니다.
 std::optional<Probe> probe(const QString &path, int timeoutSec = 5)
@@ -142,44 +170,34 @@ std::optional<Probe> probe(const QString &path, int timeoutSec = 5)
     g_signal_connect(parse, "pad-added", G_CALLBACK(onParsedPad), &st);
 
     gst_element_set_state(st.pipeline, GST_STATE_PAUSED);
+    // 스트림이 둘 이상이면 ASYNC_DONE을 기다릴 수 없습니다: parsebin에는 큐가 없어, 먼저 preroll한 fakesink가
+    // demux 스레드를 붙잡아 다른 스트림의 fakesink에 버퍼가 가지 못합니다. 길이와 크기가 읽히면 바로 끝냅니다.
     GstBus *bus = gst_element_get_bus(st.pipeline);
-    GstMessage *msg = gst_bus_timed_pop_filtered(bus, GstClockTime(timeoutSec) * GST_SECOND,
-                                                 GstMessageType(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-    const bool prerolled = msg && GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ASYNC_DONE;
-    if (msg)
-        gst_message_unref(msg);
-    gst_object_unref(bus);
+    const gint64 deadline = g_get_monotonic_time() + gint64(timeoutSec) * G_USEC_PER_SEC;
     Probe p;
-    gint64 dur = 0;
-    if (prerolled && gst_element_query_duration(st.pipeline, GST_FORMAT_TIME, &dur))
-        p.duration = dur;
-    g_mutex_lock(&st.lock);
     bool haveVideo = false;
-    for (GstPad *pad : std::as_const(st.pads)) {
-        if (!haveVideo) {
-            GstCaps *caps = gst_pad_get_current_caps(pad);
-            if (!caps)
-                caps = gst_pad_query_caps(pad, nullptr);
-            if (caps && gst_caps_get_size(caps) > 0) {
-                const GstStructure *s = gst_caps_get_structure(caps, 0);
-                int w = 0, h = 0, parN = 1, parD = 1;
-                if (g_str_has_prefix(gst_structure_get_name(s), "video/") && gst_structure_get_int(s, "width", &w)
-                    && gst_structure_get_int(s, "height", &h) && w > 0 && h > 0) {
-                    if (!gst_structure_get_fraction(s, "pixel-aspect-ratio", &parN, &parD) || parN <= 0 || parD <= 0)
-                        parN = parD = 1;
-                    p.width = double(w) * parN / parD;
-                    p.height = h;
-                    haveVideo = true;
-                }
-            }
-            if (caps)
-                gst_caps_unref(caps);
+    for (;;) {
+        GstMessage *msg = gst_bus_timed_pop_filtered(bus, 50 * GST_MSECOND,
+                                                     GstMessageType(GST_MESSAGE_ASYNC_DONE | GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+        const bool finished = msg != nullptr;
+        if (msg)
+            gst_message_unref(msg);
+        if (p.duration <= 0) {
+            gint64 dur = 0;
+            if (gst_element_query_duration(st.pipeline, GST_FORMAT_TIME, &dur) && dur > 0)
+                p.duration = dur;
         }
-        gst_object_unref(pad);
+        g_mutex_lock(&st.lock);
+        haveVideo = haveVideo || readVideoSize(st.pads, p);
+        g_mutex_unlock(&st.lock);
+        if ((haveVideo && p.duration > 0) || finished || g_get_monotonic_time() >= deadline)
+            break;
     }
+    gst_object_unref(bus);
+    gst_element_set_state(st.pipeline, GST_STATE_NULL);   // 이제 스트리밍 스레드가 패드를 더 넣지 않습니다
+    for (GstPad *pad : std::as_const(st.pads))
+        gst_object_unref(pad);
     st.pads.clear();
-    g_mutex_unlock(&st.lock);
-    gst_element_set_state(st.pipeline, GST_STATE_NULL);
     gst_object_unref(st.pipeline);
     g_mutex_clear(&st.lock);
     if (!haveVideo)

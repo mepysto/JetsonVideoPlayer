@@ -271,6 +271,32 @@ private slots:
         QVERIFY(saDone.first().at(1).toBool());
     }
 
+    void generatesThumbnailsForVideoWithAudio()
+    {
+        // 영상과 오디오가 함께 있으면 parsebin 뒤 fakesink들이 preroll을 끝내지 못해 ASYNC_DONE이 오지 않습니다.
+        // 그래도 길이·크기는 읽을 수 있으므로 썸네일이 만들어져야 합니다.
+        if (!testutil::hasElements({"videotestsrc", "vp8enc", "audiotestsrc", "vorbisenc", "matroskamux"}))
+            QSKIP("GStreamer 요소 없음");
+        const QString path = m_home + QStringLiteral("/av.mkv");
+        QString err;
+        QVERIFY2(testutil::runPipeline(QStringLiteral("matroskamux name=m ! filesink location=\"%1\" "
+                                                      "videotestsrc num-buffers=50 ! video/x-raw,width=320,height=180,framerate=5/1 ! "
+                                                      "videoconvert ! vp8enc deadline=1 keyframe-max-dist=1 ! m. "
+                                                      "audiotestsrc num-buffers=430 ! audioconvert ! vorbisenc ! m.")
+                                           .arg(path),
+                                       60, &err),
+                 qPrintable(err));
+        ThumbnailJob job(path);
+        QSignalSpy done(&job, &ThumbnailJob::done), failed(&job, &ThumbnailJob::failed);
+        job.start();
+        QVERIFY(testutil::waitUntil([&] { return done.count() || failed.count(); }, 60000));
+        QVERIFY2(failed.isEmpty(), failed.isEmpty() ? "" : qPrintable(failed.first().first().toString()));
+        const auto idx = done.first().first().value<ThumbnailIndex>();
+        QVERIFY(std::llabs(idx.duration - 10 * S) < S);
+        QVERIFY(idx.files.size() >= 8);
+        QCOMPARE(QImage(idx.filePath(0)).size(), QSize(kThumbWidth, 90));
+    }
+
     void cancelStopsJobs()
     {
         if (m_video.isEmpty() || !QFile::exists(m_video))
